@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open, type OpenDialogOptions } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { LiquidEtherBackground } from "./components/LiquidEtherBackground";
 import "./App.css";
 import pantsFrame01 from "./assets/images/pants/pants_01.png";
@@ -620,13 +621,6 @@ type RestorePreview = {
   validationToken: string;
 };
 
-type RestoreResult = {
-  restoredFrom: string;
-  protectedBackupFile: string;
-  schemaVersion: number;
-  integrity: string;
-};
-
 type StockDocumentDraft = {
   documentId?: string;
   documentType: "inbound" | "outbound";
@@ -761,6 +755,13 @@ type EditorKind =
   | "supplier"
   | "budget"
   | "user"
+  | "changePassword"
+  | "businessSettings"
+  | "clientConnection"
+  | "clientPairing"
+  | "connectionWizard"
+  | "secondBackupDir"
+  | "restoreBackup"
   | "stockDocument"
   | "adjustment"
   | "stocktakeCreate"
@@ -971,6 +972,22 @@ function NavIcon({ name }: { name: NavKey }) {
   return <svg {...navIconProps}>{navIconContent[name]}</svg>;
 }
 
+function GitHubIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="topbar-icon"
+      focusable="false"
+      viewBox="0 0 24 24"
+    >
+      <path
+        d="M12 2.25a9.75 9.75 0 0 0-3.08 19c.49.09.67-.21.67-.47v-1.67c-2.72.59-3.3-1.18-3.3-1.18-.44-1.13-1.08-1.43-1.08-1.43-.88-.6.07-.59.07-.59.98.07 1.49 1 1.49 1 .87 1.48 2.27 1.05 2.82.8.09-.62.34-1.05.61-1.29-2.17-.25-4.45-1.09-4.45-4.83 0-1.07.38-1.94 1-2.62-.1-.25-.43-1.24.1-2.58 0 0 .82-.26 2.68 1a9.2 9.2 0 0 1 4.88 0c1.86-1.26 2.68-1 2.68-1 .53 1.34.2 2.33.1 2.58.62.68 1 1.55 1 2.62 0 3.75-2.28 4.58-4.46 4.82.35.3.66.9.66 1.82v2.7c0 .26.18.56.68.46A9.75 9.75 0 0 0 12 2.25Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
 const navItems: NavItem[] = [
   { key: "dashboard", label: "首页" },
   { key: "items", label: "物品档案" },
@@ -1055,6 +1072,22 @@ const pantsFrames = [
 ];
 
 const APPEARANCE_STORAGE_KEY = "aster.appearance";
+
+declare global {
+  interface Window {
+    __TAURI_OS_PLUGIN_INTERNALS__?: {
+      platform?: string;
+    };
+  }
+}
+
+function detectDesktopPlatform() {
+  const tauriPlatform = window.__TAURI_OS_PLUGIN_INTERNALS__?.platform;
+  if (tauriPlatform) return tauriPlatform.toLowerCase();
+  if (navigator.userAgent.includes("Windows")) return "windows";
+  if (navigator.userAgent.includes("Mac")) return "macos";
+  return "unknown";
+}
 const accentColors = [
   "#8f96a3",
   "#2f6dff",
@@ -1209,6 +1242,41 @@ function modeLabel(mode: RuntimeMode) {
   if (mode === "host") return "主机模式";
   if (mode === "client") return "客户端模式";
   return "单机模式";
+}
+
+function connectionStatusLabel(
+  status: AppStatus | null,
+  hostTestResult: HostConnectionTestResult | null,
+) {
+  if (!status) return "正在读取连接状态";
+  if (status.runtime.mode === "host") return "这台是主电脑";
+  if (status.runtime.mode === "client") {
+    if (!status.runtime.clientToken) return "尚未连接主电脑";
+    return hostTestResult?.ok === false ? "连接异常" : "已连接到主电脑";
+  }
+  return "单机使用";
+}
+
+function connectionStatusHint(
+  status: AppStatus | null,
+  hostStatus: HostServiceStatus | null,
+  hostTestResult: HostConnectionTestResult | null,
+) {
+  if (!status) return "正在读取本机多电脑连接状态。";
+  if (status.runtime.mode === "host") {
+    return hostStatus?.running
+      ? "正式数据保存在这台电脑，其他电脑可通过配对码连接。"
+      : "这台电脑已设为主电脑，但共享服务尚未开启。";
+  }
+  if (status.runtime.mode === "client") {
+    if (!status.runtime.clientToken) {
+      return "这台电脑会连接主电脑使用同一套库存数据，请打开向导完成配对。";
+    }
+    return hostTestResult?.ok === false
+      ? "已保存主电脑连接，但当前无法访问主电脑。"
+      : "这台电脑正在使用主电脑上的库存数据。";
+  }
+  return "当前只在这台电脑单独使用。需要多电脑共用时打开连接向导。";
 }
 
 function optionName(options: OptionRecord[], id?: string | null) {
@@ -1390,9 +1458,16 @@ function editorTitle(
   const labels: Record<Exclude<EditorKind, "stockDocument">, string> = {
     adjustment: "库存调整",
     budget: "预算规则",
+    businessSettings: "业务与目录设置",
     category: "分类",
+    changePassword: "修改密码",
+    clientConnection: "客户端连接",
+    clientPairing: "客户端配对",
+    connectionWizard: "多电脑连接",
     department: "部门",
     item: "物品",
+    restoreBackup: "恢复备份",
+    secondBackupDir: "第二备份目录",
     stocktakeCounts: "盘点实盘",
     stocktakeCreate: "创建盘点单",
     supplier: "供应商",
@@ -1403,6 +1478,17 @@ function editorTitle(
   if (editor === "stocktakeCounts") return "录入盘点实盘";
   if (editor === "stocktakeCreate") return "创建盘点单";
   if (editor === "adjustment") return "新建调整单";
+  if (
+    editor === "changePassword" ||
+    editor === "businessSettings" ||
+    editor === "clientConnection" ||
+    editor === "clientPairing" ||
+    editor === "connectionWizard" ||
+    editor === "secondBackupDir" ||
+    editor === "restoreBackup"
+  ) {
+    return labels[editor];
+  }
   return `${action}${labels[editor]}`;
 }
 
@@ -1533,6 +1619,7 @@ function App() {
 }
 
 function MainApp() {
+  const desktopPlatform = useMemo(() => detectDesktopPlatform(), []);
   const [activeNav, setActiveNav] = useState<NavKey>("dashboard");
   const [appearanceSettings, setAppearanceSettings] =
     useState<AppearanceSettings>(() => loadAppearanceSettings());
@@ -1600,12 +1687,6 @@ function MainApp() {
   const [backupRecords, setBackupRecords] = useState<BackupRecord[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogRow[]>([]);
   const [lastBackup, setLastBackup] = useState<BackupSummary | null>(null);
-  const [restorePreview, setRestorePreview] = useState<RestorePreview | null>(
-    null,
-  );
-  const [restoreResult, setRestoreResult] = useState<RestoreResult | null>(
-    null,
-  );
   const [isBackupWorking, setIsBackupWorking] = useState(false);
   const [systemSettings, setSystemSettings] = useState<SystemSettings | null>(
     null,
@@ -1619,9 +1700,6 @@ function MainApp() {
   const [clientConnectionCheckedAt, setClientConnectionCheckedAt] = useState<
     string | null
   >(null);
-  const [discoveredHosts, setDiscoveredHosts] = useState<HostDiscoveryResult[]>(
-    [],
-  );
 
   useEffect(() => {
     applyAppearanceSettings(appearanceSettings);
@@ -1672,8 +1750,6 @@ function MainApp() {
     setBackupRecords([]);
     setAuditLogs([]);
     setLastBackup(null);
-    setRestorePreview(null);
-    setRestoreResult(null);
     setSystemSettings(null);
     setUserAccounts([]);
     setBudgetRules([]);
@@ -2173,62 +2249,6 @@ function MainApp() {
     }
   }
 
-  async function saveSecondBackupDir(path: string) {
-    await runAction("第二备份目录已保存", async () => {
-      await invoke<string>("set_second_backup_dir", { request: { path } });
-    });
-  }
-
-  async function saveSystemSettings(request: SystemSettings) {
-    await runAction("系统设置已保存", async () => {
-      const settings = await invoke<SystemSettings>("save_system_settings", {
-        request,
-      });
-      setSystemSettings(settings);
-    });
-  }
-
-  async function previewRestore(backupFile: string) {
-    try {
-      setError(null);
-      setNotice(null);
-      setRestorePreview(null);
-      setRestoreResult(null);
-      setIsBackupWorking(true);
-      const preview = await invoke<RestorePreview>("preview_restore_backup", {
-        backupFile,
-      });
-      setRestorePreview(preview);
-      setNotice("备份包校验通过");
-    } catch (err) {
-      setError(formatError(err));
-    } finally {
-      setIsBackupWorking(false);
-    }
-  }
-
-  async function restoreBackup(
-    backupFile: string,
-    confirmation: string,
-    validationToken: string,
-  ) {
-    try {
-      setError(null);
-      setNotice(null);
-      setIsBackupWorking(true);
-      const result = await invoke<RestoreResult>("restore_backup", {
-        request: { backupFile, confirmation, validationToken },
-      });
-      setRestoreResult(result);
-      await refreshAll();
-      setNotice("备份已恢复，数据库健康检查通过");
-    } catch (err) {
-      setError(formatError(err));
-    } finally {
-      setIsBackupWorking(false);
-    }
-  }
-
   async function loadStocktakeDetail(stocktakeId: string) {
     try {
       setError(null);
@@ -2326,96 +2346,11 @@ function MainApp() {
     });
   }
 
-  async function changeOwnPassword(oldPassword: string, newPassword: string) {
-    await runAction("密码已修改", () =>
-      invoke("change_password", {
-        request: { oldPassword, newPassword },
-      }),
-    );
-  }
-
   async function startHostRuntime() {
     await runAction("主机服务已启动", async () => {
       const status = await invoke<HostServiceStatus>("start_host_service");
       setHostStatus(status);
       await loadHostRuntime();
-    });
-  }
-
-  async function saveClientRuntimeConfig(
-    hostAddress: string,
-    hostPort: number,
-  ) {
-    await runAction("客户端连接配置已保存", async () => {
-      const config = await invoke<RuntimeConfig>("save_client_config", {
-        request: { hostAddress, hostPort },
-      });
-      setStatus(status ? { ...status, runtime: config } : status);
-      setHostTestResult(null);
-      setClientConnectionCheckedAt(null);
-      clearBusinessState();
-    });
-  }
-
-  async function testHostRuntimeConnection(
-    hostAddress: string,
-    hostPort: number,
-  ) {
-    try {
-      setError(null);
-      const result = await invoke<HostConnectionTestResult>(
-        "test_host_connection",
-        {
-          request: { hostAddress, hostPort },
-        },
-      );
-      setHostTestResult(result);
-      setClientConnectionCheckedAt(new Date().toLocaleString("zh-CN"));
-      setNotice(result.ok ? "主机连接测试通过" : "主机连接测试未通过");
-    } catch (err) {
-      setHostTestResult({
-        ok: false,
-        message: `主机连接异常：${String(err)}`,
-        appName: null,
-        appVersion: null,
-        schemaVersion: null,
-      });
-      setClientConnectionCheckedAt(new Date().toLocaleString("zh-CN"));
-      setError(formatError(err));
-    }
-  }
-
-  async function discoverLanHosts(hostPort: number) {
-    try {
-      setError(null);
-      setNotice(null);
-      const results = await invoke<HostDiscoveryResult[]>("discover_hosts", {
-        hostPort,
-      });
-      setDiscoveredHosts(results);
-      setNotice(
-        results.length > 0
-          ? `发现 ${results.length} 台 Aster 主机`
-          : "未发现可用主机",
-      );
-    } catch (err) {
-      setError(formatError(err));
-    }
-  }
-
-  async function pairClientWithHost(
-    pairCode: string,
-    clientName: string,
-    clientDeviceId: string,
-  ) {
-    await runAction("客户端已完成主机配对", async () => {
-      const config = await invoke<RuntimeConfig>("pair_with_host", {
-        request: { pairCode, clientName, clientDeviceId },
-      });
-      setStatus(status ? { ...status, runtime: config } : status);
-      setHostTestResult(null);
-      setClientConnectionCheckedAt(null);
-      clearBusinessState();
     });
   }
 
@@ -2452,6 +2387,11 @@ function MainApp() {
     void listen<EditorSavedPayload>("editor:saved", (event) => {
       if (event.payload.stocktakeId) {
         void loadStocktakeDetail(event.payload.stocktakeId);
+      }
+      if (event.payload.editor === "connectionWizard") {
+        clearSessionScopedState();
+        setHostTestResult(null);
+        setClientConnectionCheckedAt(null);
       }
       scheduleRefreshAll();
       setNotice(event.payload.message ?? "已保存");
@@ -2515,6 +2455,20 @@ function MainApp() {
   const settingsNavItem = visibleNavItems.find(
     (item) => item.key === "settings",
   );
+  const clientPauseMessage =
+    isClientMode && currentUser && !isBusinessConnectionReady
+      ? `客户端业务操作已暂停：${isClientPaired ? "主机连接未恢复" : "尚未完成主机配对"}。请在系统设置中测试连接或重新配对。`
+      : null;
+  const footerStatus = error
+    ? { kind: "error", text: error }
+    : clientPauseMessage
+      ? { kind: "warning", text: clientPauseMessage }
+      : notice
+        ? { kind: "notice", text: notice }
+        : {
+            kind: "idle",
+            text: status?.health.message ?? "系统就绪",
+          };
 
   useEffect(() => {
     if (!canAccessNav(activeNav, currentUser)) {
@@ -2536,7 +2490,7 @@ function MainApp() {
   }
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" data-platform={desktopPlatform}>
       <aside className="sidebar">
         <div className="brand">
           <PantsLogo />
@@ -2596,14 +2550,16 @@ function MainApp() {
               {visibleNavItems.find((item) => item.key === activeNav)?.label ??
                 "首页"}
             </h1>
-            <p>
-              {status
-                ? `${modeLabel(status.runtime.mode)} · Schema v${status.schemaVersion}`
-                : "正在读取本机状态"}
-              {` · ${currentUser.displayName}`}
-            </p>
           </div>
           <div className="topbar-actions">
+            <button
+              aria-label="打开 GitHub"
+              className="ghost-button icon-button"
+              onClick={() => void openUrl("https://github.com/westng")}
+              title="GitHub"
+            >
+              <GitHubIcon />
+            </button>
             <button className="ghost-button" onClick={() => refreshAll()}>
               刷新状态
             </button>
@@ -2613,45 +2569,40 @@ function MainApp() {
           </div>
         </header>
 
-        {error ? <div className="error-banner">{error}</div> : null}
-        {notice ? <div className="notice-banner">{notice}</div> : null}
-        {isClientMode && currentUser && !isBusinessConnectionReady ? (
-          <div className="warning-banner">
-            客户端业务操作已暂停：
-            {isClientPaired ? "主机连接未恢复" : "尚未完成主机配对"}
-            。请在系统设置中测试连接或重新配对。
-          </div>
-        ) : null}
+        <div className="content-body">
+          {activeNav === "dashboard" ? (
+            <Dashboard
+              changeMode={changeMode}
+              isSavingMode={isSavingMode}
+              metricCards={metricCards}
+              onNavigate={setActiveNav}
+              status={status}
+            />
+          ) : null}
 
-        {activeNav === "dashboard" ? (
-          <Dashboard
-            changeMode={changeMode}
-            isSavingMode={isSavingMode}
-            metricCards={metricCards}
-            onNavigate={setActiveNav}
-            status={status}
-          />
-        ) : null}
-
-        {activeNav === "items" ? (
-          <ItemsPage
-            canWrite={canWriteStock}
-            categories={enabledCategories}
-            itemSearch={itemSearch}
-            items={items}
-            onSearch={async (search) => {
-              setItemSearch(search);
-              await refreshAll(search);
-            }}
-            onToggle={(id, enabled, expectedUpdatedAt) =>
-              runAction("物品状态已更新", () =>
-                invoke("set_item_enabled", { id, enabled, expectedUpdatedAt }),
-              )
-            }
-            suppliers={enabledSuppliers}
-            units={enabledUnits}
-          />
-        ) : null}
+          {activeNav === "items" ? (
+            <ItemsPage
+              canWrite={canWriteStock}
+              categories={enabledCategories}
+              itemSearch={itemSearch}
+              items={items}
+              onSearch={async (search) => {
+                setItemSearch(search);
+                await refreshAll(search);
+              }}
+              onToggle={(id, enabled, expectedUpdatedAt) =>
+                runAction("物品状态已更新", () =>
+                  invoke("set_item_enabled", {
+                    id,
+                    enabled,
+                    expectedUpdatedAt,
+                  }),
+                )
+              }
+              suppliers={enabledSuppliers}
+              units={enabledUnits}
+            />
+          ) : null}
 
         {activeNav === "departments" ? (
           <DepartmentsPage
@@ -2908,23 +2859,17 @@ function MainApp() {
             isWorking={isBackupWorking}
             lastBackup={lastBackup}
             onBackup={createManualBackup}
-            onChangePassword={changeOwnPassword}
+            onOpenConnectionWizard={() =>
+              void openEditorWindow("connectionWizard", {
+                width: 760,
+                height: 640,
+              })
+            }
             onLogout={logoutUser}
-            onSaveSystemSettings={saveSystemSettings}
-            onPreviewRestore={previewRestore}
-            onRestore={restoreBackup}
-            onDiscoverHosts={discoverLanHosts}
-            onSaveSecondBackupDir={saveSecondBackupDir}
-            onSaveClientConfig={saveClientRuntimeConfig}
             onStartHostService={startHostRuntime}
-            onTestHostConnection={testHostRuntimeConnection}
-            onPairWithHost={pairClientWithHost}
             clientConnections={clientConnections}
-            discoveredHosts={discoveredHosts}
             hostStatus={hostStatus}
             hostTestResult={hostTestResult}
-            restorePreview={restorePreview}
-            restoreResult={restoreResult}
             status={status}
             systemSettings={systemSettings}
             onAppearanceChange={setAppearanceSettings}
@@ -2944,6 +2889,17 @@ function MainApp() {
             users={userAccounts}
           />
         ) : null}
+        </div>
+
+        <footer className={`app-statusbar app-statusbar-${footerStatus.kind}`}>
+          <span className="app-statusbar-indicator" />
+          <span className="app-statusbar-message">{footerStatus.text}</span>
+          <span className="app-statusbar-meta">
+            {status
+              ? `${modeLabel(status.runtime.mode)} · Schema v${status.schemaVersion}`
+              : "初始化中"}
+          </span>
+        </footer>
       </main>
     </div>
   );
@@ -3237,6 +3193,14 @@ function EditorWindowApp({
   const [stocktakes, setStocktakes] = useState<StocktakeDocument[]>([]);
   const [stocktakeDetail, setStocktakeDetail] =
     useState<StocktakeDetail | null>(null);
+  const [status, setStatus] = useState<AppStatus | null>(null);
+  const [hostStatus, setHostStatus] = useState<HostServiceStatus | null>(null);
+  const [clientConnections, setClientConnections] = useState<
+    ClientConnectionInfo[]
+  >([]);
+  const [systemSettings, setSystemSettings] = useState<SystemSettings | null>(
+    null,
+  );
   const [isLoading, setIsLoading] = useState(true);
   const periodMonth = params.get("periodMonth") ?? currentMonthString();
 
@@ -3296,6 +3260,35 @@ function EditorWindowApp({
           await invoke<BudgetRule[]>("list_budget_rules", { periodMonth }),
         );
       }
+      if (
+        editor === "businessSettings" ||
+        editor === "clientConnection" ||
+        editor === "clientPairing" ||
+        editor === "secondBackupDir" ||
+        editor === "restoreBackup"
+      ) {
+        const [nextStatus, nextSettings] = await Promise.all([
+          invoke<AppStatus>("get_app_status"),
+          invoke<SystemSettings>("get_system_settings"),
+        ]);
+        setStatus(nextStatus);
+        setSystemSettings(nextSettings);
+      }
+      if (editor === "connectionWizard") {
+        const [nextStatus, nextHostStatus] = await Promise.all([
+          invoke<AppStatus>("get_app_status"),
+          invoke<HostServiceStatus>("get_host_service_status"),
+        ]);
+        setStatus(nextStatus);
+        setHostStatus(nextHostStatus);
+        if (nextStatus.runtime.mode === "host") {
+          setClientConnections(
+            await invoke<ClientConnectionInfo[]>("list_client_connections"),
+          );
+        } else {
+          setClientConnections([]);
+        }
+      }
       if (editor === "stocktakeCounts") {
         const nextStocktakes =
           await invoke<StocktakeDocument[]>("list_stocktakes");
@@ -3332,6 +3325,13 @@ function EditorWindowApp({
     } finally {
       setIsSaving(false);
     }
+  }
+
+  async function runSettingsEditorAction(
+    message: string,
+    action: () => Promise<unknown>,
+  ) {
+    await runEditorAction({ editor, message }, action);
   }
 
   useEffect(() => {
@@ -3451,6 +3451,164 @@ function EditorWindowApp({
         }
         roles={roles}
         user={users.find((item) => item.id === id)}
+      />
+    );
+  } else if (editor === "changePassword") {
+    content = (
+      <ChangePasswordEditor
+        disabled={isSaving || isLoading}
+        onSave={(request) =>
+          runSettingsEditorAction("密码已修改", () =>
+            invoke("change_password", { request }),
+          )
+        }
+      />
+    );
+  } else if (editor === "businessSettings") {
+    content = (
+      <BusinessSettingsEditor
+        disabled={isSaving || isLoading || !systemSettings}
+        settings={systemSettings}
+        onSave={(request) =>
+          runSettingsEditorAction("系统设置已保存", () =>
+            invoke("save_system_settings", { request }),
+          )
+        }
+      />
+    );
+  } else if (editor === "clientConnection") {
+    content = (
+      <ClientConnectionEditor
+        disabled={isSaving || isLoading || !status}
+        status={status}
+        onDiscover={(hostPort) => invoke("discover_hosts", { hostPort })}
+        onSave={(hostAddress, hostPort) =>
+          runSettingsEditorAction("客户端连接配置已保存", () =>
+            invoke("save_client_config", {
+              request: { hostAddress, hostPort },
+            }),
+          )
+        }
+        onTest={(hostAddress, hostPort) =>
+          invoke("test_host_connection", {
+            request: { hostAddress, hostPort },
+          })
+        }
+      />
+    );
+  } else if (editor === "clientPairing") {
+    content = (
+      <ClientPairingEditor
+        disabled={isSaving || isLoading || !status}
+        status={status}
+        onSave={(request) =>
+          runSettingsEditorAction("客户端已完成主机配对", () =>
+            invoke("pair_with_host", { request }),
+          )
+        }
+      />
+    );
+  } else if (editor === "connectionWizard") {
+    content = (
+      <ConnectionWizard
+        clientConnections={clientConnections}
+        disabled={isSaving || isLoading || !status}
+        hostStatus={hostStatus}
+        status={status}
+        onDiscover={(hostPort) => invoke("discover_hosts", { hostPort })}
+        onEnableHost={async () => {
+          setIsSaving(true);
+          try {
+            setError(null);
+            await invoke<RuntimeConfig>("set_runtime_mode", { mode: "host" });
+            const nextHostStatus =
+              await invoke<HostServiceStatus>("start_host_service");
+            const [nextStatus, nextClients] = await Promise.all([
+              invoke<AppStatus>("get_app_status"),
+              invoke<ClientConnectionInfo[]>("list_client_connections"),
+            ]);
+            setStatus(nextStatus);
+            setHostStatus(nextHostStatus);
+            setClientConnections(nextClients);
+            return nextHostStatus;
+          } finally {
+            setIsSaving(false);
+          }
+        }}
+        onFinish={(message) =>
+          runSettingsEditorAction(message, () => Promise.resolve())
+        }
+        onPair={async (request) => {
+          setIsSaving(true);
+          try {
+            setError(null);
+            await invoke<RuntimeConfig>("save_client_config", {
+              request: {
+                hostAddress: request.hostAddress,
+                hostPort: request.hostPort,
+              },
+            });
+            const nextRuntime = await invoke<RuntimeConfig>("pair_with_host", {
+              request: {
+                pairCode: request.pairCode,
+                clientName: request.clientName,
+                clientDeviceId: request.clientDeviceId,
+              },
+            });
+            const nextStatus = await invoke<AppStatus>("get_app_status");
+            setStatus(nextStatus);
+            return nextRuntime;
+          } finally {
+            setIsSaving(false);
+          }
+        }}
+        onRefreshHost={async () => {
+          const [nextStatus, nextHostStatus] = await Promise.all([
+            invoke<AppStatus>("get_app_status"),
+            invoke<HostServiceStatus>("get_host_service_status"),
+          ]);
+          setStatus(nextStatus);
+          setHostStatus(nextHostStatus);
+          if (nextStatus.runtime.mode === "host") {
+            setClientConnections(
+              await invoke<ClientConnectionInfo[]>("list_client_connections"),
+            );
+          } else {
+            setClientConnections([]);
+          }
+        }}
+        onTest={(hostAddress, hostPort) =>
+          invoke("test_host_connection", {
+            request: { hostAddress, hostPort },
+          })
+        }
+      />
+    );
+  } else if (editor === "secondBackupDir") {
+    content = (
+      <SecondBackupDirEditor
+        disabled={isSaving || isLoading || !status}
+        status={status}
+        onSave={(path) =>
+          runSettingsEditorAction("第二备份目录已保存", () =>
+            invoke("set_second_backup_dir", { request: { path } }),
+          )
+        }
+      />
+    );
+  } else if (editor === "restoreBackup") {
+    content = (
+      <RestoreBackupEditor
+        disabled={isSaving || isLoading || !status}
+        status={status}
+        onPreview={(backupFile) =>
+          invoke("preview_restore_backup", { backupFile })
+        }
+        onRestore={(request) =>
+          runSettingsEditorAction("备份已恢复，数据库健康检查通过", () =>
+            invoke("restore_backup", { request }),
+          )
+        }
       />
     );
   } else if (editor === "stockDocument" && documentType) {
@@ -4256,6 +4414,942 @@ function UserEditor({
         />
         启用
       </label>
+    </EditorForm>
+  );
+}
+
+function ChangePasswordEditor({
+  disabled,
+  onSave,
+}: {
+  disabled: boolean;
+  onSave: (request: { oldPassword: string; newPassword: string }) => Promise<void>;
+}) {
+  const [oldPassword, setOldPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  return (
+    <EditorForm
+      disabled={disabled || !oldPassword || !newPassword}
+      saveLabel="修改密码"
+      onSave={() => onSave({ oldPassword, newPassword })}
+    >
+      <Field label="旧密码">
+        <input
+          autoFocus
+          type="password"
+          value={oldPassword}
+          onChange={(event) => setOldPassword(event.target.value)}
+        />
+      </Field>
+      <Field label="新密码">
+        <input
+          type="password"
+          value={newPassword}
+          onChange={(event) => setNewPassword(event.target.value)}
+        />
+      </Field>
+    </EditorForm>
+  );
+}
+
+function BusinessSettingsEditor({
+  disabled,
+  onSave,
+  settings,
+}: {
+  disabled: boolean;
+  onSave: (request: SystemSettings) => Promise<void>;
+  settings: SystemSettings | null;
+}) {
+  const [draft, setDraft] = useState<SystemSettings>(
+    settings ?? {
+      hotelName: "",
+      currentPeriod: currentMonthString(),
+      defaultMonth: currentMonthString(),
+      allowNegativeStock: false,
+      quantityDecimals: 2,
+      amountDecimals: 2,
+      defaultExportDir: "",
+      defaultBackupDir: "",
+      autoBackupEnabled: true,
+      intervalBackupEnabled: false,
+      intervalBackupHours: 24,
+    },
+  );
+
+  useEffect(() => {
+    if (settings) setDraft(settings);
+  }, [settings]);
+
+  async function selectDirectory(
+    title: string,
+    key: "defaultExportDir" | "defaultBackupDir",
+  ) {
+    const selected = await chooseSinglePath({
+      title,
+      directory: true,
+      defaultPath: draft[key] || undefined,
+      canCreateDirectories: true,
+    });
+    if (selected) setDraft({ ...draft, [key]: selected });
+  }
+
+  return (
+    <EditorForm
+      disabled={disabled || !draft.hotelName.trim()}
+      saveLabel="保存系统设置"
+      onSave={() => onSave(draft)}
+    >
+      <Field label="酒店名称">
+        <input
+          autoFocus
+          value={draft.hotelName}
+          onChange={(event) => setDraft({ ...draft, hotelName: event.target.value })}
+        />
+      </Field>
+      <Field label="当前账期">
+        <input
+          type="month"
+          value={draft.currentPeriod}
+          onChange={(event) => setDraft({ ...draft, currentPeriod: event.target.value })}
+        />
+      </Field>
+      <Field label="默认月份">
+        <input
+          type="month"
+          value={draft.defaultMonth}
+          onChange={(event) => setDraft({ ...draft, defaultMonth: event.target.value })}
+        />
+      </Field>
+      <Field label="数量小数位">
+        <input
+          max="6"
+          min="0"
+          type="number"
+          value={draft.quantityDecimals}
+          onChange={(event) =>
+            setDraft({ ...draft, quantityDecimals: Number(event.target.value) })
+          }
+        />
+      </Field>
+      <Field label="金额小数位">
+        <input
+          max="6"
+          min="0"
+          type="number"
+          value={draft.amountDecimals}
+          onChange={(event) =>
+            setDraft({ ...draft, amountDecimals: Number(event.target.value) })
+          }
+        />
+      </Field>
+      <Field label="定时备份小时">
+        <input
+          max="168"
+          min="1"
+          type="number"
+          value={draft.intervalBackupHours}
+          onChange={(event) =>
+            setDraft({ ...draft, intervalBackupHours: Number(event.target.value) })
+          }
+        />
+      </Field>
+      <Field label="默认导出目录">
+        <PathPickerField
+          value={draft.defaultExportDir}
+          placeholder="请选择默认导出目录"
+          buttonLabel="选择"
+          onChoose={() => selectDirectory("选择默认导出目录", "defaultExportDir")}
+        />
+      </Field>
+      <Field label="默认备份目录">
+        <PathPickerField
+          value={draft.defaultBackupDir}
+          placeholder="请选择默认备份目录"
+          buttonLabel="选择"
+          onChoose={() => selectDirectory("选择默认备份目录", "defaultBackupDir")}
+        />
+      </Field>
+      <label className="checkbox-field">
+        <input
+          checked={draft.allowNegativeStock}
+          onChange={(event) =>
+            setDraft({ ...draft, allowNegativeStock: event.target.checked })
+          }
+          type="checkbox"
+        />
+        允许负库存
+      </label>
+      <label className="checkbox-field">
+        <input
+          checked={draft.autoBackupEnabled}
+          onChange={(event) =>
+            setDraft({ ...draft, autoBackupEnabled: event.target.checked })
+          }
+          type="checkbox"
+        />
+        启动自动备份
+      </label>
+      <label className="checkbox-field">
+        <input
+          checked={draft.intervalBackupEnabled}
+          onChange={(event) =>
+            setDraft({ ...draft, intervalBackupEnabled: event.target.checked })
+          }
+          type="checkbox"
+        />
+        运行中定时备份
+      </label>
+    </EditorForm>
+  );
+}
+
+type ConnectionWizardStep =
+  | "role"
+  | "hostConfirm"
+  | "hostReady"
+  | "discover"
+  | "manual"
+  | "pair"
+  | "clientReady";
+
+function ConnectionWizard({
+  clientConnections,
+  disabled,
+  hostStatus,
+  onDiscover,
+  onEnableHost,
+  onFinish,
+  onPair,
+  onRefreshHost,
+  onTest,
+  status,
+}: {
+  clientConnections: ClientConnectionInfo[];
+  disabled: boolean;
+  hostStatus: HostServiceStatus | null;
+  onDiscover: (hostPort: number) => Promise<HostDiscoveryResult[]>;
+  onEnableHost: () => Promise<HostServiceStatus>;
+  onFinish: (message: string) => Promise<void>;
+  onPair: (request: {
+    hostAddress: string;
+    hostPort: number;
+    pairCode: string;
+    clientName: string;
+    clientDeviceId: string;
+  }) => Promise<RuntimeConfig>;
+  onRefreshHost: () => Promise<void>;
+  onTest: (
+    hostAddress: string,
+    hostPort: number,
+  ) => Promise<HostConnectionTestResult>;
+  status: AppStatus | null;
+}) {
+  const [step, setStep] = useState<ConnectionWizardStep>("role");
+  const [hosts, setHosts] = useState<HostDiscoveryResult[]>([]);
+  const [selectedHost, setSelectedHost] = useState<HostDiscoveryResult | null>(
+    null,
+  );
+  const [hostAddress, setHostAddress] = useState(
+    status?.runtime.hostAddress ?? "",
+  );
+  const [hostPort, setHostPort] = useState(status?.runtime.hostPort ?? 17871);
+  const [pairCode, setPairCode] = useState("");
+  const [clientName, setClientName] = useState(() =>
+    defaultClientName(detectDesktopPlatform()),
+  );
+  const [clientDeviceId, setClientDeviceId] = useState(
+    status?.runtime.clientDeviceId || defaultClientDeviceId(),
+  );
+  const [testResult, setTestResult] =
+    useState<HostConnectionTestResult | null>(null);
+  const [isBusy, setIsBusy] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const effectiveHostStatus = hostStatus;
+  const effectiveHostAddress =
+    selectedHost?.hostAddress || hostAddress.trim() || "";
+  const effectiveHostPort = selectedHost?.hostPort || hostPort || 17871;
+
+  async function discover() {
+    setStep("discover");
+    setIsBusy(true);
+    setLocalError(null);
+    setTestResult(null);
+    try {
+      const results = await onDiscover(hostPort || 17871);
+      setHosts(results);
+      if (results.length === 1) {
+        setSelectedHost(results[0]);
+      }
+    } catch (err) {
+      setHosts([]);
+      setLocalError(formatError(err));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function enableHost() {
+    setIsBusy(true);
+    setLocalError(null);
+    try {
+      await onEnableHost();
+      setStep("hostReady");
+    } catch (err) {
+      setLocalError(formatError(err));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function testManualHost() {
+    if (!hostAddress.trim()) return;
+    setIsBusy(true);
+    setLocalError(null);
+    try {
+      const result = await onTest(hostAddress.trim(), hostPort || 17871);
+      setTestResult(result);
+      if (result.ok) {
+        setSelectedHost({
+          hostAddress: hostAddress.trim(),
+          hostPort: hostPort || 17871,
+          appName: result.appName ?? "Aster",
+          appVersion: result.appVersion ?? "-",
+          schemaVersion: result.schemaVersion ?? 0,
+          message: result.message,
+        });
+        setStep("pair");
+      }
+    } catch (err) {
+      setTestResult({
+        ok: false,
+        message: formatError(err),
+        appName: null,
+        appVersion: null,
+        schemaVersion: null,
+      });
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function pairHost() {
+    if (!effectiveHostAddress || pairCode.length !== 6 || !clientName.trim()) {
+      return;
+    }
+    setIsBusy(true);
+    setLocalError(null);
+    try {
+      await onPair({
+        hostAddress: effectiveHostAddress,
+        hostPort: effectiveHostPort,
+        pairCode,
+        clientName: clientName.trim(),
+        clientDeviceId: clientDeviceId.trim() || defaultClientDeviceId(),
+      });
+      setStep("clientReady");
+    } catch (err) {
+      setLocalError(formatError(err));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  return (
+    <div className="connection-wizard">
+      <div className="wizard-header">
+        <span>多电脑连接</span>
+        <h2>{wizardStepTitle(step)}</h2>
+      </div>
+
+      {localError ? <div className="error-banner">{localError}</div> : null}
+
+      {step === "role" ? (
+        <div className="wizard-choice-grid">
+          <button
+            className="wizard-choice"
+            disabled={disabled || isBusy}
+            type="button"
+            onClick={() => setStep("hostConfirm")}
+          >
+            <strong>这台作为主电脑</strong>
+            <span>正式库存数据保存在这台电脑，其他电脑连接过来一起使用。</span>
+          </button>
+          <button
+            className="wizard-choice"
+            disabled={disabled || isBusy}
+            type="button"
+            onClick={() => void discover()}
+          >
+            <strong>连接到主电脑</strong>
+            <span>这台电脑连接已有主电脑，共用同一套库存数据。</span>
+          </button>
+        </div>
+      ) : null}
+
+      {step === "hostConfirm" ? (
+        <div className="wizard-panel">
+          <p>
+            正式库存数据将保存在这台电脑。其他电脑需要输入这台电脑显示的配对码后才能连接。
+          </p>
+          <div className="wizard-actions">
+            <button
+              className="ghost-button"
+              disabled={isBusy}
+              type="button"
+              onClick={() => setStep("role")}
+            >
+              返回
+            </button>
+            <button
+              className="primary-button"
+              disabled={disabled || isBusy}
+              type="button"
+              onClick={() => void enableHost()}
+            >
+              {isBusy ? "开启中..." : "开启共享"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {step === "hostReady" ? (
+        <div className="wizard-panel">
+          <div className="pair-code-card">
+            <span>给其他电脑输入的配对码</span>
+            <strong>{effectiveHostStatus?.pairCode ?? "------"}</strong>
+          </div>
+          <dl className="wizard-summary">
+            <div>
+              <dt>共享状态</dt>
+              <dd>{effectiveHostStatus?.message ?? "主电脑共享已开启"}</dd>
+            </div>
+            <div>
+              <dt>连接地址</dt>
+              <dd>
+                {effectiveHostStatus?.running
+                  ? `${effectiveHostStatus.bindAddress}:${effectiveHostStatus.port}`
+                  : "-"}
+              </dd>
+            </div>
+            <div>
+              <dt>已连接其他电脑</dt>
+              <dd>{clientConnections.length} 台</dd>
+            </div>
+          </dl>
+          <div className="wizard-actions">
+            <button
+              className="ghost-button"
+              disabled={isBusy}
+              type="button"
+              onClick={() => void onRefreshHost()}
+            >
+              刷新状态
+            </button>
+            <button
+              className="primary-button"
+              disabled={disabled || isBusy}
+              type="button"
+              onClick={() => void onFinish("这台电脑已开启主电脑共享")}
+            >
+              完成
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {step === "discover" ? (
+        <div className="wizard-panel">
+          <div className="wizard-toolbar">
+            <p>
+              {isBusy
+                ? "正在搜索局域网内的主电脑..."
+                : hosts.length > 0
+                  ? "选择要连接的主电脑。"
+                  : "没有找到主电脑。请确认主电脑已开启共享。"}
+            </p>
+            <button
+              className="ghost-button"
+              disabled={disabled || isBusy}
+              type="button"
+              onClick={() => void discover()}
+            >
+              重新搜索
+            </button>
+          </div>
+          {hosts.length > 0 ? (
+            <div className="discovery-list">
+              {hosts.map((host) => (
+                <button
+                  className={
+                    selectedHost?.hostAddress === host.hostAddress &&
+                    selectedHost?.hostPort === host.hostPort
+                      ? "discovery-item selected"
+                      : "discovery-item"
+                  }
+                  key={`${host.hostAddress}:${host.hostPort}`}
+                  type="button"
+                  onClick={() => {
+                    setSelectedHost(host);
+                    setHostAddress(host.hostAddress);
+                    setHostPort(host.hostPort);
+                    setStep("pair");
+                  }}
+                >
+                  <strong>{host.hostAddress}</strong>
+                  <span>
+                    {host.appName} {host.appVersion} · Schema{" "}
+                    {host.schemaVersion}
+                  </span>
+                  <span>{host.message}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <div className="wizard-actions">
+            <button
+              className="ghost-button"
+              disabled={isBusy}
+              type="button"
+              onClick={() => setStep("role")}
+            >
+              返回
+            </button>
+            <button
+              className="ghost-button"
+              disabled={isBusy}
+              type="button"
+              onClick={() => setStep("manual")}
+            >
+              手动输入地址
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {step === "manual" ? (
+        <div className="wizard-panel">
+          <Field label="主电脑地址">
+            <input
+              autoFocus
+              disabled={isBusy}
+              placeholder="例如 192.168.1.20"
+              value={hostAddress}
+              onChange={(event) => setHostAddress(event.target.value)}
+            />
+          </Field>
+          <Field label="端口">
+            <input
+              disabled={isBusy}
+              max="65535"
+              min="1024"
+              type="number"
+              value={hostPort}
+              onChange={(event) => setHostPort(Number(event.target.value))}
+            />
+          </Field>
+          {testResult ? (
+            <div
+              className={
+                testResult.ok
+                  ? "settings-result success"
+                  : "settings-result warning"
+              }
+            >
+              <strong>{testResult.message}</strong>
+              <span>
+                {testResult.appName ?? "-"} {testResult.appVersion ?? ""}
+              </span>
+            </div>
+          ) : null}
+          <div className="wizard-actions">
+            <button
+              className="ghost-button"
+              disabled={isBusy}
+              type="button"
+              onClick={() => setStep("discover")}
+            >
+              返回搜索
+            </button>
+            <button
+              className="primary-button"
+              disabled={disabled || isBusy || !hostAddress.trim()}
+              type="button"
+              onClick={() => void testManualHost()}
+            >
+              测试并继续
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {step === "pair" ? (
+        <div className="wizard-panel">
+          <dl className="wizard-summary">
+            <div>
+              <dt>主电脑</dt>
+              <dd>
+                {effectiveHostAddress}:{effectiveHostPort}
+              </dd>
+            </div>
+          </dl>
+          <Field label="配对码">
+            <input
+              autoFocus
+              disabled={isBusy}
+              inputMode="numeric"
+              maxLength={6}
+              placeholder="输入主电脑显示的 6 位数字"
+              value={pairCode}
+              onChange={(event) =>
+                setPairCode(event.target.value.replace(/\D/g, "").slice(0, 6))
+              }
+            />
+          </Field>
+          <Field label="这台电脑名称">
+            <input
+              disabled={isBusy}
+              value={clientName}
+              onChange={(event) => setClientName(event.target.value)}
+            />
+          </Field>
+          <Field label="设备标识">
+            <input
+              disabled={isBusy}
+              value={clientDeviceId}
+              onChange={(event) => setClientDeviceId(event.target.value)}
+            />
+          </Field>
+          <div className="wizard-actions">
+            <button
+              className="ghost-button"
+              disabled={isBusy}
+              type="button"
+              onClick={() => setStep(hosts.length > 0 ? "discover" : "manual")}
+            >
+              返回
+            </button>
+            <button
+              className="primary-button"
+              disabled={
+                disabled || isBusy || pairCode.length !== 6 || !clientName.trim()
+              }
+              type="button"
+              onClick={() => void pairHost()}
+            >
+              {isBusy ? "连接中..." : "连接"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {step === "clientReady" ? (
+        <div className="wizard-panel">
+          <div className="settings-result success">
+            <strong>已连接到主电脑</strong>
+            <span>
+              {effectiveHostAddress}:{effectiveHostPort}
+            </span>
+            <span>以后打开应用会自动使用主电脑上的库存数据。</span>
+          </div>
+          <div className="wizard-actions">
+            <button
+              className="primary-button"
+              disabled={disabled || isBusy}
+              type="button"
+              onClick={() => void onFinish("已连接到主电脑")}
+            >
+              完成
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function wizardStepTitle(step: ConnectionWizardStep) {
+  if (step === "hostConfirm") return "把这台电脑设为主电脑";
+  if (step === "hostReady") return "主电脑已开启";
+  if (step === "discover") return "搜索主电脑";
+  if (step === "manual") return "手动连接主电脑";
+  if (step === "pair") return "输入配对码";
+  if (step === "clientReady") return "连接完成";
+  return "这台电脑要怎么使用？";
+}
+
+function defaultClientName(platform: string) {
+  if (platform === "windows") return "Windows 电脑";
+  if (platform === "macos") return "macOS 电脑";
+  return "Aster 电脑";
+}
+
+function defaultClientDeviceId() {
+  const stored = window.localStorage.getItem("aster.clientDeviceId");
+  if (stored) return stored;
+  const generated = `device-${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+  window.localStorage.setItem("aster.clientDeviceId", generated);
+  return generated;
+}
+
+function ClientConnectionEditor({
+  disabled,
+  onDiscover,
+  onSave,
+  onTest,
+  status,
+}: {
+  disabled: boolean;
+  onDiscover: (hostPort: number) => Promise<HostDiscoveryResult[]>;
+  onSave: (hostAddress: string, hostPort: number) => Promise<void>;
+  onTest: (
+    hostAddress: string,
+    hostPort: number,
+  ) => Promise<HostConnectionTestResult>;
+  status: AppStatus | null;
+}) {
+  const [hostAddress, setHostAddress] = useState(
+    status?.runtime.hostAddress ?? "127.0.0.1",
+  );
+  const [hostPort, setHostPort] = useState(status?.runtime.hostPort ?? 17871);
+  const [testResult, setTestResult] = useState<HostConnectionTestResult | null>(null);
+  const [hosts, setHosts] = useState<HostDiscoveryResult[]>([]);
+
+  return (
+    <EditorForm
+      disabled={disabled || !hostAddress.trim()}
+      saveLabel="保存客户端连接"
+      onSave={() => onSave(hostAddress, hostPort)}
+    >
+      <Field label="主机地址">
+        <input
+          autoFocus
+          value={hostAddress}
+          onChange={(event) => setHostAddress(event.target.value)}
+          placeholder="主机 IP 或主机名"
+        />
+      </Field>
+      <Field label="主机端口">
+        <input
+          max="65535"
+          min="1024"
+          type="number"
+          value={hostPort}
+          onChange={(event) => setHostPort(Number(event.target.value))}
+        />
+      </Field>
+      <button
+        className="ghost-button"
+        disabled={disabled}
+        type="button"
+        onClick={async () => setTestResult(await onTest(hostAddress, hostPort))}
+      >
+        测试连接
+      </button>
+      <button
+        className="ghost-button"
+        disabled={disabled}
+        type="button"
+        onClick={async () => setHosts(await onDiscover(hostPort))}
+      >
+        发现主机
+      </button>
+      {testResult ? (
+        <div className={testResult.ok ? "settings-result success" : "settings-result warning"}>
+          <strong>{testResult.message}</strong>
+          <span>{testResult.appName ?? "-"} {testResult.appVersion ?? ""}</span>
+          <span>Schema：{testResult.schemaVersion ?? "-"}</span>
+        </div>
+      ) : null}
+      {hosts.length > 0 ? (
+        <div className="discovery-list">
+          {hosts.map((host) => (
+            <button
+              className="discovery-item"
+              key={`${host.hostAddress}:${host.hostPort}`}
+              type="button"
+              onClick={() => {
+                setHostAddress(host.hostAddress);
+                setHostPort(host.hostPort);
+              }}
+            >
+              <strong>{host.hostAddress}:{host.hostPort}</strong>
+              <span>{host.appName} {host.appVersion} · Schema {host.schemaVersion}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </EditorForm>
+  );
+}
+
+function ClientPairingEditor({
+  disabled,
+  onSave,
+  status,
+}: {
+  disabled: boolean;
+  onSave: (request: {
+    pairCode: string;
+    clientName: string;
+    clientDeviceId: string;
+  }) => Promise<void>;
+  status: AppStatus | null;
+}) {
+  const [pairCode, setPairCode] = useState("");
+  const [clientName, setClientName] = useState("Aster 客户端");
+  const [clientDeviceId, setClientDeviceId] = useState(
+    status?.runtime.clientDeviceId ?? "",
+  );
+  return (
+    <EditorForm
+      disabled={disabled || pairCode.length !== 6 || !clientName.trim()}
+      saveLabel="完成配对"
+      onSave={() => onSave({ pairCode, clientName, clientDeviceId })}
+    >
+      <Field label="配对码">
+        <input
+          autoFocus
+          inputMode="numeric"
+          maxLength={6}
+          value={pairCode}
+          onChange={(event) => setPairCode(event.target.value)}
+        />
+      </Field>
+      <Field label="客户端名称">
+        <input
+          value={clientName}
+          onChange={(event) => setClientName(event.target.value)}
+        />
+      </Field>
+      <Field label="设备 ID">
+        <input
+          value={clientDeviceId}
+          onChange={(event) => setClientDeviceId(event.target.value)}
+        />
+      </Field>
+    </EditorForm>
+  );
+}
+
+function SecondBackupDirEditor({
+  disabled,
+  onSave,
+  status,
+}: {
+  disabled: boolean;
+  onSave: (path: string) => Promise<void>;
+  status: AppStatus | null;
+}) {
+  const [path, setPath] = useState(status?.runtime.backupDir ?? "");
+  async function selectDirectory() {
+    const selected = await chooseSinglePath({
+      title: "选择第二备份目录",
+      directory: true,
+      defaultPath: path || undefined,
+      canCreateDirectories: true,
+    });
+    if (selected) setPath(selected);
+  }
+  return (
+    <EditorForm
+      disabled={disabled || !path}
+      saveLabel="保存目录"
+      onSave={() => onSave(path)}
+    >
+      <Field label="第二备份目录">
+        <PathPickerField
+          value={path}
+          placeholder="请选择外接硬盘或同步盘目录"
+          buttonLabel="选择"
+          onChoose={selectDirectory}
+        />
+      </Field>
+    </EditorForm>
+  );
+}
+
+function RestoreBackupEditor({
+  disabled,
+  onPreview,
+  onRestore,
+  status,
+}: {
+  disabled: boolean;
+  onPreview: (backupFile: string) => Promise<RestorePreview>;
+  onRestore: (request: {
+    backupFile: string;
+    confirmation: string;
+    validationToken: string;
+  }) => Promise<void>;
+  status: AppStatus | null;
+}) {
+  const [backupFile, setBackupFile] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [preview, setPreview] = useState<RestorePreview | null>(null);
+  async function selectFile() {
+    const selected = await chooseSinglePath({
+      title: "选择备份文件",
+      filters: [{ name: "Aster 备份文件", extensions: ["zip"] }],
+      defaultPath: backupFile || status?.runtime.backupDir || undefined,
+    });
+    if (selected) {
+      setBackupFile(selected);
+      setPreview(null);
+    }
+  }
+  return (
+    <EditorForm
+      disabled={
+        disabled ||
+        !preview ||
+        preview.backupFile !== backupFile ||
+        !preview.validationToken ||
+        confirmation !== "RESTORE"
+      }
+      saveLabel="恢复备份"
+      onSave={() =>
+        onRestore({
+          backupFile,
+          confirmation,
+          validationToken: preview?.validationToken ?? "",
+        })
+      }
+    >
+      <Field label="备份文件">
+        <PathPickerField
+          value={backupFile}
+          placeholder="请选择 aster-backup-YYYYMMDD-HHMMSS-短ID.zip"
+          buttonLabel="选择"
+          onChoose={selectFile}
+        />
+      </Field>
+      <button
+        className="ghost-button"
+        disabled={disabled || !backupFile}
+        type="button"
+        onClick={async () => setPreview(await onPreview(backupFile))}
+      >
+        校验备份包
+      </button>
+      <Field label="确认文本">
+        <input
+          value={confirmation}
+          onChange={(event) => setConfirmation(event.target.value)}
+          placeholder="输入 RESTORE"
+        />
+      </Field>
+      {preview ? (
+        <div className="settings-result">
+          <strong>{preview.message}</strong>
+          <span>创建时间：{preview.metadata.createdAt}</span>
+          <span>Schema：v{preview.metadata.schemaVersion}</span>
+          <span>来源主机：{preview.metadata.sourceHostName ?? "-"}</span>
+          <span>校验：{preview.metadata.databaseSha256}</span>
+        </div>
+      ) : null}
     </EditorForm>
   );
 }
@@ -5166,6 +6260,14 @@ function EditorForm({
     <div className="editor-form">
       <div className="editor-form-grid">{children}</div>
       <div className="editor-actions">
+        <button
+          className="ghost-button"
+          disabled={disabled}
+          onClick={() => void closeCurrentEditorWindow()}
+          type="button"
+        >
+          取消
+        </button>
         <button className="primary-button" disabled={disabled} onClick={onSave}>
           {saveLabel}
         </button>
@@ -5276,7 +6378,6 @@ function ItemsPage({
   return (
     <section className="table-panel">
       <div className="table-toolbar">
-        <h2>物品列表</h2>
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -5382,6 +6483,7 @@ function DepartmentsPage({
         </button>
       }
       description="部门用于出库领用和部门报表统计。"
+      hideHeading
       title="部门管理"
     >
       <table>
@@ -5465,6 +6567,7 @@ function CategoriesPage({
         </button>
       }
       description="分类支持大类和小类，用于物品筛选、预算规则和报表统计。"
+      hideHeading
       title="分类管理"
     >
       <table>
@@ -5545,6 +6648,7 @@ function SimpleNamePage({
         </button>
       }
       description={description}
+      hideHeading
       title={title}
     >
       <table>
@@ -5622,6 +6726,7 @@ function SuppliersPage({
         </button>
       }
       description="供应商用于入库单和采购记录查询。"
+      hideHeading
       title="供应商管理"
     >
       <div className="subtable">
@@ -5757,6 +6862,7 @@ function BudgetRulesPage({
         </button>
       }
       description="预算按部门、分类和月份控制出库领用金额，超出预算时出库确认会被阻止。"
+      hideHeading
       title="预算控制"
     >
       <div className="table-toolbar">
@@ -5845,7 +6951,6 @@ function ApprovalsPage({
   return (
     <section className="table-panel">
       <div className="table-toolbar">
-        <h2>审批管理</h2>
         <input
           value={decisionNote}
           onChange={(e) => setDecisionNote(e.target.value)}
@@ -5950,8 +7055,7 @@ function StockDocumentPage({
 
   return (
     <section className="table-panel">
-      <div className="table-toolbar">
-        <h2>{isOutbound ? "最近出库/领用单" : "最近入库单"}</h2>
+      <div className="table-toolbar actions-only">
         <button
           className="primary-button"
           disabled={!canWrite}
@@ -5977,7 +7081,6 @@ function StockDocumentPage({
         onVoid={onVoid}
         query={query}
         suppliers={suppliers}
-        title={isOutbound ? "最近出库/领用单" : "最近入库单"}
       />
     </section>
   );
@@ -6013,7 +7116,7 @@ function DocumentList({
   ) => Promise<void>;
   query?: StockDocumentQuery;
   suppliers?: Supplier[];
-  title: string;
+  title?: string;
 }) {
   const [approvalRequestId, setApprovalRequestId] = useState("");
   const [voidReason, setVoidReason] = useState("");
@@ -6057,9 +7160,10 @@ function DocumentList({
 
   return (
     <div className="subtable">
-      <div className="subtable-heading">
-        <h3>{title}</h3>
-        {onVoid ? (
+      {title || onVoid ? (
+        <div className="subtable-heading">
+          {title ? <h3>{title}</h3> : <span />}
+          {onVoid ? (
           <div className="void-controls">
             {isOutbound ? (
               <input
@@ -6079,8 +7183,9 @@ function DocumentList({
               onChange={(e) => setVoidHandler(e.target.value)}
             />
           </div>
-        ) : null}
-      </div>
+          ) : null}
+        </div>
+      ) : null}
       {query && onQueryChange ? (
         <div className="document-filters">
           <Field label="月份">
@@ -6249,9 +7354,6 @@ function StockBalancePage({
 
   return (
     <section className="table-panel">
-      <div className="table-toolbar">
-        <h2>库存台账</h2>
-      </div>
       <div className="document-filters">
         <Field label="关键字">
           <input
@@ -6394,9 +7496,6 @@ function StockMovementPage({
 
   return (
     <section className="table-panel">
-      <div className="table-toolbar">
-        <h2>库存流水</h2>
-      </div>
       <div className="document-filters">
         <Field label="关键字">
           <input
@@ -6734,8 +7833,7 @@ function AdjustmentPage({
 }) {
   return (
     <section className="table-panel">
-      <div className="table-toolbar">
-        <h2>最近调整单</h2>
+      <div className="table-toolbar actions-only">
         <button
           className="primary-button"
           disabled={!canWrite}
@@ -6751,7 +7849,6 @@ function AdjustmentPage({
         documents={documents}
         isOutbound={false}
         onVoid={onVoid}
-        title="最近调整单"
       />
     </section>
   );
@@ -6824,7 +7921,6 @@ function ReportsPage({
     <section className="report-layout">
       <div className="module-panel report-toolbar">
         <div>
-          <h2>月度报表</h2>
           <p>报表从库存流水实时汇总，导出文件不依赖 Office/WPS 宏。</p>
         </div>
         <div className="report-actions">
@@ -7503,7 +8599,6 @@ function ImportPage({
     <section className="import-layout">
       <div className="module-panel import-toolbar">
         <div>
-          <h2>Excel 导入</h2>
           <p>
             支持旧酒店月报和通用模板，预览不会写入数据库；确认导入后生成物品档案、入库单、出库单、库存流水和余额。
           </p>
@@ -7705,26 +8800,15 @@ function SettingsPage({
   clientConnectionCheckedAt,
   clientConnections,
   currentUser,
-  discoveredHosts,
   hostStatus,
   hostTestResult,
   isWorking,
   lastBackup,
   onBackup,
   onAppearanceChange,
-  onChangePassword,
-  onDiscoverHosts,
   onLogout,
-  onSaveSystemSettings,
-  onPreviewRestore,
-  onRestore,
-  onSaveClientConfig,
-  onSaveSecondBackupDir,
+  onOpenConnectionWizard,
   onStartHostService,
-  onTestHostConnection,
-  onPairWithHost,
-  restorePreview,
-  restoreResult,
   status,
   systemSettings,
 }: {
@@ -7733,107 +8817,26 @@ function SettingsPage({
   clientConnectionCheckedAt: string | null;
   clientConnections: ClientConnectionInfo[];
   currentUser: CurrentUser;
-  discoveredHosts: HostDiscoveryResult[];
   hostStatus: HostServiceStatus | null;
   hostTestResult: HostConnectionTestResult | null;
   isWorking: boolean;
   lastBackup: BackupSummary | null;
   onBackup: () => Promise<void>;
   onAppearanceChange: React.Dispatch<React.SetStateAction<AppearanceSettings>>;
-  onChangePassword: (oldPassword: string, newPassword: string) => Promise<void>;
-  onDiscoverHosts: (hostPort: number) => Promise<void>;
   onLogout: () => Promise<void>;
-  onSaveSystemSettings: (request: SystemSettings) => Promise<void>;
-  onPreviewRestore: (backupFile: string) => Promise<void>;
-  onRestore: (
-    backupFile: string,
-    confirmation: string,
-    validationToken: string,
-  ) => Promise<void>;
-  onSaveClientConfig: (hostAddress: string, hostPort: number) => Promise<void>;
-  onSaveSecondBackupDir: (path: string) => Promise<void>;
+  onOpenConnectionWizard: () => void;
   onStartHostService: () => Promise<void>;
-  onTestHostConnection: (
-    hostAddress: string,
-    hostPort: number,
-  ) => Promise<void>;
-  onPairWithHost: (
-    pairCode: string,
-    clientName: string,
-    clientDeviceId: string,
-  ) => Promise<void>;
-  restorePreview: RestorePreview | null;
-  restoreResult: RestoreResult | null;
   status: AppStatus | null;
   systemSettings: SystemSettings | null;
 }) {
-  const [secondBackupDir, setSecondBackupDir] = useState("");
-  const [restorePath, setRestorePath] = useState("");
-  const [confirmation, setConfirmation] = useState("");
-  const [hostAddress, setHostAddress] = useState(
-    status?.runtime.hostAddress ?? "127.0.0.1",
-  );
-  const [hostPort, setHostPort] = useState(status?.runtime.hostPort ?? 17871);
-  const [pairCode, setPairCode] = useState("");
-  const [clientName, setClientName] = useState("Aster 客户端");
-  const [clientDeviceId, setClientDeviceId] = useState(
-    status?.runtime.clientDeviceId ?? "",
-  );
-  const [oldPassword, setOldPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [settingsDraft, setSettingsDraft] = useState<SystemSettings | null>(
-    systemSettings,
-  );
-
-  useEffect(() => {
-    setSettingsDraft(systemSettings);
-  }, [systemSettings]);
-
-  useEffect(() => {
-    if (status?.runtime.clientDeviceId) {
-      setClientDeviceId(status.runtime.clientDeviceId);
-    }
-  }, [status?.runtime.clientDeviceId]);
-
-  async function selectDirectory(
-    title: string,
-    onSelect: (path: string) => void,
-    defaultPath?: string,
-  ) {
-    const selected = await chooseSinglePath({
-      title,
-      directory: true,
-      defaultPath: defaultPath || undefined,
-      canCreateDirectories: true,
-    });
-    if (selected) {
-      onSelect(selected);
-    }
-  }
-
-  async function selectRestoreBackupFile() {
-    const selected = await chooseSinglePath({
-      title: "选择备份文件",
-      filters: [{ name: "Aster 备份文件", extensions: ["zip"] }],
-      defaultPath: restorePath || status?.runtime.backupDir || undefined,
-    });
-    if (selected) {
-      setRestorePath(selected);
-    }
-  }
-
-  const currentHostAddress = status?.runtime.hostAddress ?? hostAddress;
-  const currentHostPort = status?.runtime.hostPort ?? hostPort;
-  const isClientMode = status?.runtime.mode === "client";
-  const hasClientToken = Boolean(status?.runtime.clientToken);
-  const canOperateLocalDatabase = canManage && !isClientMode;
-  const effectiveTheme = resolveTheme(appearanceSettings.themeMode);
-  const glassPreviewThemeClass =
-    effectiveTheme === "light" ? "preview-glass-light" : "preview-glass-dark";
-  const restorePathMatchesPreview = Boolean(
-    restorePreview && restorePreview.backupFile === restorePath,
-  );
-  const backupMetrics = [
+  const settingsIsClientMode = status?.runtime.mode === "client";
+  const canOperateSettings = canManage && !settingsIsClientMode;
+  const settingsEffectiveTheme = resolveTheme(appearanceSettings.themeMode);
+  const settingsGlassPreviewThemeClass =
+    settingsEffectiveTheme === "light"
+      ? "preview-glass-light"
+      : "preview-glass-dark";
+  const settingsBackupMetrics = [
     {
       label: "数据库状态",
       value: status?.health.databaseOk ? "健康" : "异常",
@@ -7867,7 +8870,8 @@ function SettingsPage({
             <div className="settings-meta">
               <span className="settings-label">主题模式</span>
               <p className="settings-hint">
-                当前生效：{effectiveTheme === "dark" ? "深色" : "浅色"}
+                当前生效：
+                {settingsEffectiveTheme === "dark" ? "深色" : "浅色"}
               </p>
             </div>
             <div className="setting-control">
@@ -7903,7 +8907,7 @@ function SettingsPage({
           <div className="setting-row">
             <div className="settings-meta">
               <span className="settings-label">Liquid Glass</span>
-              <p className="settings-hint">选取喜欢的 Liquid Glass外观</p>
+              <p className="settings-hint">选取喜欢的 Liquid Glass 外观</p>
             </div>
             <div className="setting-control">
               <div className="preview-grid preview-grid-2">
@@ -7921,7 +8925,7 @@ function SettingsPage({
                       }
                     >
                       <span
-                        className={`preview-art preview-glass preview-glass-${style} ${glassPreviewThemeClass}`}
+                        className={`preview-art preview-glass preview-glass-${style} ${settingsGlassPreviewThemeClass}`}
                       />
                       <span className="preview-label">
                         {style === "transparent" ? "透明" : "色调"}
@@ -7990,10 +8994,11 @@ function SettingsPage({
           </div>
         </article>
       </div>
+
       <div className="settings-group">
         <h3 className="settings-group-title">运行状态</h3>
         <article className="surface settings-block">
-          {backupMetrics.map((card) => (
+          {settingsBackupMetrics.map((card) => (
             <div className="setting-row" key={card.label}>
               <div className="settings-meta">
                 <span className="settings-label">{card.label}</span>
@@ -8029,39 +9034,21 @@ function SettingsPage({
           <div className="setting-row">
             <div className="settings-meta">
               <span className="settings-label">修改密码</span>
-              <p className="settings-hint">输入旧密码和新密码后保存。</p>
+              <p className="settings-hint">在独立系统窗口中输入并保存。</p>
             </div>
             <div className="setting-control">
-              <div className="setting-control-grid setting-control-grid-password">
-                <label className="field">
-                  <span>旧密码</span>
-                  <input
-                    value={oldPassword}
-                    onChange={(e) => setOldPassword(e.target.value)}
-                    type="password"
-                  />
-                </label>
-                <label className="field">
-                  <span>新密码</span>
-                  <input
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    type="password"
-                  />
-                </label>
-                <button
-                  className="primary-button"
-                  disabled={!oldPassword || !newPassword}
-                  onClick={() =>
-                    onChangePassword(oldPassword, newPassword).then(() => {
-                      setOldPassword("");
-                      setNewPassword("");
-                    })
-                  }
-                >
-                  修改密码
-                </button>
-              </div>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() =>
+                  void openEditorWindow("changePassword", {
+                    width: 520,
+                    height: 360,
+                  })
+                }
+              >
+                打开修改密码
+              </button>
             </div>
           </div>
           <div className="setting-row">
@@ -8080,460 +9067,147 @@ function SettingsPage({
       <div className="settings-group">
         <h3 className="settings-group-title">业务与目录设置</h3>
         <article className="surface settings-block">
-          {settingsDraft ? (
-            <>
-              <div className="setting-row">
-                <div className="settings-meta">
-                  <span className="settings-label">酒店名称</span>
-                  <p className="settings-hint">
-                    {isClientMode
-                      ? "客户端模式下此处只读，系统设置请在主机本机维护。"
-                      : "保存后写入本地 SQLite，并记录审计日志。"}
-                  </p>
-                </div>
-                <div className="setting-control setting-control-inline">
-                  <input
-                    disabled={!canOperateLocalDatabase}
-                    value={settingsDraft.hotelName}
-                    onChange={(e) =>
-                      setSettingsDraft({
-                        ...settingsDraft,
-                        hotelName: e.target.value,
-                      })
-                    }
-                  />
-                </div>
-              </div>
-              <div className="setting-row">
-                <div className="settings-meta">
-                  <span className="settings-label">账期</span>
-                </div>
-                <div className="setting-control">
-                  <div className="setting-control-grid setting-control-grid-2">
-                    <label className="field">
-                      <span>当前账期</span>
-                      <input
-                        disabled={!canOperateLocalDatabase}
-                        type="month"
-                        value={settingsDraft.currentPeriod}
-                        onChange={(e) =>
-                          setSettingsDraft({
-                            ...settingsDraft,
-                            currentPeriod: e.target.value,
-                          })
-                        }
-                      />
-                    </label>
-                    <label className="field">
-                      <span>默认月份</span>
-                      <input
-                        disabled={!canOperateLocalDatabase}
-                        type="month"
-                        value={settingsDraft.defaultMonth}
-                        onChange={(e) =>
-                          setSettingsDraft({
-                            ...settingsDraft,
-                            defaultMonth: e.target.value,
-                          })
-                        }
-                      />
-                    </label>
-                  </div>
-                </div>
-              </div>
-              <div className="setting-row">
-                <div className="settings-meta">
-                  <span className="settings-label">小数位</span>
-                </div>
-                <div className="setting-control">
-                  <div className="setting-control-grid setting-control-grid-2">
-                    <label className="field">
-                      <span>数量</span>
-                      <input
-                        disabled={!canOperateLocalDatabase}
-                        max="6"
-                        min="0"
-                        type="number"
-                        value={settingsDraft.quantityDecimals}
-                        onChange={(e) =>
-                          setSettingsDraft({
-                            ...settingsDraft,
-                            quantityDecimals: Number(e.target.value),
-                          })
-                        }
-                      />
-                    </label>
-                    <label className="field">
-                      <span>金额</span>
-                      <input
-                        disabled={!canOperateLocalDatabase}
-                        max="6"
-                        min="0"
-                        type="number"
-                        value={settingsDraft.amountDecimals}
-                        onChange={(e) =>
-                          setSettingsDraft({
-                            ...settingsDraft,
-                            amountDecimals: Number(e.target.value),
-                          })
-                        }
-                      />
-                    </label>
-                  </div>
-                </div>
-              </div>
-              <div className="setting-row">
-                <div className="settings-meta">
-                  <span className="settings-label">默认导出目录</span>
-                </div>
-                <div className="setting-control setting-control-path">
-                  <PathPickerField
-                    disabled={!canOperateLocalDatabase}
-                    value={settingsDraft.defaultExportDir}
-                    placeholder="请选择默认导出目录"
-                    buttonLabel="选择"
-                    onChoose={() =>
-                      selectDirectory(
-                        "选择默认导出目录",
-                        (path) =>
-                          setSettingsDraft({
-                            ...settingsDraft,
-                            defaultExportDir: path,
-                          }),
-                        settingsDraft.defaultExportDir,
-                      )
-                    }
-                  />
-                </div>
-              </div>
-              <div className="setting-row">
-                <div className="settings-meta">
-                  <span className="settings-label">默认备份目录</span>
-                </div>
-                <div className="setting-control setting-control-path">
-                  <PathPickerField
-                    disabled={!canOperateLocalDatabase}
-                    value={settingsDraft.defaultBackupDir}
-                    placeholder="请选择默认备份目录"
-                    buttonLabel="选择"
-                    onChoose={() =>
-                      selectDirectory(
-                        "选择默认备份目录",
-                        (path) =>
-                          setSettingsDraft({
-                            ...settingsDraft,
-                            defaultBackupDir: path,
-                          }),
-                        settingsDraft.defaultBackupDir,
-                      )
-                    }
-                  />
-                </div>
-              </div>
-              <div className="setting-row">
-                <div className="settings-meta">
-                  <span className="settings-label">库存策略</span>
-                </div>
-                <div className="setting-control">
-                  <label className="checkbox-field setting-checkbox">
-                    <input
-                      checked={settingsDraft.allowNegativeStock}
-                      disabled={!canOperateLocalDatabase}
-                      onChange={(e) =>
-                        setSettingsDraft({
-                          ...settingsDraft,
-                          allowNegativeStock: e.target.checked,
-                        })
-                      }
-                      type="checkbox"
-                    />
-                    允许负库存
-                  </label>
-                </div>
-              </div>
-              <div className="setting-row">
-                <div className="settings-meta">
-                  <span className="settings-label">自动备份</span>
-                </div>
-                <div className="setting-control">
-                  <div className="setting-control-grid setting-control-grid-backup">
-                    <label className="field">
-                      <span>间隔小时</span>
-                      <input
-                        disabled={!canOperateLocalDatabase}
-                        max="168"
-                        min="1"
-                        type="number"
-                        value={settingsDraft.intervalBackupHours}
-                        onChange={(e) =>
-                          setSettingsDraft({
-                            ...settingsDraft,
-                            intervalBackupHours: Number(e.target.value),
-                          })
-                        }
-                      />
-                    </label>
-                    <label className="checkbox-field setting-checkbox">
-                      <input
-                        checked={settingsDraft.autoBackupEnabled}
-                        disabled={!canOperateLocalDatabase}
-                        onChange={(e) =>
-                          setSettingsDraft({
-                            ...settingsDraft,
-                            autoBackupEnabled: e.target.checked,
-                          })
-                        }
-                        type="checkbox"
-                      />
-                      启动自动备份
-                    </label>
-                    <label className="checkbox-field setting-checkbox">
-                      <input
-                        checked={settingsDraft.intervalBackupEnabled}
-                        disabled={!canOperateLocalDatabase}
-                        onChange={(e) =>
-                          setSettingsDraft({
-                            ...settingsDraft,
-                            intervalBackupEnabled: e.target.checked,
-                          })
-                        }
-                        type="checkbox"
-                      />
-                      运行中定时备份
-                    </label>
-                  </div>
-                </div>
-              </div>
-              <div className="setting-row">
-                <div className="settings-meta">
-                  <span className="settings-label">保存业务设置</span>
-                </div>
-                <div className="setting-control">
-                  <button
-                    className="primary-button"
-                    disabled={!canOperateLocalDatabase || isWorking}
-                    onClick={() => onSaveSystemSettings(settingsDraft)}
-                  >
-                    保存系统设置
-                  </button>
-                </div>
-              </div>
-            </>
-          ) : (
-            <div className="setting-row">
-              <div className="settings-meta">
-                <span className="settings-label">业务设置</span>
-                <p className="settings-hint">管理员登录后加载系统设置。</p>
-              </div>
+          <div className="setting-row">
+            <div className="settings-meta">
+              <span className="settings-label">
+                {systemSettings?.hotelName || "业务设置"}
+              </span>
+              <p className="settings-hint">
+                {settingsIsClientMode
+                  ? "客户端模式下只查看状态，请在主机本机维护设置。"
+                  : "酒店名称、账期、小数位、导出目录和备份策略。"}
+              </p>
             </div>
-          )}
+            <div className="setting-control">
+              <button
+                className="primary-button"
+                disabled={!canOperateSettings}
+                type="button"
+                onClick={() =>
+                  void openEditorWindow("businessSettings", {
+                    width: 720,
+                    height: 620,
+                  })
+                }
+              >
+                打开业务设置
+              </button>
+            </div>
+          </div>
+          <div className="setting-row">
+            <div className="settings-meta">
+              <span className="settings-label">当前账期</span>
+            </div>
+            <div className="setting-control">
+              <strong className="setting-value">
+                {systemSettings?.currentPeriod ?? "-"}
+              </strong>
+            </div>
+          </div>
         </article>
       </div>
 
       <div className="settings-group">
-        <h3 className="settings-group-title">局域网主机/客户端</h3>
-        <article className="surface settings-block">
-          <div className="setting-row">
-            <div className="settings-meta">
-              <span className="settings-label">主机服务</span>
-              <p className="settings-hint">
-                {hostStatus?.message ?? "未获取状态"}
-              </p>
+        <h3 className="settings-group-title">多电脑连接</h3>
+        <article className="surface settings-feature-panel">
+          <div className="settings-feature-header">
+            <div>
+              <span className="settings-feature-kicker">当前状态</span>
+              <h4>{connectionStatusLabel(status, hostTestResult)}</h4>
+              <p>{connectionStatusHint(status, hostStatus, hostTestResult)}</p>
             </div>
-            <div className="setting-control">
-              <div className="setting-control-stack">
-                <dl className="setting-definition-list">
-                  <div>
-                    <dt>监听</dt>
-                    <dd>
-                      {hostStatus?.running
-                        ? `${hostStatus.bindAddress}:${hostStatus.port}`
-                        : "-"}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>配对码</dt>
-                    <dd>{hostStatus?.pairCode ?? "-"}</dd>
-                  </div>
-                  <div>
-                    <dt>客户端</dt>
-                    <dd>{hostStatus?.clientCount ?? 0} 个</dd>
-                  </div>
-                </dl>
+            <div className="settings-feature-actions">
+              <button
+                className="primary-button"
+                disabled={!canManage}
+                type="button"
+                onClick={onOpenConnectionWizard}
+              >
+                打开连接向导
+              </button>
+              {status?.runtime.mode === "host" ? (
                 <button
-                  className="primary-button"
-                  disabled={
-                    !canManage || isWorking || status?.runtime.mode !== "host"
-                  }
+                  className="ghost-button"
+                  disabled={!canManage || isWorking}
+                  type="button"
                   onClick={onStartHostService}
                 >
-                  启动主机服务
+                  重新开启共享
                 </button>
-              </div>
-            </div>
-          </div>
-          <div className="setting-row">
-            <div className="settings-meta">
-              <span className="settings-label">客户端连接</span>
-              <p className="settings-hint">
-                保存主机地址后会切换为客户端模式，并自动重试连接。
-              </p>
-            </div>
-            <div className="setting-control">
-              <div className="setting-control-stack">
-                <div
-                  className={
-                    hostTestResult?.ok
-                      ? "client-health connected"
-                      : "client-health"
-                  }
+              ) : null}
+              {settingsIsClientMode ? (
+                <button
+                  className="ghost-button"
+                  disabled={!canManage}
+                  type="button"
+                  onClick={onOpenConnectionWizard}
                 >
-                  <strong>
-                    {isClientMode
-                      ? `${currentHostAddress}:${currentHostPort}`
-                      : "未处于客户端模式"}
-                  </strong>
-                  <span>
-                    {hasClientToken ? "已配对主机凭据" : "尚未完成主机配对"}
-                  </span>
-                  <span>
-                    {clientConnectionCheckedAt
-                      ? `最近检测：${clientConnectionCheckedAt}`
-                      : "尚未检测连接状态"}
-                  </span>
-                  <span>
-                    {hostTestResult
-                      ? hostTestResult.message
-                      : "可点击测试，客户端模式下也会每 15 秒自动检测主机可用性"}
-                  </span>
-                </div>
-                <div className="client-config">
-                  <input
-                    value={hostAddress}
-                    onChange={(e) => setHostAddress(e.target.value)}
-                    placeholder="主机 IP 或主机名"
-                  />
-                  <input
-                    max="65535"
-                    min="1024"
-                    value={hostPort}
-                    onChange={(e) => setHostPort(Number(e.target.value))}
-                    placeholder="默认 17871"
-                    type="number"
-                  />
-                  <button
-                    className="ghost-button"
-                    disabled={!canManage}
-                    onClick={() => onDiscoverHosts(hostPort)}
-                  >
-                    发现
-                  </button>
-                  <button
-                    className="ghost-button"
-                    disabled={!canManage}
-                    onClick={() => onTestHostConnection(hostAddress, hostPort)}
-                  >
-                    测试
-                  </button>
-                  <button
-                    className="primary-button"
-                    disabled={!canManage}
-                    onClick={() => onSaveClientConfig(hostAddress, hostPort)}
-                  >
-                    保存
-                  </button>
-                </div>
-                {discoveredHosts.length > 0 ? (
-                  <div className="discovery-list">
-                    {discoveredHosts.map((host) => (
-                      <button
-                        className="discovery-item"
-                        key={`${host.hostAddress}:${host.hostPort}`}
-                        onClick={() => {
-                          setHostAddress(host.hostAddress);
-                          setHostPort(host.hostPort);
-                        }}
-                      >
-                        <strong>
-                          {host.hostAddress}:{host.hostPort}
-                        </strong>
-                        <span>
-                          {host.appName} {host.appVersion} · Schema{" "}
-                          {host.schemaVersion}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
+                  重新连接
+                </button>
+              ) : null}
             </div>
           </div>
-          <div className="setting-row">
-            <div className="settings-meta">
-              <span className="settings-label">客户端配对</span>
+
+          <dl className="settings-metric-list">
+            <div>
+              <dt>主电脑</dt>
+              <dd>
+                {settingsIsClientMode
+                  ? `${status?.runtime.hostAddress ?? "-"}:${status?.runtime.hostPort ?? "-"}`
+                  : hostStatus?.running
+                    ? "这台电脑"
+                    : "-"}
+              </dd>
             </div>
-            <div className="setting-control">
-              <div className="setting-control-stack">
-                <div className="client-pair">
-                  <input
-                    inputMode="numeric"
-                    maxLength={6}
-                    value={pairCode}
-                    onChange={(e) => setPairCode(e.target.value)}
-                    placeholder="6 位配对码"
-                  />
-                  <input
-                    value={clientName}
-                    onChange={(e) => setClientName(e.target.value)}
-                    placeholder="客户端名称"
-                  />
-                  <input
-                    value={clientDeviceId}
-                    onChange={(e) => setClientDeviceId(e.target.value)}
-                    placeholder="设备 ID"
-                  />
-                  <button
-                    className="primary-button"
-                    disabled={!canManage}
-                    onClick={() =>
-                      onPairWithHost(pairCode, clientName, clientDeviceId)
-                    }
-                  >
-                    配对
-                  </button>
-                </div>
-                <div className="settings-result">
-                  <strong>客户端凭据</strong>
-                  <span>
-                    {status?.runtime.clientToken
-                      ? "已保存连接凭据"
-                      : "尚未配对"}
-                  </span>
-                </div>
-                {hostTestResult ? (
-                  <div
-                    className={
-                      hostTestResult.ok
-                        ? "settings-result success"
-                        : "settings-result"
-                    }
-                  >
-                    <strong>{hostTestResult.message}</strong>
-                    <span>
-                      {hostTestResult.appName ?? "-"}{" "}
-                      {hostTestResult.appVersion ?? ""}
-                    </span>
-                    <span>Schema：{hostTestResult.schemaVersion ?? "-"}</span>
-                  </div>
-                ) : null}
+            <div>
+              <dt>连接状态</dt>
+              <dd>
+                {settingsIsClientMode
+                  ? hostTestResult?.message ?? "尚未检测"
+                  : hostStatus?.message ?? "未开启共享"}
+              </dd>
+            </div>
+            <div>
+              <dt>其他电脑</dt>
+              <dd>
+                {status?.runtime.mode === "host"
+                  ? `${clientConnections.length} 台`
+                  : "-"}
+              </dd>
+            </div>
+            <div>
+              <dt>最近检测</dt>
+              <dd>{clientConnectionCheckedAt ?? "-"}</dd>
+            </div>
+          </dl>
+
+          {hostStatus?.pairCode && status?.runtime.mode === "host" ? (
+            <div className="settings-inline-note">
+              <strong>当前配对码：{hostStatus.pairCode}</strong>
+              <span>其他电脑打开连接向导后输入这 6 位数字。</span>
+            </div>
+          ) : null}
+
+          {settingsIsClientMode && hostTestResult?.ok === false ? (
+            <div className="settings-inline-note warning">
+              <strong>
+                {status?.runtime.clientToken
+                  ? "主电脑连接异常"
+                  : "尚未连接主电脑"}
+              </strong>
+              <span>{hostTestResult.message}</span>
+            </div>
+          ) : null}
+
+          {status?.runtime.mode === "standalone" ? (
+            <p className="settings-footnote">单机使用时无需连接其他电脑。</p>
+          ) : null}
+
+          {status?.runtime.mode === "host" ? (
+            <div className="settings-compact-table">
+              <div className="settings-compact-table-title">
+                已连接的其他电脑
               </div>
-            </div>
-          </div>
-          <div className="setting-row setting-row-table">
-            <div className="settings-meta">
-              <span className="settings-label">当前连接客户端</span>
-            </div>
-            <div className="setting-control setting-table-control">
               <table>
                 <thead>
                   <tr>
@@ -8558,205 +9232,105 @@ function SettingsPage({
                       <td>{client.lastSeenAt}</td>
                     </tr>
                   ))}
-                  {clientConnections.length === 0 ? (
-                    <EmptyRow colSpan={6} />
-                  ) : null}
+                  {clientConnections.length === 0 ? <EmptyRow colSpan={6} /> : null}
                 </tbody>
               </table>
             </div>
-          </div>
+          ) : null}
         </article>
       </div>
 
       <div className="settings-group">
         <h3 className="settings-group-title">备份与恢复</h3>
-        <article className="surface settings-block">
-          <div className="setting-row">
-            <div className="settings-meta">
-              <span className="settings-label">备份策略</span>
-              <p className="settings-hint">
-                启动自动备份、手动备份和第二备份目录。
-              </p>
+        <article className="surface settings-feature-panel">
+          <div className="settings-feature-header">
+            <div>
+              <span className="settings-feature-kicker">备份策略</span>
+              <h4>备份与恢复</h4>
+              <p>手动备份可直接执行；目录设置与恢复在独立系统窗口中处理。</p>
             </div>
-            <div className="setting-control">
-              <div className="setting-control-stack">
-                <dl className="setting-definition-list">
-                  <div>
-                    <dt>本机目录</dt>
-                    <dd>{status?.runtime.backupDir ?? "-"}</dd>
-                  </div>
-                  <div>
-                    <dt>最近备份</dt>
-                    <dd>{status?.health.latestBackupAt ?? "-"}</dd>
-                  </div>
-                  <div>
-                    <dt>最近定时备份</dt>
-                    <dd>{status?.health.latestIntervalBackupAt ?? "-"}</dd>
-                  </div>
-                  <div>
-                    <dt>自动备份</dt>
-                    <dd>
-                      {status?.health.autoBackupEnabled ? "开启" : "关闭"}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>保留策略</dt>
-                    <dd>
-                      7 天全留，30 天每日，12 个月每月；手动备份不自动清理
-                    </dd>
-                  </div>
-                </dl>
-                {isClientMode ? (
-                  <p className="muted-text">
-                    客户端模式不直接操作正式数据库，备份和恢复请在主机本机执行。
-                  </p>
-                ) : null}
-                <button
-                  className="primary-button"
-                  disabled={!canOperateLocalDatabase || isWorking}
-                  onClick={onBackup}
-                >
-                  创建手动备份
-                </button>
-                {lastBackup ? (
-                  <div className="settings-result">
-                    <strong>已创建备份</strong>
-                    <span>{lastBackup.backupFile}</span>
-                    <span>来源主机：{lastBackup.sourceHostName}</span>
-                    <span>来源系统：{lastBackup.sourceOs}</span>
-                    <span>SHA256：{lastBackup.databaseSha256}</span>
-                    <span>
-                      Schema：v{lastBackup.schemaVersion} · 大小：
-                      {formatFileSize(lastBackup.databaseSize)}
-                    </span>
-                    {lastBackup.secondBackupFile ? (
-                      <span>第二备份：{lastBackup.secondBackupFile}</span>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
+            <div className="settings-feature-actions">
+              <button
+                className="primary-button"
+                disabled={!canOperateSettings || isWorking}
+                onClick={onBackup}
+              >
+                创建手动备份
+              </button>
+              <button
+                className="ghost-button"
+                disabled={!canOperateSettings || isWorking}
+                type="button"
+                onClick={() =>
+                  void openEditorWindow("secondBackupDir", {
+                    width: 620,
+                    height: 340,
+                  })
+                }
+              >
+                第二备份目录
+              </button>
+              <button
+                className="ghost-button"
+                disabled={!canOperateSettings || isWorking}
+                type="button"
+                onClick={() =>
+                  void openEditorWindow("restoreBackup", {
+                    width: 720,
+                    height: 560,
+                  })
+                }
+              >
+                恢复备份
+              </button>
             </div>
           </div>
-          <div className="setting-row">
-            <div className="settings-meta">
-              <span className="settings-label">第二备份目录</span>
-              <p className="settings-hint">用于主机损坏后在另一台电脑恢复。</p>
+
+          <dl className="settings-metric-list">
+            <div>
+              <dt>本机目录</dt>
+              <dd>{status?.runtime.backupDir ?? "-"}</dd>
             </div>
-            <div className="setting-control setting-control-path">
-              <div className="setting-control-grid setting-control-grid-path-action">
-                <PathPickerField
-                  disabled={!canOperateLocalDatabase}
-                  value={secondBackupDir}
-                  placeholder="请选择外接硬盘或同步盘目录"
-                  buttonLabel="选择"
-                  onChoose={() =>
-                    selectDirectory(
-                      "选择第二备份目录",
-                      setSecondBackupDir,
-                      secondBackupDir,
-                    )
-                  }
-                />
-                <button
-                  className="primary-button"
-                  disabled={!canOperateLocalDatabase || isWorking}
-                  onClick={() => onSaveSecondBackupDir(secondBackupDir)}
-                >
-                  保存目录
-                </button>
-              </div>
+            <div>
+              <dt>最近备份</dt>
+              <dd>{status?.health.latestBackupAt ?? "-"}</dd>
             </div>
-          </div>
-          <div className="setting-row">
-            <div className="settings-meta">
-              <span className="settings-label">恢复备份</span>
-              <p className="settings-hint">
-                恢复前系统会自动创建 before_restore 保护备份。
-              </p>
+            <div>
+              <dt>最近定时备份</dt>
+              <dd>{status?.health.latestIntervalBackupAt ?? "-"}</dd>
             </div>
-            <div className="setting-control">
-              <div className="setting-control-stack">
-                <div className="restore-grid">
-                  <PathPickerField
-                    disabled={!canOperateLocalDatabase}
-                    value={restorePath}
-                    placeholder="请选择 aster-backup-YYYYMMDD-HHMMSS-短ID.zip"
-                    buttonLabel="选择"
-                    onChoose={selectRestoreBackupFile}
-                  />
-                  <button
-                    className="ghost-button"
-                    disabled={!canOperateLocalDatabase || isWorking}
-                    onClick={() => onPreviewRestore(restorePath)}
-                  >
-                    校验
-                  </button>
-                  <input
-                    disabled={!canOperateLocalDatabase}
-                    value={confirmation}
-                    onChange={(e) => setConfirmation(e.target.value)}
-                    placeholder="输入 RESTORE"
-                  />
-                  <button
-                    className="primary-button"
-                    disabled={
-                      !canOperateLocalDatabase ||
-                      isWorking ||
-                      !restorePathMatchesPreview ||
-                      !restorePreview?.validationToken
-                    }
-                    onClick={() =>
-                      onRestore(
-                        restorePath,
-                        confirmation,
-                        restorePreview?.validationToken ?? "",
-                      )
-                    }
-                  >
-                    恢复
-                  </button>
-                </div>
-                {restorePreview ? (
-                  <div
-                    className={
-                      restorePathMatchesPreview
-                        ? "settings-result"
-                        : "settings-result warning"
-                    }
-                  >
-                    <strong>{restorePreview.message}</strong>
-                    <span>已校验文件：{restorePreview.backupFile}</span>
-                    <span>创建时间：{restorePreview.metadata.createdAt}</span>
-                    <span>
-                      Schema：v{restorePreview.metadata.schemaVersion}
-                    </span>
-                    <span>
-                      来源主机：{restorePreview.metadata.sourceHostName ?? "-"}
-                    </span>
-                    <span>来源系统：{restorePreview.metadata.sourceOs}</span>
-                    <span>校验：{restorePreview.metadata.databaseSha256}</span>
-                    {!restorePathMatchesPreview ? (
-                      <span>当前输入路径已变化，请重新校验后再恢复。</span>
-                    ) : null}
-                  </div>
-                ) : null}
-                {restoreResult ? (
-                  <div className="settings-result success">
-                    <strong>恢复完成</strong>
-                    <span>恢复来源：{restoreResult.restoredFrom}</span>
-                    <span>
-                      恢复前保护备份：{restoreResult.protectedBackupFile}
-                    </span>
-                    <span>健康检查：{restoreResult.integrity}</span>
-                  </div>
-                ) : null}
-              </div>
+            <div>
+              <dt>自动备份</dt>
+              <dd>{status?.health.autoBackupEnabled ? "开启" : "关闭"}</dd>
             </div>
-          </div>
+          </dl>
+
+          {settingsIsClientMode ? (
+            <p className="settings-footnote">
+              客户端模式不直接操作正式数据库，备份和恢复请在主机本机执行。
+            </p>
+          ) : null}
+
+          {lastBackup ? (
+            <div className="settings-inline-note">
+              <strong>已创建备份</strong>
+              <span>{lastBackup.backupFile}</span>
+              <span>
+                来源：{lastBackup.sourceHostName} · {lastBackup.sourceOs} ·
+                Schema v{lastBackup.schemaVersion} ·{" "}
+                {formatFileSize(lastBackup.databaseSize)}
+              </span>
+              <span>SHA256：{lastBackup.databaseSha256}</span>
+              {lastBackup.secondBackupFile ? (
+                <span>第二备份：{lastBackup.secondBackupFile}</span>
+              ) : null}
+            </div>
+          ) : null}
         </article>
       </div>
     </section>
   );
+
 }
 
 function BackupRecordsPage({ backups }: { backups: BackupRecord[] }) {
@@ -8872,20 +9446,24 @@ function MasterTablePanel({
   actions,
   children,
   description,
+  hideHeading = false,
   title,
 }: {
   actions?: React.ReactNode;
   children: React.ReactNode;
   description: string;
+  hideHeading?: boolean;
   title: string;
 }) {
   return (
     <section className="table-panel">
-      <div className="table-toolbar">
-        <div>
-          <h2>{title}</h2>
-          <span className="table-note">{description}</span>
-        </div>
+      <div className={hideHeading ? "table-toolbar actions-only" : "table-toolbar"}>
+        {hideHeading ? null : (
+          <div>
+            <h2>{title}</h2>
+            <span className="table-note">{description}</span>
+          </div>
+        )}
         {actions}
       </div>
       {children}
