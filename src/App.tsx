@@ -5,6 +5,7 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open, type OpenDialogOptions } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { LiquidEtherBackground } from "./components/LiquidEtherBackground";
+import { createI18n, type I18n, type LocaleCode } from "./i18n";
 import "./App.css";
 import pantsFrame01 from "./assets/images/pants/pants_01.png";
 import pantsFrame02 from "./assets/images/pants/pants_02.png";
@@ -19,7 +20,6 @@ import pantsFrame09 from "./assets/images/pants/pants_09.png";
 type RuntimeMode = "standalone" | "host" | "client";
 type ThemeMode = "auto" | "light" | "dark";
 type LiquidGlassStyle = "transparent" | "tinted";
-type LocaleCode = "zh-CN" | "en-US";
 
 type AppearanceSettings = {
   themeMode: ThemeMode;
@@ -778,7 +778,7 @@ type EditorSavedPayload = {
 
 type NavItem = {
   key: NavKey;
-  label: string;
+  labelKey: string;
 };
 
 const navIconProps = {
@@ -988,33 +988,35 @@ function GitHubIcon() {
   );
 }
 
+const defaultI18n = createI18n("zh-CN");
+
 const navItems: NavItem[] = [
-  { key: "dashboard", label: "首页" },
-  { key: "items", label: "物品档案" },
-  { key: "inbound", label: "入库管理" },
-  { key: "outbound", label: "出库领用" },
-  { key: "stock", label: "库存台账" },
-  { key: "movements", label: "库存流水" },
-  { key: "stocktake", label: "盘点管理" },
-  { key: "adjustments", label: "库存调整" },
-  { key: "reports", label: "报表中心" },
-  { key: "import", label: "Excel 导入" },
-  { key: "departments", label: "部门管理" },
-  { key: "categories", label: "分类管理" },
-  { key: "units", label: "单位管理" },
-  { key: "suppliers", label: "供应商管理" },
-  { key: "budgets", label: "预算控制" },
-  { key: "approvals", label: "审批管理" },
-  { key: "backups", label: "备份记录" },
-  { key: "logs", label: "操作日志" },
-  { key: "settings", label: "系统设置" },
-  { key: "users", label: "用户权限" },
+  { key: "dashboard", labelKey: "nav.dashboard" },
+  { key: "items", labelKey: "nav.items" },
+  { key: "inbound", labelKey: "nav.inbound" },
+  { key: "outbound", labelKey: "nav.outbound" },
+  { key: "stock", labelKey: "nav.stock" },
+  { key: "movements", labelKey: "nav.movements" },
+  { key: "stocktake", labelKey: "nav.stocktake" },
+  { key: "adjustments", labelKey: "nav.adjustments" },
+  { key: "reports", labelKey: "nav.reports" },
+  { key: "import", labelKey: "nav.import" },
+  { key: "departments", labelKey: "nav.departments" },
+  { key: "categories", labelKey: "nav.categories" },
+  { key: "units", labelKey: "nav.units" },
+  { key: "suppliers", labelKey: "nav.suppliers" },
+  { key: "budgets", labelKey: "nav.budgets" },
+  { key: "approvals", labelKey: "nav.approvals" },
+  { key: "backups", labelKey: "nav.backups" },
+  { key: "logs", labelKey: "nav.logs" },
+  { key: "settings", labelKey: "nav.settings" },
+  { key: "users", labelKey: "nav.users" },
 ];
 
-const navGroups: { title: string; keys: NavKey[] }[] = [
-  { title: "概览", keys: ["dashboard"] },
+const navGroups: { titleKey: string; keys: NavKey[] }[] = [
+  { titleKey: "navGroup.overview", keys: ["dashboard"] },
   {
-    title: "库存业务",
+    titleKey: "navGroup.inventory",
     keys: [
       "items",
       "inbound",
@@ -1026,32 +1028,35 @@ const navGroups: { title: string; keys: NavKey[] }[] = [
     ],
   },
   {
-    title: "资料",
+    titleKey: "navGroup.masterData",
     keys: ["departments", "categories", "units", "suppliers"],
   },
   {
-    title: "管理",
+    titleKey: "navGroup.management",
     keys: ["reports", "import", "budgets", "approvals", "users"],
   },
   {
-    title: "日志",
+    titleKey: "navGroup.logs",
     keys: ["backups", "logs"],
   },
 ];
 
 const workstreams = [
   {
-    title: "库存闭环",
-    body: "物品、入库、出库、流水、余额和月报统一从 SQLite 生成。",
-  },
-  { title: "局域网主机", body: "单机、主机、客户端三种模式已经进入底层配置。" },
-  {
-    title: "冗灾恢复",
-    body: "本机备份、第二备份目录、健康检查和跨平台恢复按文档推进。",
+    titleKey: "workstream.inventory.title",
+    bodyKey: "workstream.inventory.body",
   },
   {
-    title: "双端交付",
-    body: "Windows 与 macOS 共用 React 前端和 Rust 业务核心。",
+    titleKey: "workstream.host.title",
+    bodyKey: "workstream.host.body",
+  },
+  {
+    titleKey: "workstream.recovery.title",
+    bodyKey: "workstream.recovery.body",
+  },
+  {
+    titleKey: "workstream.delivery.title",
+    bodyKey: "workstream.delivery.body",
   },
 ];
 
@@ -1099,15 +1104,15 @@ const accentColors = [
   "#33c96f",
 ] as const;
 
-const colorLabels: Record<string, string> = {
-  "#8f96a3": "石墨",
-  "#2f6dff": "蓝色",
-  "#a65dd9": "紫色",
-  "#f062a8": "粉色",
-  "#ff6a57": "珊瑚",
-  "#ffb020": "琥珀",
-  "#f5dd00": "柠檬",
-  "#33c96f": "绿色",
+const accentColorLabelKeys: Record<string, string> = {
+  "#8f96a3": "color.graphite",
+  "#2f6dff": "color.blue",
+  "#a65dd9": "color.purple",
+  "#f062a8": "color.pink",
+  "#ff6a57": "color.coral",
+  "#ffb020": "color.amber",
+  "#f5dd00": "color.lemon",
+  "#33c96f": "color.green",
 };
 
 const defaultAppearanceSettings: AppearanceSettings = {
@@ -1142,10 +1147,11 @@ function currentMonthString() {
 }
 
 function formatMoney(value: number) {
-  return new Intl.NumberFormat("zh-CN", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value);
+  return defaultI18n.formatMoney(value);
+}
+
+function accentColorLabel(color: string, i18n = defaultI18n) {
+  return i18n.t(accentColorLabelKeys[color] ?? color);
 }
 
 const DEFAULT_TABLE_PAGE_SIZE = 50;
@@ -1238,45 +1244,47 @@ function effectiveLineAmount(line: {
     : line.quantity * line.unitPrice;
 }
 
-function modeLabel(mode: RuntimeMode) {
-  if (mode === "host") return "主机模式";
-  if (mode === "client") return "客户端模式";
-  return "单机模式";
+function modeLabel(mode: RuntimeMode, i18n = defaultI18n) {
+  return i18n.modeLabel(mode);
 }
 
 function connectionStatusLabel(
   status: AppStatus | null,
   hostTestResult: HostConnectionTestResult | null,
+  i18n = defaultI18n,
 ) {
-  if (!status) return "正在读取连接状态";
-  if (status.runtime.mode === "host") return "这台是主电脑";
+  if (!status) return i18n.t("connection.loading");
+  if (status.runtime.mode === "host") return i18n.t("connection.host");
   if (status.runtime.mode === "client") {
-    if (!status.runtime.clientToken) return "尚未连接主电脑";
-    return hostTestResult?.ok === false ? "连接异常" : "已连接到主电脑";
+    if (!status.runtime.clientToken) return i18n.t("connection.unpaired");
+    return hostTestResult?.ok === false
+      ? i18n.t("connection.abnormal")
+      : i18n.t("connection.connected");
   }
-  return "单机使用";
+  return i18n.t("connection.standalone");
 }
 
 function connectionStatusHint(
   status: AppStatus | null,
   hostStatus: HostServiceStatus | null,
   hostTestResult: HostConnectionTestResult | null,
+  i18n = defaultI18n,
 ) {
-  if (!status) return "正在读取本机多电脑连接状态。";
+  if (!status) return i18n.t("connection.hint.loading");
   if (status.runtime.mode === "host") {
     return hostStatus?.running
-      ? "正式数据保存在这台电脑，其他电脑可通过配对码连接。"
-      : "这台电脑已设为主电脑，但共享服务尚未开启。";
+      ? i18n.t("connection.hint.hostRunning")
+      : i18n.t("connection.hint.hostStopped");
   }
   if (status.runtime.mode === "client") {
     if (!status.runtime.clientToken) {
-      return "这台电脑会连接主电脑使用同一套库存数据，请打开向导完成配对。";
+      return i18n.t("connection.hint.clientUnpaired");
     }
     return hostTestResult?.ok === false
-      ? "已保存主电脑连接，但当前无法访问主电脑。"
-      : "这台电脑正在使用主电脑上的库存数据。";
+      ? i18n.t("connection.hint.clientAbnormal")
+      : i18n.t("connection.hint.clientConnected");
   }
-  return "当前只在这台电脑单独使用。需要多电脑共用时打开连接向导。";
+  return i18n.t("connection.hint.standalone");
 }
 
 function optionName(options: OptionRecord[], id?: string | null) {
@@ -1289,121 +1297,36 @@ function formatFileSize(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function backupTypeLabel(type: string) {
-  const labels: Record<string, string> = {
-    auto_startup: "启动备份",
-    auto_interval: "定时备份",
-    manual: "手动备份",
-    before_import: "导入前备份",
-    before_restore: "恢复前备份",
-    before_migration: "迁移前备份",
-  };
-  return labels[type] ?? type;
+function backupTypeLabel(type: string, i18n = defaultI18n) {
+  return i18n.backupTypeLabel(type);
 }
 
-function auditActionLabel(action: string) {
-  const labels: Record<string, string> = {
-    change_password: "修改密码",
-    confirm_stock_document_draft: "确认草稿",
-    confirm_stocktake: "确认盘点",
-    create_approval_request: "创建审批",
-    create_backup: "创建备份",
-    create_stocktake: "创建盘点",
-    decide_approval_request: "审批处理",
-    import_excel: "导入 Excel",
-    login: "用户登录",
-    restore_backup: "恢复备份",
-    save_budget_rule: "保存预算",
-    save_category: "保存分类",
-    save_department: "保存部门",
-    save_item: "保存物品",
-    save_stock_document_draft: "保存草稿",
-    save_supplier: "保存供应商",
-    save_system_settings: "保存系统设置",
-    save_unit: "保存单位",
-    save_user: "保存用户",
-    set_budget_rule_enabled: "预算启停",
-    set_category_enabled: "分类启停",
-    set_department_enabled: "部门启停",
-    set_item_enabled: "物品启停",
-    set_runtime_mode: "切换运行模式",
-    set_supplier_enabled: "供应商启停",
-    set_unit_enabled: "单位启停",
-    set_user_enabled: "用户启停",
-    submit_adjustment: "库存调整",
-    submit_stock_document: "提交单据",
-    update_stocktake_counts: "录入盘点",
-    void_stock_document: "作废单据",
-  };
-  return labels[action] ?? action;
+function auditActionLabel(action: string, i18n = defaultI18n) {
+  return i18n.auditActionLabel(action);
 }
 
-function auditEntityLabel(type: string) {
-  const labels: Record<string, string> = {
-    approval: "审批",
-    backup: "备份",
-    budget_rule: "预算",
-    category: "分类",
-    department: "部门",
-    import: "导入",
-    item: "物品",
-    setting: "设置",
-    stock_document: "库存单据",
-    stocktake: "盘点",
-    supplier: "供应商",
-    unit: "单位",
-    user: "用户",
-  };
-  return labels[type] ?? type;
+function auditEntityLabel(type: string, i18n = defaultI18n) {
+  return i18n.auditEntityLabel(type);
 }
 
-function approvalTypeLabel(type: string) {
-  const labels: Record<string, string> = {
-    budget_override: "超预算领用",
-  };
-  return labels[type] ?? type;
+function approvalTypeLabel(type: string, i18n = defaultI18n) {
+  return i18n.approvalTypeLabel(type);
 }
 
-function approvalStatusLabel(status: string) {
-  const labels: Record<string, string> = {
-    pending: "待审批",
-    approved: "已通过",
-    rejected: "已驳回",
-    cancelled: "已取消",
-  };
-  return labels[status] ?? status;
+function approvalStatusLabel(status: string, i18n = defaultI18n) {
+  return i18n.approvalStatusLabel(status);
 }
 
-function stocktakeStatusLabel(status: string) {
-  const labels: Record<string, string> = {
-    draft: "草稿",
-    counting: "盘点中",
-    confirmed: "已确认",
-    voided: "已作废",
-  };
-  return labels[status] ?? status;
+function stocktakeStatusLabel(status: string, i18n = defaultI18n) {
+  return i18n.stocktakeStatusLabel(status);
 }
 
-function stocktakeScopeLabel(scope: string) {
-  const labels: Record<string, string> = {
-    all: "全部物品",
-    category: "按分类",
-    custom: "自定义物品",
-  };
-  return labels[scope] ?? scope;
+function stocktakeScopeLabel(scope: string, i18n = defaultI18n) {
+  return i18n.stocktakeScopeLabel(scope);
 }
 
-function movementTypeLabel(type: string) {
-  const labels: Record<string, string> = {
-    opening: "期初",
-    inbound: "入库",
-    outbound: "出库/领用",
-    stocktake_gain: "盘盈",
-    stocktake_loss: "盘亏",
-    adjustment: "库存调整",
-    reversal: "作废冲正",
-  };
-  return labels[type] ?? type;
+function movementTypeLabel(type: string, i18n = defaultI18n) {
+  return i18n.movementTypeLabel(type);
 }
 
 function hasPermission(user: CurrentUser | null, permission: string) {
@@ -1623,6 +1546,10 @@ function MainApp() {
   const [activeNav, setActiveNav] = useState<NavKey>("dashboard");
   const [appearanceSettings, setAppearanceSettings] =
     useState<AppearanceSettings>(() => loadAppearanceSettings());
+  const i18n = useMemo(
+    () => createI18n(appearanceSettings.locale),
+    [appearanceSettings.locale],
+  );
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [userAccounts, setUserAccounts] = useState<UserAccount[]>([]);
@@ -1703,6 +1630,7 @@ function MainApp() {
 
   useEffect(() => {
     applyAppearanceSettings(appearanceSettings);
+    document.documentElement.lang = appearanceSettings.locale;
     window.localStorage.setItem(
       APPEARANCE_STORAGE_KEY,
       JSON.stringify(appearanceSettings),
@@ -2406,32 +2334,48 @@ function MainApp() {
   const metrics = status?.metrics;
   const metricCards = useMemo(
     () => [
-      { label: "物品档案", value: metrics?.itemCount ?? 0, suffix: "种" },
-      { label: "部门", value: metrics?.departmentCount ?? 0, suffix: "个" },
-      { label: "供应商", value: metrics?.supplierCount ?? 0, suffix: "家" },
       {
-        label: "当前库存金额",
-        value: formatMoney(metrics?.currentStockAmount ?? 0),
-        suffix: "元",
+        label: i18n.t("dashboard.metric.items"),
+        value: metrics?.itemCount ?? 0,
+        suffix: i18n.t("dashboard.unit.itemTypes"),
       },
       {
-        label: "本月入库金额",
-        value: formatMoney(metrics?.thisMonthInboundAmount ?? 0),
-        suffix: "元",
+        label: i18n.t("dashboard.metric.departments"),
+        value: metrics?.departmentCount ?? 0,
+        suffix: i18n.t("dashboard.unit.departments"),
       },
       {
-        label: "本月领用金额",
-        value: formatMoney(metrics?.thisMonthOutboundAmount ?? 0),
-        suffix: "元",
+        label: i18n.t("dashboard.metric.suppliers"),
+        value: metrics?.supplierCount ?? 0,
+        suffix: i18n.t("dashboard.unit.suppliers"),
       },
-      { label: "低库存", value: metrics?.lowStockCount ?? 0, suffix: "项" },
       {
-        label: "负库存异常",
+        label: i18n.t("dashboard.metric.currentStockAmount"),
+        value: i18n.formatMoney(metrics?.currentStockAmount ?? 0),
+        suffix: i18n.t("dashboard.unit.currency"),
+      },
+      {
+        label: i18n.t("dashboard.metric.thisMonthInboundAmount"),
+        value: i18n.formatMoney(metrics?.thisMonthInboundAmount ?? 0),
+        suffix: i18n.t("dashboard.unit.currency"),
+      },
+      {
+        label: i18n.t("dashboard.metric.thisMonthOutboundAmount"),
+        value: i18n.formatMoney(metrics?.thisMonthOutboundAmount ?? 0),
+        suffix: i18n.t("dashboard.unit.currency"),
+      },
+      {
+        label: i18n.t("dashboard.metric.lowStock"),
+        value: metrics?.lowStockCount ?? 0,
+        suffix: i18n.t("dashboard.unit.items"),
+      },
+      {
+        label: i18n.t("dashboard.metric.negativeStock"),
         value: metrics?.negativeStockCount ?? 0,
-        suffix: "项",
+        suffix: i18n.t("dashboard.unit.items"),
       },
     ],
-    [metrics],
+    [i18n, metrics],
   );
 
   const enabledCategories = categories.filter((item) => item.enabled);
@@ -2457,7 +2401,11 @@ function MainApp() {
   );
   const clientPauseMessage =
     isClientMode && currentUser && !isBusinessConnectionReady
-      ? `客户端业务操作已暂停：${isClientPaired ? "主机连接未恢复" : "尚未完成主机配对"}。请在系统设置中测试连接或重新配对。`
+      ? i18n.t("app.clientPaused", {
+          reason: isClientPaired
+            ? i18n.t("app.clientPaused.disconnected")
+            : i18n.t("app.clientPaused.unpaired"),
+        })
       : null;
   const footerStatus = error
     ? { kind: "error", text: error }
@@ -2467,7 +2415,7 @@ function MainApp() {
         ? { kind: "notice", text: notice }
         : {
             kind: "idle",
-            text: status?.health.message ?? "系统就绪",
+            text: status?.health.message ?? i18n.t("app.ready"),
           };
 
   useEffect(() => {
@@ -2480,6 +2428,7 @@ function MainApp() {
     return (
       <LoginScreen
         error={error}
+        i18n={i18n}
         isLoginPending={isLoginPending}
         notice={notice}
         onLogin={loginUser}
@@ -2496,7 +2445,7 @@ function MainApp() {
           <PantsLogo />
           <div>
             <strong>Aster</strong>
-            <span>酒店物资运营管理</span>
+            <span>{i18n.t("app.productTagline")}</span>
           </div>
         </div>
         <nav className="nav-list">
@@ -2508,8 +2457,10 @@ function MainApp() {
             if (groupItems.length === 0) return null;
 
             return (
-              <div className="nav-section" key={group.title}>
-                <span className="nav-section-title">{group.title}</span>
+              <div className="nav-section" key={group.titleKey}>
+                <span className="nav-section-title">
+                  {i18n.t(group.titleKey)}
+                </span>
                 {groupItems.map((item) => (
                   <button
                     className={
@@ -2519,7 +2470,9 @@ function MainApp() {
                     onClick={() => setActiveNav(item.key)}
                   >
                     <NavIcon name={item.key} />
-                    <span className="nav-item-label">{item.label}</span>
+                    <span className="nav-item-label">
+                      {i18n.t(item.labelKey)}
+                    </span>
                   </button>
                 ))}
               </div>
@@ -2537,7 +2490,9 @@ function MainApp() {
               onClick={() => setActiveNav(settingsNavItem.key)}
             >
               <NavIcon name={settingsNavItem.key} />
-              <span className="nav-item-label">{settingsNavItem.label}</span>
+              <span className="nav-item-label">
+                {i18n.t(settingsNavItem.labelKey)}
+              </span>
             </button>
           </div>
         ) : null}
@@ -2547,13 +2502,15 @@ function MainApp() {
         <header className="topbar">
           <div>
             <h1>
-              {visibleNavItems.find((item) => item.key === activeNav)?.label ??
-                "首页"}
+              {i18n.t(
+                visibleNavItems.find((item) => item.key === activeNav)
+                  ?.labelKey ?? "app.home",
+              )}
             </h1>
           </div>
           <div className="topbar-actions">
             <button
-              aria-label="打开 GitHub"
+              aria-label={i18n.t("app.githubAria")}
               className="ghost-button icon-button"
               onClick={() => void openUrl("https://github.com/westng")}
               title="GitHub"
@@ -2561,10 +2518,10 @@ function MainApp() {
               <GitHubIcon />
             </button>
             <button className="ghost-button" onClick={() => refreshAll()}>
-              刷新状态
+              {i18n.t("app.refreshStatus")}
             </button>
             <button className="ghost-button" onClick={logoutUser}>
-              退出
+              {i18n.t("app.logout")}
             </button>
           </div>
         </header>
@@ -2573,6 +2530,7 @@ function MainApp() {
           {activeNav === "dashboard" ? (
             <Dashboard
               changeMode={changeMode}
+              i18n={i18n}
               isSavingMode={isSavingMode}
               metricCards={metricCards}
               onNavigate={setActiveNav}
@@ -2870,6 +2828,7 @@ function MainApp() {
             clientConnections={clientConnections}
             hostStatus={hostStatus}
             hostTestResult={hostTestResult}
+            i18n={i18n}
             status={status}
             systemSettings={systemSettings}
             onAppearanceChange={setAppearanceSettings}
@@ -2877,10 +2836,12 @@ function MainApp() {
         ) : null}
 
         {activeNav === "backups" ? (
-          <BackupRecordsPage backups={backupRecords} />
+          <BackupRecordsPage backups={backupRecords} i18n={i18n} />
         ) : null}
 
-        {activeNav === "logs" ? <LogsPage auditLogs={auditLogs} /> : null}
+        {activeNav === "logs" ? (
+          <LogsPage auditLogs={auditLogs} i18n={i18n} />
+        ) : null}
 
         {activeNav === "users" ? (
           <UsersPage
@@ -2896,8 +2857,8 @@ function MainApp() {
           <span className="app-statusbar-message">{footerStatus.text}</span>
           <span className="app-statusbar-meta">
             {status
-              ? `${modeLabel(status.runtime.mode)} · Schema v${status.schemaVersion}`
-              : "初始化中"}
+              ? `${modeLabel(status.runtime.mode, i18n)} · Schema v${status.schemaVersion}`
+              : i18n.t("app.initializing")}
           </span>
         </footer>
       </main>
@@ -2907,31 +2868,37 @@ function MainApp() {
 
 function Dashboard({
   changeMode,
+  i18n,
   isSavingMode,
   metricCards,
   onNavigate,
   status,
 }: {
   changeMode: (mode: RuntimeMode) => void;
+  i18n: I18n;
   isSavingMode: boolean;
   metricCards: { label: string; value: string | number; suffix: string }[];
   onNavigate: (key: NavKey) => void;
   status: AppStatus | null;
 }) {
   const quickActions: { label: string; nav: NavKey }[] = [
-    { label: "新建入库单", nav: "inbound" },
-    { label: "新建出库/领用单", nav: "outbound" },
-    { label: "导入 Excel", nav: "import" },
-    { label: "导出月报", nav: "reports" },
-    { label: "创建盘点单", nav: "stocktake" },
+    { label: i18n.t("dashboard.quick.inbound"), nav: "inbound" },
+    { label: i18n.t("dashboard.quick.outbound"), nav: "outbound" },
+    { label: i18n.t("dashboard.quick.import"), nav: "import" },
+    { label: i18n.t("dashboard.quick.reports"), nav: "reports" },
+    { label: i18n.t("dashboard.quick.stocktake"), nav: "stocktake" },
   ];
 
   return (
     <>
       <section className="status-grid">
         <div className="status-panel">
-          <span className="panel-label">运行模式</span>
-          <strong>{status ? modeLabel(status.runtime.mode) : "加载中"}</strong>
+          <span className="panel-label">{i18n.t("dashboard.runtimeMode")}</span>
+          <strong>
+            {status
+              ? modeLabel(status.runtime.mode, i18n)
+              : i18n.t("dashboard.loading")}
+          </strong>
           <div className="segmented">
             {(["standalone", "host", "client"] as RuntimeMode[]).map((mode) => (
               <button
@@ -2940,28 +2907,38 @@ function Dashboard({
                 key={mode}
                 onClick={() => changeMode(mode)}
               >
-                {modeLabel(mode)}
+                {modeLabel(mode, i18n)}
               </button>
             ))}
           </div>
         </div>
 
         <div className="status-panel">
-          <span className="panel-label">数据库</span>
-          <strong>{status?.health.databaseOk ? "健康" : "待检查"}</strong>
-          <p>{status?.health.message ?? "正在初始化 SQLite 和迁移。"}</p>
+          <span className="panel-label">{i18n.t("dashboard.database")}</span>
+          <strong>
+            {status?.health.databaseOk
+              ? i18n.t("dashboard.databaseHealthy")
+              : i18n.t("dashboard.databasePending")}
+          </strong>
+          <p>
+            {status?.health.message ?? i18n.t("dashboard.databaseInitializing")}
+          </p>
           {status && !status.health.stockBalanceConsistencyOk ? (
             <p className="warning-text">
-              库存余额与流水不一致：{status.health.stockBalanceIssueCount} 项
+              {i18n.t("dashboard.stockBalanceMismatch", {
+                count: status.health.stockBalanceIssueCount,
+              })}
             </p>
           ) : null}
           {!status?.health.secondBackupOk ? (
-            <p className="warning-text">第二备份目录未就绪</p>
+            <p className="warning-text">
+              {i18n.t("dashboard.secondBackupNotReady")}
+            </p>
           ) : null}
         </div>
 
         <div className="status-panel">
-          <span className="panel-label">应用版本</span>
+          <span className="panel-label">{i18n.t("dashboard.appVersion")}</span>
           <strong>{status?.appVersion ?? "0.1.0"}</strong>
           <p>Schema v{status?.schemaVersion ?? 0}</p>
         </div>
@@ -2980,8 +2957,8 @@ function Dashboard({
       <section className="workspace-grid">
         <div className="module-panel">
           <div className="section-heading">
-            <h2>快捷入口</h2>
-            <span>进入常用业务操作</span>
+            <h2>{i18n.t("dashboard.quickActions")}</h2>
+            <span>{i18n.t("dashboard.quickActionsHint")}</span>
           </div>
           <div className="quick-action-grid">
             {quickActions.map((item) => (
@@ -2994,24 +2971,24 @@ function Dashboard({
 
         <div className="module-panel recent-panel">
           <div className="section-heading">
-            <h2>最近操作流水</h2>
-            <span>来自库存流水表</span>
+            <h2>{i18n.t("dashboard.recentOperations")}</h2>
+            <span>{i18n.t("dashboard.recentOperationsHint")}</span>
           </div>
           <table className="compact-table">
             <thead>
               <tr>
-                <th>时间</th>
-                <th>类型</th>
-                <th>物品</th>
-                <th>数量</th>
-                <th>部门/供应商</th>
+                <th>{i18n.t("dashboard.table.time")}</th>
+                <th>{i18n.t("dashboard.table.type")}</th>
+                <th>{i18n.t("dashboard.table.item")}</th>
+                <th>{i18n.t("dashboard.table.quantity")}</th>
+                <th>{i18n.t("dashboard.table.departmentSupplier")}</th>
               </tr>
             </thead>
             <tbody>
               {(status?.recentOperations ?? []).map((row) => (
                 <tr key={row.id}>
                   <td>{row.occurredAt}</td>
-                  <td>{movementTypeLabel(row.businessType)}</td>
+                  <td>{movementTypeLabel(row.businessType, i18n)}</td>
                   <td>{row.itemName}</td>
                   <td>{row.quantity}</td>
                   <td>{row.departmentName ?? row.supplierName ?? "-"}</td>
@@ -3026,14 +3003,14 @@ function Dashboard({
 
         <div className="module-panel">
           <div className="section-heading">
-            <h2>全量执行主线</h2>
-            <span>功能开发项已进入全量验收口径</span>
+            <h2>{i18n.t("dashboard.mainline")}</h2>
+            <span>{i18n.t("dashboard.mainlineHint")}</span>
           </div>
           <div className="workstream-list">
             {workstreams.map((item) => (
-              <div className="workstream" key={item.title}>
-                <strong>{item.title}</strong>
-                <p>{item.body}</p>
+              <div className="workstream" key={item.titleKey}>
+                <strong>{i18n.t(item.titleKey)}</strong>
+                <p>{i18n.t(item.bodyKey)}</p>
               </div>
             ))}
           </div>
@@ -3041,17 +3018,17 @@ function Dashboard({
 
         <div className="module-panel">
           <div className="section-heading">
-            <h2>本机数据位置</h2>
-            <span>通过平台目录 API 生成，支持 Windows/macOS 差异</span>
+            <h2>{i18n.t("dashboard.localData")}</h2>
+            <span>{i18n.t("dashboard.localDataHint")}</span>
           </div>
           <dl className="path-list">
-            <dt>数据目录</dt>
+            <dt>{i18n.t("dashboard.dataDir")}</dt>
             <dd>{status?.runtime.dataDir ?? "-"}</dd>
             <dt>SQLite</dt>
             <dd>{status?.runtime.databasePath ?? "-"}</dd>
-            <dt>备份目录</dt>
+            <dt>{i18n.t("dashboard.backupDir")}</dt>
             <dd>{status?.runtime.backupDir ?? "-"}</dd>
-            <dt>导入报告</dt>
+            <dt>{i18n.t("dashboard.importReportDir")}</dt>
             <dd>{status?.runtime.importReportDir ?? "-"}</dd>
           </dl>
         </div>
@@ -3062,6 +3039,7 @@ function Dashboard({
 
 function LoginScreen({
   error,
+  i18n = defaultI18n,
   isLoginPending,
   notice,
   onLogin,
@@ -3069,6 +3047,7 @@ function LoginScreen({
   status,
 }: {
   error: string | null;
+  i18n?: I18n;
   isLoginPending: boolean;
   notice: string | null;
   onLogin: (username: string, password: string) => Promise<void>;
@@ -3092,24 +3071,32 @@ function LoginScreen({
             <PantsLogo />
             <div>
               <strong>Aster</strong>
-              <span>酒店物资运营管理客户端</span>
+              <span>{i18n.t("login.productTagline")}</span>
             </div>
           </div>
           <div className="login-copy">
-            <h1>登录工作台</h1>
-            <p>登录后进入库存、领用、盘点、报表和本地备份工作区。</p>
+            <h1>{i18n.t("login.title")}</h1>
+            <p>{i18n.t("login.description")}</p>
           </div>
           <dl className="login-status-list">
             <div>
-              <dt>运行模式</dt>
-              <dd>{status ? modeLabel(status.runtime.mode) : "正在读取"}</dd>
+              <dt>{i18n.t("login.runtimeMode")}</dt>
+              <dd>
+                {status
+                  ? modeLabel(status.runtime.mode, i18n)
+                  : i18n.t("login.reading")}
+              </dd>
             </div>
             <div>
-              <dt>数据库</dt>
-              <dd>{status?.health.databaseOk ? "健康" : "待检查"}</dd>
+              <dt>{i18n.t("login.database")}</dt>
+              <dd>
+                {status?.health.databaseOk
+                  ? i18n.t("login.databaseHealthy")
+                  : i18n.t("login.databasePending")}
+              </dd>
             </div>
             <div>
-              <dt>版本</dt>
+              <dt>{i18n.t("login.version")}</dt>
               <dd>{status?.appVersion ?? "0.1.0"}</dd>
             </div>
           </dl>
@@ -3119,11 +3106,11 @@ function LoginScreen({
       <section className="login-card">
         <div className="login-card-header">
           <div>
-            <h2>账户登录</h2>
-            <p>默认管理员：admin / admin123</p>
+            <h2>{i18n.t("login.accountLogin")}</h2>
+            <p>{i18n.t("login.defaultAdmin")}</p>
           </div>
           <button className="ghost-button" onClick={onRefresh}>
-            刷新状态
+            {i18n.t("login.refreshStatus")}
           </button>
         </div>
 
@@ -3135,7 +3122,7 @@ function LoginScreen({
         ) : null}
 
         <form className="login-form" onSubmit={submitLogin}>
-          <Field label="用户名">
+          <Field label={i18n.t("login.username")}>
             <input
               autoComplete="username"
               autoFocus
@@ -3144,7 +3131,7 @@ function LoginScreen({
               onChange={(event) => setUsername(event.target.value)}
             />
           </Field>
-          <Field label="密码">
+          <Field label={i18n.t("login.password")}>
             <input
               autoComplete="current-password"
               disabled={isLoginPending}
@@ -3158,7 +3145,7 @@ function LoginScreen({
             disabled={isLoginPending}
             type="submit"
           >
-            {isLoginPending ? "登录中..." : "登录"}
+            {isLoginPending ? i18n.t("login.loggingIn") : i18n.t("login.login")}
           </button>
         </form>
       </section>
@@ -8802,6 +8789,7 @@ function SettingsPage({
   currentUser,
   hostStatus,
   hostTestResult,
+  i18n,
   isWorking,
   lastBackup,
   onBackup,
@@ -8819,6 +8807,7 @@ function SettingsPage({
   currentUser: CurrentUser;
   hostStatus: HostServiceStatus | null;
   hostTestResult: HostConnectionTestResult | null;
+  i18n: I18n;
   isWorking: boolean;
   lastBackup: BackupSummary | null;
   onBackup: () => Promise<void>;
@@ -8838,25 +8827,31 @@ function SettingsPage({
       : "preview-glass-dark";
   const settingsBackupMetrics = [
     {
-      label: "数据库状态",
-      value: status?.health.databaseOk ? "健康" : "异常",
+      label: i18n.t("settings.databaseStatus"),
+      value: status?.health.databaseOk
+        ? i18n.t("settings.statusHealthy")
+        : i18n.t("settings.statusAbnormal"),
       suffix: "",
     },
     {
-      label: "最近备份",
+      label: i18n.t("settings.latestBackup"),
       value: status?.health.latestBackupAt ?? "-",
       suffix: "",
     },
     {
-      label: "第二备份",
-      value: status?.health.secondBackupOk ? "可用" : "未就绪",
+      label: i18n.t("settings.secondBackup"),
+      value: status?.health.secondBackupOk
+        ? i18n.t("settings.available")
+        : i18n.t("settings.notReady"),
       suffix: "",
     },
     {
-      label: "定时备份",
+      label: i18n.t("settings.intervalBackup"),
       value: status?.health.intervalBackupEnabled
-        ? `${status.health.intervalBackupHours} 小时`
-        : "关闭",
+        ? i18n.t("settings.hours", {
+            hours: status.health.intervalBackupHours,
+          })
+        : i18n.t("settings.closed"),
       suffix: "",
     },
   ];
@@ -8864,14 +8859,18 @@ function SettingsPage({
   return (
     <section className="settings-page">
       <div className="settings-group">
-        <h3 className="settings-group-title">外观</h3>
+        <h3 className="settings-group-title">{i18n.t("settings.appearance")}</h3>
         <article className="surface settings-block appearance-settings-block">
           <div className="setting-row">
             <div className="settings-meta">
-              <span className="settings-label">主题模式</span>
+              <span className="settings-label">{i18n.t("settings.themeMode")}</span>
               <p className="settings-hint">
-                当前生效：
-                {settingsEffectiveTheme === "dark" ? "深色" : "浅色"}
+                {i18n.t("settings.effectiveTheme", {
+                  theme:
+                    settingsEffectiveTheme === "dark"
+                      ? i18n.t("settings.dark")
+                      : i18n.t("settings.light"),
+                })}
               </p>
             </div>
             <div className="setting-control">
@@ -8893,10 +8892,10 @@ function SettingsPage({
                     />
                     <span className="preview-label">
                       {mode === "auto"
-                        ? "跟随系统"
+                        ? i18n.t("settings.followSystem")
                         : mode === "light"
-                          ? "浅色"
-                          : "深色"}
+                          ? i18n.t("settings.light")
+                          : i18n.t("settings.dark")}
                     </span>
                   </button>
                 ))}
@@ -8907,7 +8906,9 @@ function SettingsPage({
           <div className="setting-row">
             <div className="settings-meta">
               <span className="settings-label">Liquid Glass</span>
-              <p className="settings-hint">选取喜欢的 Liquid Glass 外观</p>
+              <p className="settings-hint">
+                {i18n.t("settings.liquidGlassHint")}
+              </p>
             </div>
             <div className="setting-control">
               <div className="preview-grid preview-grid-2">
@@ -8928,7 +8929,9 @@ function SettingsPage({
                         className={`preview-art preview-glass preview-glass-${style} ${settingsGlassPreviewThemeClass}`}
                       />
                       <span className="preview-label">
-                        {style === "transparent" ? "透明" : "色调"}
+                        {style === "transparent"
+                          ? i18n.t("settings.transparent")
+                          : i18n.t("settings.tinted")}
                       </span>
                     </button>
                   ),
@@ -8939,7 +8942,9 @@ function SettingsPage({
 
           <div className="setting-row">
             <div className="settings-meta">
-              <span className="settings-label">界面语言</span>
+              <span className="settings-label">
+                {i18n.t("settings.interfaceLanguage")}
+              </span>
             </div>
             <div className="setting-control setting-control-inline">
               <select
@@ -8960,11 +8965,11 @@ function SettingsPage({
       </div>
 
       <div className="settings-group settings-group-accent">
-        <h3 className="settings-group-title">主题</h3>
+        <h3 className="settings-group-title">{i18n.t("settings.theme")}</h3>
         <article className="surface settings-block appearance-settings-block">
           <div className="setting-row setting-row-color">
             <div className="settings-meta">
-              <span className="settings-label">颜色</span>
+              <span className="settings-label">{i18n.t("settings.color")}</span>
             </div>
             <div className="setting-control">
               <div className="color-row">
@@ -8974,7 +8979,7 @@ function SettingsPage({
                       className={`color-dot ${appearanceSettings.accentColor.toLowerCase() === color ? "active" : ""}`}
                       style={{ background: color }}
                       type="button"
-                      title={colorLabels[color]}
+                      title={accentColorLabel(color, i18n)}
                       onClick={() =>
                         onAppearanceChange((current) => ({
                           ...current,
@@ -8984,7 +8989,7 @@ function SettingsPage({
                     />
                     {appearanceSettings.accentColor.toLowerCase() === color ? (
                       <span className="color-option-label">
-                        {colorLabels[color]}
+                        {accentColorLabel(color, i18n)}
                       </span>
                     ) : null}
                   </div>
@@ -8996,7 +9001,9 @@ function SettingsPage({
       </div>
 
       <div className="settings-group">
-        <h3 className="settings-group-title">运行状态</h3>
+        <h3 className="settings-group-title">
+          {i18n.t("settings.runtimeStatus")}
+        </h3>
         <article className="surface settings-block">
           {settingsBackupMetrics.map((card) => (
             <div className="setting-row" key={card.label}>
@@ -9015,14 +9022,18 @@ function SettingsPage({
       </div>
 
       <div className="settings-group">
-        <h3 className="settings-group-title">账号安全</h3>
+        <h3 className="settings-group-title">
+          {i18n.t("settings.accountSecurity")}
+        </h3>
         <article className="surface settings-block">
           <div className="setting-row">
             <div className="settings-meta">
-              <span className="settings-label">当前账号</span>
+              <span className="settings-label">
+                {i18n.t("settings.currentAccount")}
+              </span>
               <p className="settings-hint">
                 {currentUser.roles.map((role) => role.name).join("、") ||
-                  "无角色"}
+                  i18n.t("settings.noRole")}
               </p>
             </div>
             <div className="setting-control">
@@ -9033,8 +9044,12 @@ function SettingsPage({
           </div>
           <div className="setting-row">
             <div className="settings-meta">
-              <span className="settings-label">修改密码</span>
-              <p className="settings-hint">在独立系统窗口中输入并保存。</p>
+              <span className="settings-label">
+                {i18n.t("settings.changePassword")}
+              </span>
+              <p className="settings-hint">
+                {i18n.t("settings.changePasswordHint")}
+              </p>
             </div>
             <div className="setting-control">
               <button
@@ -9047,17 +9062,19 @@ function SettingsPage({
                   })
                 }
               >
-                打开修改密码
+                {i18n.t("settings.openChangePassword")}
               </button>
             </div>
           </div>
           <div className="setting-row">
             <div className="settings-meta">
-              <span className="settings-label">登录会话</span>
+              <span className="settings-label">
+                {i18n.t("settings.loginSession")}
+              </span>
             </div>
             <div className="setting-control">
               <button className="ghost-button" onClick={onLogout}>
-                退出登录
+                {i18n.t("settings.logout")}
               </button>
             </div>
           </div>
@@ -9065,17 +9082,20 @@ function SettingsPage({
       </div>
 
       <div className="settings-group">
-        <h3 className="settings-group-title">业务与目录设置</h3>
+        <h3 className="settings-group-title">
+          {i18n.t("settings.businessAndDirectories")}
+        </h3>
         <article className="surface settings-block">
           <div className="setting-row">
             <div className="settings-meta">
               <span className="settings-label">
-                {systemSettings?.hotelName || "业务设置"}
+                {systemSettings?.hotelName ||
+                  i18n.t("settings.businessSettings")}
               </span>
               <p className="settings-hint">
                 {settingsIsClientMode
-                  ? "客户端模式下只查看状态，请在主机本机维护设置。"
-                  : "酒店名称、账期、小数位、导出目录和备份策略。"}
+                  ? i18n.t("settings.clientBusinessSettingsHint")
+                  : i18n.t("settings.businessSettingsHint")}
               </p>
             </div>
             <div className="setting-control">
@@ -9090,13 +9110,15 @@ function SettingsPage({
                   })
                 }
               >
-                打开业务设置
+                {i18n.t("settings.openBusinessSettings")}
               </button>
             </div>
           </div>
           <div className="setting-row">
             <div className="settings-meta">
-              <span className="settings-label">当前账期</span>
+              <span className="settings-label">
+                {i18n.t("settings.currentPeriod")}
+              </span>
             </div>
             <div className="setting-control">
               <strong className="setting-value">
@@ -9108,13 +9130,19 @@ function SettingsPage({
       </div>
 
       <div className="settings-group">
-        <h3 className="settings-group-title">多电脑连接</h3>
+        <h3 className="settings-group-title">
+          {i18n.t("settings.multiComputer")}
+        </h3>
         <article className="surface settings-feature-panel">
           <div className="settings-feature-header">
             <div>
-              <span className="settings-feature-kicker">当前状态</span>
-              <h4>{connectionStatusLabel(status, hostTestResult)}</h4>
-              <p>{connectionStatusHint(status, hostStatus, hostTestResult)}</p>
+              <span className="settings-feature-kicker">
+                {i18n.t("settings.currentStatus")}
+              </span>
+              <h4>{connectionStatusLabel(status, hostTestResult, i18n)}</h4>
+              <p>
+                {connectionStatusHint(status, hostStatus, hostTestResult, i18n)}
+              </p>
             </div>
             <div className="settings-feature-actions">
               <button
@@ -9123,7 +9151,7 @@ function SettingsPage({
                 type="button"
                 onClick={onOpenConnectionWizard}
               >
-                打开连接向导
+                {i18n.t("settings.openConnectionWizard")}
               </button>
               {status?.runtime.mode === "host" ? (
                 <button
@@ -9132,7 +9160,7 @@ function SettingsPage({
                   type="button"
                   onClick={onStartHostService}
                 >
-                  重新开启共享
+                  {i18n.t("settings.restartSharing")}
                 </button>
               ) : null}
               {settingsIsClientMode ? (
@@ -9142,7 +9170,7 @@ function SettingsPage({
                   type="button"
                   onClick={onOpenConnectionWizard}
                 >
-                  重新连接
+                  {i18n.t("settings.reconnect")}
                 </button>
               ) : null}
             </div>
@@ -9150,41 +9178,48 @@ function SettingsPage({
 
           <dl className="settings-metric-list">
             <div>
-              <dt>主电脑</dt>
+              <dt>{i18n.t("settings.hostComputer")}</dt>
               <dd>
                 {settingsIsClientMode
                   ? `${status?.runtime.hostAddress ?? "-"}:${status?.runtime.hostPort ?? "-"}`
                   : hostStatus?.running
-                    ? "这台电脑"
+                    ? i18n.t("settings.thisComputer")
                     : "-"}
               </dd>
             </div>
             <div>
-              <dt>连接状态</dt>
+              <dt>{i18n.t("settings.connectionStatus")}</dt>
               <dd>
                 {settingsIsClientMode
-                  ? hostTestResult?.message ?? "尚未检测"
-                  : hostStatus?.message ?? "未开启共享"}
+                  ? hostTestResult?.message ?? i18n.t("settings.notChecked")
+                  : hostStatus?.message ??
+                    i18n.t("settings.sharingNotStarted")}
               </dd>
             </div>
             <div>
-              <dt>其他电脑</dt>
+              <dt>{i18n.t("settings.otherComputers")}</dt>
               <dd>
                 {status?.runtime.mode === "host"
-                  ? `${clientConnections.length} 台`
+                  ? i18n.t("settings.computerCount", {
+                      count: clientConnections.length,
+                    })
                   : "-"}
               </dd>
             </div>
             <div>
-              <dt>最近检测</dt>
+              <dt>{i18n.t("settings.lastChecked")}</dt>
               <dd>{clientConnectionCheckedAt ?? "-"}</dd>
             </div>
           </dl>
 
           {hostStatus?.pairCode && status?.runtime.mode === "host" ? (
             <div className="settings-inline-note">
-              <strong>当前配对码：{hostStatus.pairCode}</strong>
-              <span>其他电脑打开连接向导后输入这 6 位数字。</span>
+              <strong>
+                {i18n.t("settings.currentPairCode", {
+                  code: hostStatus.pairCode,
+                })}
+              </strong>
+              <span>{i18n.t("settings.pairCodeHint")}</span>
             </div>
           ) : null}
 
@@ -9192,31 +9227,33 @@ function SettingsPage({
             <div className="settings-inline-note warning">
               <strong>
                 {status?.runtime.clientToken
-                  ? "主电脑连接异常"
-                  : "尚未连接主电脑"}
+                  ? i18n.t("settings.hostConnectionAbnormal")
+                  : i18n.t("settings.hostNotConnected")}
               </strong>
               <span>{hostTestResult.message}</span>
             </div>
           ) : null}
 
           {status?.runtime.mode === "standalone" ? (
-            <p className="settings-footnote">单机使用时无需连接其他电脑。</p>
+            <p className="settings-footnote">
+              {i18n.t("settings.standaloneFootnote")}
+            </p>
           ) : null}
 
           {status?.runtime.mode === "host" ? (
             <div className="settings-compact-table">
               <div className="settings-compact-table-title">
-                已连接的其他电脑
+                {i18n.t("settings.connectedClients")}
               </div>
               <table>
                 <thead>
                   <tr>
-                    <th>名称</th>
-                    <th>设备</th>
-                    <th>IP</th>
-                    <th>版本</th>
-                    <th>状态</th>
-                    <th>最后连接</th>
+                    <th>{i18n.t("settings.clientName")}</th>
+                    <th>{i18n.t("settings.clientDevice")}</th>
+                    <th>{i18n.t("settings.clientIp")}</th>
+                    <th>{i18n.t("settings.clientVersion")}</th>
+                    <th>{i18n.t("settings.clientStatus")}</th>
+                    <th>{i18n.t("settings.clientLastSeen")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -9241,13 +9278,17 @@ function SettingsPage({
       </div>
 
       <div className="settings-group">
-        <h3 className="settings-group-title">备份与恢复</h3>
+        <h3 className="settings-group-title">
+          {i18n.t("settings.backupAndRestore")}
+        </h3>
         <article className="surface settings-feature-panel">
           <div className="settings-feature-header">
             <div>
-              <span className="settings-feature-kicker">备份策略</span>
-              <h4>备份与恢复</h4>
-              <p>手动备份可直接执行；目录设置与恢复在独立系统窗口中处理。</p>
+              <span className="settings-feature-kicker">
+                {i18n.t("settings.backupPolicy")}
+              </span>
+              <h4>{i18n.t("settings.backupAndRestore")}</h4>
+              <p>{i18n.t("settings.backupHint")}</p>
             </div>
             <div className="settings-feature-actions">
               <button
@@ -9255,7 +9296,7 @@ function SettingsPage({
                 disabled={!canOperateSettings || isWorking}
                 onClick={onBackup}
               >
-                创建手动备份
+                {i18n.t("settings.createManualBackup")}
               </button>
               <button
                 className="ghost-button"
@@ -9268,7 +9309,7 @@ function SettingsPage({
                   })
                 }
               >
-                第二备份目录
+                {i18n.t("settings.secondBackupDir")}
               </button>
               <button
                 className="ghost-button"
@@ -9281,48 +9322,63 @@ function SettingsPage({
                   })
                 }
               >
-                恢复备份
+                {i18n.t("settings.restoreBackup")}
               </button>
             </div>
           </div>
 
           <dl className="settings-metric-list">
             <div>
-              <dt>本机目录</dt>
+              <dt>{i18n.t("settings.localDir")}</dt>
               <dd>{status?.runtime.backupDir ?? "-"}</dd>
             </div>
             <div>
-              <dt>最近备份</dt>
+              <dt>{i18n.t("settings.latestBackup")}</dt>
               <dd>{status?.health.latestBackupAt ?? "-"}</dd>
             </div>
             <div>
-              <dt>最近定时备份</dt>
+              <dt>{i18n.t("settings.latestIntervalBackup")}</dt>
               <dd>{status?.health.latestIntervalBackupAt ?? "-"}</dd>
             </div>
             <div>
-              <dt>自动备份</dt>
-              <dd>{status?.health.autoBackupEnabled ? "开启" : "关闭"}</dd>
+              <dt>{i18n.t("settings.autoBackup")}</dt>
+              <dd>
+                {status?.health.autoBackupEnabled
+                  ? i18n.t("settings.enabled")
+                  : i18n.t("settings.disabled")}
+              </dd>
             </div>
           </dl>
 
           {settingsIsClientMode ? (
             <p className="settings-footnote">
-              客户端模式不直接操作正式数据库，备份和恢复请在主机本机执行。
+              {i18n.t("settings.clientBackupFootnote")}
             </p>
           ) : null}
 
           {lastBackup ? (
             <div className="settings-inline-note">
-              <strong>已创建备份</strong>
+              <strong>{i18n.t("settings.backupCreated")}</strong>
               <span>{lastBackup.backupFile}</span>
               <span>
-                来源：{lastBackup.sourceHostName} · {lastBackup.sourceOs} ·
-                Schema v{lastBackup.schemaVersion} ·{" "}
-                {formatFileSize(lastBackup.databaseSize)}
+                {i18n.t("settings.backupSource", {
+                  host: lastBackup.sourceHostName,
+                  os: lastBackup.sourceOs,
+                  schema: lastBackup.schemaVersion,
+                  size: formatFileSize(lastBackup.databaseSize),
+                })}
               </span>
-              <span>SHA256：{lastBackup.databaseSha256}</span>
+              <span>
+                {i18n.t("settings.backupSha", {
+                  sha: lastBackup.databaseSha256,
+                })}
+              </span>
               {lastBackup.secondBackupFile ? (
-                <span>第二备份：{lastBackup.secondBackupFile}</span>
+                <span>
+                  {i18n.t("settings.secondBackupFile", {
+                    file: lastBackup.secondBackupFile,
+                  })}
+                </span>
               ) : null}
             </div>
           ) : null}
@@ -9333,7 +9389,13 @@ function SettingsPage({
 
 }
 
-function BackupRecordsPage({ backups }: { backups: BackupRecord[] }) {
+function BackupRecordsPage({
+  backups,
+  i18n = defaultI18n,
+}: {
+  backups: BackupRecord[];
+  i18n?: I18n;
+}) {
   return (
     <section className="table-panel">
       <div className="table-toolbar">
@@ -9368,7 +9430,7 @@ function BackupRecordsPage({ backups }: { backups: BackupRecord[] }) {
           {(backup) => (
             <>
               <td>{backup.createdAt}</td>
-              <td>{backupTypeLabel(backup.backupType)}</td>
+              <td>{backupTypeLabel(backup.backupType, i18n)}</td>
               <td>
                 <span
                   className={
@@ -9396,7 +9458,13 @@ function BackupRecordsPage({ backups }: { backups: BackupRecord[] }) {
   );
 }
 
-function LogsPage({ auditLogs }: { auditLogs: AuditLogRow[] }) {
+function LogsPage({
+  auditLogs,
+  i18n = defaultI18n,
+}: {
+  auditLogs: AuditLogRow[];
+  i18n?: I18n;
+}) {
   return (
     <section className="table-panel">
       <div className="table-toolbar">
@@ -9425,10 +9493,10 @@ function LogsPage({ auditLogs }: { auditLogs: AuditLogRow[] }) {
           {(log) => (
             <>
               <td>{log.createdAt}</td>
-              <td>{auditActionLabel(log.action)}</td>
+              <td>{auditActionLabel(log.action, i18n)}</td>
               <td>
                 <span className="audit-entity">
-                  {auditEntityLabel(log.entityType)}
+                  {auditEntityLabel(log.entityType, i18n)}
                 </span>
                 <span className="audit-entity-id">{log.entityId}</span>
               </td>
