@@ -1,0 +1,46 @@
+{
+  "name": "aster",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "verify:coverage": "node scripts/verify-execution-coverage.mjs",
+    "verify:no-placeholders": "node scripts/verify-no-placeholders.mjs",
+    "acceptance:template": "node scripts/create-manual-acceptance-template.mjs",
+    "acceptance:collect": "node scripts/collect-acceptance-evidence.mjs",
+    "acceptance:runners": "node scripts/create-acceptance-runners.mjs",
+    "acceptance:status": "node scripts/acceptance-status.mjs",
+    "acceptance:package": "node scripts/create-acceptance-package.mjs",
+    "acceptance:archive": "node scripts/archive-acceptance-package.mjs",
+    "acceptance:finalize": "node scripts/finalize-acceptance.mjs",
+    "acceptance:import-windows-artifacts": "node scripts/import-windows-artifacts.mjs",
+    "acceptance:download-windows-artifacts": "node scripts/download-github-windows-artifacts.mjs",
+    "acceptance:run-github-build": "node scripts/run-github-desktop-build.mjs",
+    "verify:acceptance-package": "node scripts/verify-acceptance-package.mjs",
+    "verify:manual-acceptance": "node scripts/verify-manual-acceptance.mjs",
+    "test:manual-acceptance": "node scripts/test-manual-acceptance-paths.mjs",
+    "verify:release": "node scripts/verify-release.mjs",
+    "verify:all-local": "node scripts/verify-all-local.mjs",
+    "verify:readiness": "node scripts/verify-readiness.mjs"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
+    "@tauri-apps/plugin-opener": "^2",
+    "ogl": "^1.0.11",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "typescript": "~5.8.3",
+    "vite": "^7.0.4"
+  }
+}

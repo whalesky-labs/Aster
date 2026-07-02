@@ -1,2 +1,32 @@
-.DS_Store
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+src-tauri/target
+docs/release-evidence/
+docs/manual-acceptance/*.json
+docs/manual-acceptance/downloaded-windows-artifacts/
+docs/manual-acceptance/windows-installers/
+docs/acceptance-package/
+docs/acceptance-archives/
 ._*
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

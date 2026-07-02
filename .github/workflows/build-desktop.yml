@@ -1,0 +1,371 @@
+name: Build Desktop Bundles
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish installers to GitHub Release"
+        required: false
+        type: boolean
+        default: false
+      version_mode:
+        description: "Version mode"
+        required: true
+        type: choice
+        default: auto
+        options:
+          - auto
+          - manual
+      version:
+        description: "Manual version, for example 0.1.1. Leave empty in auto mode."
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prepare_release:
+    name: Prepare release version
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.version.outputs.tag }}
+      release_version: ${{ steps.version.outputs.version }}
+      target_commit: ${{ steps.version.outputs.target_commit }}
+      publish_release: ${{ steps.version.outputs.publish_release }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          INPUT_PUBLISH_RELEASE: ${{ inputs.publish_release }}
+          INPUT_VERSION_MODE: ${{ inputs.version_mode }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+            version="${tag#v}"
+            echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+            echo "version=${version}" >> "$GITHUB_OUTPUT"
+            echo "target_commit=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+            echo "publish_release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "${INPUT_VERSION_MODE:-auto}" == "manual" ]]; then
+            version="${INPUT_VERSION#v}"
+            if [[ -z "${version}" ]]; then
+              echo "::error::Manual version cannot be empty."
+              exit 1
+            fi
+            if [[ ! "${version}" =~ ^[0-9]+(\.[0-9]+){2}([-+][0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::Manual version must look like 0.1.1 or 0.1.1-beta.1."
+              exit 1
+            fi
+          else
+            base_version="$(node <<'NODE'
+          const fs = require('fs');
+
+          const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const tauriConfig = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+          const cargoToml = fs.readFileSync('src-tauri/Cargo.toml', 'utf8');
+          const cargoMatch = cargoToml.match(/^version = "([^"]+)"$/m);
+
+          if (!cargoMatch) {
+            console.error('Unable to resolve version from src-tauri/Cargo.toml');
+            process.exit(1);
+          }
+
+          const versions = {
+            packageJson: packageJson.version,
+            tauriConfig: tauriConfig.version,
+            cargoToml: cargoMatch[1],
+          };
+          const uniqueVersions = [...new Set(Object.values(versions))];
+          if (uniqueVersions.length !== 1) {
+            console.error(`Version mismatch detected: ${JSON.stringify(versions)}`);
+            process.exit(1);
+          }
+
+          process.stdout.write(uniqueVersions[0]);
+          NODE
+            )"
+            version="$(BASE_VERSION="${base_version}" node <<'NODE'
+          const { execFileSync } = require('child_process');
+
+          const baseVersion = process.env.BASE_VERSION;
+          const match = baseVersion.match(/^(\d+)\.(\d+)\.(\d+)$/);
+          if (!match) {
+            console.error(`Auto version mode only supports x.y.z, got ${baseVersion}.`);
+            process.exit(1);
+          }
+
+          const major = Number(match[1]);
+          const minor = Number(match[2]);
+          let patch = Number(match[3]);
+          const tags = new Set(
+            execFileSync('git', ['ls-remote', '--tags', 'origin', `refs/tags/v${major}.${minor}.*`], {
+              encoding: 'utf8',
+            })
+              .split(/\r?\n/)
+              .map((line) => line.trim().split(/\s+/)[1])
+              .filter(Boolean)
+              .map((ref) => ref.replace('refs/tags/v', '')),
+          );
+
+          let nextVersion = `${major}.${minor}.${patch}`;
+          while (tags.has(nextVersion)) {
+            patch += 1;
+            nextVersion = `${major}.${minor}.${patch}`;
+          }
+
+          process.stdout.write(nextVersion);
+          NODE
+            )"
+          fi
+
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "target_commit=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "publish_release=${INPUT_PUBLISH_RELEASE:-false}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.name }})
+    needs: prepare_release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-15-intel
+            rust_target: x86_64-apple-darwin
+            artifact_name: aster-macos
+            evidence_artifact_name: aster-macos-release-evidence
+            artifact_path: |
+              src-tauri/target/*/release/bundle/macos/*.app/**
+              src-tauri/target/*/release/bundle/dmg/*.dmg
+              src-tauri/target/release/bundle/macos/*.app/**
+              src-tauri/target/release/bundle/dmg/*.dmg
+          - name: Windows x64
+            os: windows-2022
+            rust_target: x86_64-pc-windows-msvc
+            artifact_name: aster-windows-x64
+            evidence_artifact_name: aster-windows-x64-release-evidence
+            artifact_path: |
+              src-tauri/target/*/release/bundle/**/*.exe
+              src-tauri/target/*/release/bundle/**/*.msi
+              src-tauri/target/release/bundle/**/*.exe
+              src-tauri/target/release/bundle/**/*.msi
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare_release.outputs.target_commit }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Apply release version
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.prepare_release.outputs.release_version }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+
+          const version = process.env.RELEASE_VERSION;
+          for (const file of ['package.json', 'src-tauri/tauri.conf.json']) {
+            const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+            data.version = version;
+            fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
+          }
+
+          const lockPath = 'package-lock.json';
+          if (fs.existsSync(lockPath)) {
+            const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+            lock.version = version;
+            if (lock.packages?.['']) {
+              lock.packages[''].version = version;
+            }
+            fs.writeFileSync(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
+          }
+
+          const cargoPath = 'src-tauri/Cargo.toml';
+          const cargoToml = fs.readFileSync(cargoPath, 'utf8');
+          fs.writeFileSync(cargoPath, cargoToml.replace(/^version = "([^"]+)"$/m, `version = "${version}"`));
+          NODE
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify release and build bundle
+        env:
+          TAURI_BUILD_TARGET: ${{ matrix.rust_target }}
+        run: npm run verify:release
+
+      - name: Inspect build outputs
+        if: always()
+        shell: bash
+        run: |
+          find src-tauri/target -maxdepth 6 -type d -name bundle -print || true
+          find src-tauri/target -maxdepth 8 -type f \( -name "*.app" -o -name "*.dmg" -o -name "*.exe" -o -name "*.msi" -o -name "*.zip" \) -print || true
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: error
+
+      - name: Upload release evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.evidence_artifact_name }}
+          path: docs/release-evidence/
+          if-no-files-found: ignore
+
+  release:
+    name: Publish GitHub Release
+    needs:
+      - prepare_release
+      - build
+    runs-on: ubuntu-latest
+    if: needs.prepare_release.outputs.publish_release == 'true'
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Ensure release tag exists
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          TARGET_COMMIT: ${{ needs.prepare_release.outputs.target_commit }}
+        run: |
+          existing_tag_sha="$(git ls-remote --tags origin "refs/tags/${RELEASE_TAG}" | awk '{print $1}' | head -n 1)"
+          if [[ -z "${existing_tag_sha}" ]]; then
+            gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/${RELEASE_TAG}" \
+              -f sha="${TARGET_COMMIT}" >/dev/null
+          elif [[ "${GITHUB_REF_TYPE}" != "tag" && "${existing_tag_sha}" != "${TARGET_COMMIT}" ]]; then
+            gh api \
+              --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/git/refs/tags/${RELEASE_TAG}" \
+              -f sha="${TARGET_COMMIT}" \
+              -F force=true >/dev/null
+          fi
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          mkdir -p release-upload
+
+          installer_dirs=(
+            "release-assets/aster-macos"
+            "release-assets/aster-windows-x64"
+          )
+          for dir in "${installer_dirs[@]}"; do
+            if [[ ! -d "${dir}" ]]; then
+              echo "::error::Expected installer artifact directory missing: ${dir}"
+              exit 1
+            fi
+          done
+
+          while IFS= read -r -d '' file; do
+            artifact_name="$(basename "$(dirname "${file}")")"
+            file_name="$(basename "${file}")"
+            cp "${file}" "release-upload/${artifact_name}-${file_name}"
+          done < <(
+            find "${installer_dirs[@]}" -type f \
+              \( -name "*.dmg" -o -name "*.msi" -o -name "*.exe" \) \
+              -print0
+          )
+
+          asset_count="$(find release-upload -type f | wc -l | tr -d ' ')"
+          if [[ "${asset_count}" == "0" ]]; then
+            echo "::error::No installer assets found."
+            exit 1
+          fi
+
+          if ! find release-upload -maxdepth 1 -type f -name "aster-macos-*.dmg" | grep -q .; then
+            echo "::error::macOS DMG release asset missing."
+            exit 1
+          fi
+          if ! find release-upload -maxdepth 1 -type f \( -name "aster-windows-x64-*.exe" -o -name "aster-windows-x64-*.msi" \) | grep -q .; then
+            echo "::error::Windows installer release asset missing."
+            exit 1
+          fi
+
+          find release-upload -maxdepth 1 -type f -print | sort
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          RELEASE_VERSION: ${{ needs.prepare_release.outputs.release_version }}
+        run: |
+          mapfile -t assets < <(find release-upload -maxdepth 1 -type f | sort)
+          {
+            printf "Aster %s desktop installers.\n\n" "${RELEASE_VERSION}"
+            printf "Windows packages are built by GitHub Actions on windows-2022. macOS packages are built by the macOS matrix job.\n"
+          } > release-notes.md
+
+          release_args=(
+            --title "Aster ${RELEASE_TAG}"
+            --notes-file release-notes.md
+            --verify-tag
+          )
+
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release delete "${RELEASE_TAG}" --yes
+          fi
+
+          gh release create "${RELEASE_TAG}" "${release_args[@]}"
+
+          printf "%s\0" "${assets[@]}" | xargs -0 -n 1 -P 4 bash -c '
+            asset="$1"
+            gh release upload "$RELEASE_TAG" "$asset" --clobber
+          ' _

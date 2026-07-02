@@ -1,0 +1,130 @@
+mod app;
+mod commands;
+mod db;
+mod domain;
+mod error;
+mod services;
+
+use app::state::AppState;
+use commands::app_commands::{
+    get_app_status, get_runtime_config, get_system_settings, list_audit_logs, save_system_settings,
+    set_runtime_mode,
+};
+use commands::approval_commands::{
+    create_approval_request, decide_approval_request, list_approval_requests,
+};
+use commands::backup_commands::{
+    create_backup, list_backup_records, preview_restore_backup, restore_backup,
+    set_second_backup_dir,
+};
+use commands::host_commands::{
+    discover_hosts, get_host_service_status, list_client_connections, pair_with_host,
+    save_client_config, start_host_service, test_host_connection,
+};
+use commands::import_commands::{preview_excel_import, run_excel_import};
+use commands::master_data_commands::{
+    list_budget_rules, list_categories, list_departments, list_items,
+    list_supplier_purchase_records, list_suppliers, list_units, save_budget_rule, save_category,
+    save_department, save_item, save_supplier, save_unit, set_budget_rule_enabled,
+    set_category_enabled, set_department_enabled, set_item_enabled, set_supplier_enabled,
+    set_unit_enabled,
+};
+use commands::report_commands::{export_monthly_report, get_report_bundle};
+use commands::stock_commands::{
+    confirm_stock_document_draft, list_stock_balances, list_stock_documents, list_stock_movements,
+    save_stock_document_draft, submit_adjustment, submit_stock_document, void_stock_document,
+};
+use commands::stocktake_commands::{
+    confirm_stocktake, create_stocktake, export_stocktake_sheet, get_stocktake_detail,
+    list_stocktakes, update_stocktake_counts,
+};
+use commands::user_commands::{
+    change_password, get_current_user, list_roles, list_user_accounts, login, logout,
+    save_user_account, set_user_account_enabled,
+};
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    let app_state = AppState::initialize().expect("failed to initialize Aster application state");
+    services::user_service::ensure_default_admin(&app_state)
+        .expect("failed to initialize default admin user");
+    let _ = services::backup_service::run_startup_backup_if_needed(&app_state);
+    services::backup_service::start_interval_backup_worker(&app_state);
+    services::host_service::ensure_host_service_for_mode(&app_state, env!("CARGO_PKG_VERSION"))
+        .expect("failed to initialize host service");
+
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .manage(app_state)
+        .invoke_handler(tauri::generate_handler![
+            get_app_status,
+            get_runtime_config,
+            get_system_settings,
+            list_audit_logs,
+            save_system_settings,
+            set_runtime_mode,
+            list_approval_requests,
+            create_approval_request,
+            decide_approval_request,
+            list_categories,
+            save_category,
+            set_category_enabled,
+            list_units,
+            save_unit,
+            set_unit_enabled,
+            list_departments,
+            save_department,
+            set_department_enabled,
+            list_suppliers,
+            list_supplier_purchase_records,
+            save_supplier,
+            set_supplier_enabled,
+            list_items,
+            save_item,
+            set_item_enabled,
+            list_budget_rules,
+            save_budget_rule,
+            set_budget_rule_enabled,
+            submit_stock_document,
+            save_stock_document_draft,
+            confirm_stock_document_draft,
+            submit_adjustment,
+            void_stock_document,
+            list_stock_documents,
+            list_stock_balances,
+            list_stock_movements,
+            get_report_bundle,
+            export_monthly_report,
+            preview_excel_import,
+            run_excel_import,
+            create_backup,
+            list_backup_records,
+            set_second_backup_dir,
+            preview_restore_backup,
+            restore_backup,
+            create_stocktake,
+            list_stocktakes,
+            get_stocktake_detail,
+            update_stocktake_counts,
+            confirm_stocktake,
+            export_stocktake_sheet,
+            login,
+            logout,
+            get_current_user,
+            list_user_accounts,
+            list_roles,
+            save_user_account,
+            set_user_account_enabled,
+            change_password,
+            start_host_service,
+            get_host_service_status,
+            list_client_connections,
+            save_client_config,
+            test_host_connection,
+            discover_hosts,
+            pair_with_host
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running Aster application");
+}
