@@ -48,9 +48,9 @@ function collectFiles(path, relativePath = path) {
   const fullPath = join(root, path);
   if (!existsSync(fullPath)) return [];
   const stat = statSync(fullPath);
-  if (stat.isFile()) return [relativePath];
+  if (stat.isFile()) return [relativePath.replaceAll("\\", "/")];
   return readdirSync(fullPath, { withFileTypes: true }).flatMap((entry) => {
-    const nextRelativePath = join(relativePath, entry.name);
+    const nextRelativePath = `${relativePath.replaceAll("\\", "/")}/${entry.name}`;
     if (entry.isDirectory()) return collectFiles(nextRelativePath, nextRelativePath);
     return [nextRelativePath];
   });
