@@ -24,6 +24,7 @@
     "verify:manual-acceptance": "node scripts/verify-manual-acceptance.mjs",
     "test:manual-acceptance": "node scripts/test-manual-acceptance-paths.mjs",
     "verify:release": "node scripts/verify-release.mjs",
+    "release:notes": "node scripts/create-release-notes.mjs",
     "verify:all-local": "node scripts/verify-all-local.mjs",
     "verify:readiness": "node scripts/verify-readiness.mjs"
   },

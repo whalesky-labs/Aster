@@ -9,6 +9,11 @@ const token = process.env.GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim() |
 const apiBaseUrl = process.env.ASTER_GITHUB_API_BASE_URL?.trim() || "https://api.github.com";
 const pollIntervalMs = Number(process.env.ASTER_GITHUB_POLL_INTERVAL_MS ?? 30_000);
 const timeoutMs = Number(process.env.ASTER_GITHUB_BUILD_TIMEOUT_MS ?? 60 * 60 * 1000);
+const publishRelease = ["1", "true", "yes"].includes(
+  (process.env.ASTER_GITHUB_PUBLISH_RELEASE ?? "false").trim().toLowerCase(),
+);
+const versionMode = process.env.ASTER_GITHUB_VERSION_MODE?.trim() || "auto";
+const version = process.env.ASTER_GITHUB_VERSION?.trim() || "";
 
 function currentBranch() {
   const result = spawnSync("git", ["branch", "--show-current"], {
@@ -85,13 +90,15 @@ await request(`/actions/workflows/${workflowFile}/dispatches`, {
   body: JSON.stringify({
     ref: branch,
     inputs: {
-      publish_release: "false",
-      version_mode: "auto",
-      version: "",
+      publish_release: String(publishRelease),
+      version_mode: versionMode,
+      version,
     },
   }),
 });
-console.log(`[run-github-desktop-build] Dispatched ${workflowFile} on ${branch}.`);
+console.log(
+  `[run-github-desktop-build] Dispatched ${workflowFile} on ${branch} (publish_release=${publishRelease}, version_mode=${versionMode}).`,
+);
 
 const deadline = Date.now() + timeoutMs;
 let run = null;

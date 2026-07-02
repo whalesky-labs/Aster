@@ -299,6 +299,8 @@ jobs:
 
       - name: Prepare release assets
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.prepare_release.outputs.release_version }}
         run: |
           mkdir -p release-upload
 
@@ -314,9 +316,21 @@ jobs:
           done
 
           while IFS= read -r -d '' file; do
-            artifact_name="$(basename "$(dirname "${file}")")"
-            file_name="$(basename "${file}")"
-            cp "${file}" "release-upload/${artifact_name}-${file_name}"
+            case "${file}" in
+              *.dmg)
+                cp "${file}" "release-upload/aster-${RELEASE_VERSION}-macos-x86_64.dmg"
+                ;;
+              *.msi)
+                cp "${file}" "release-upload/aster-${RELEASE_VERSION}-windows-x86_64.msi"
+                ;;
+              *.exe)
+                cp "${file}" "release-upload/aster-${RELEASE_VERSION}-windows-x86_64-setup.exe"
+                ;;
+              *)
+                echo "::error::Unsupported release asset: ${file}"
+                exit 1
+                ;;
+            esac
           done < <(
             find "${installer_dirs[@]}" -type f \
               \( -name "*.dmg" -o -name "*.msi" -o -name "*.exe" \) \
@@ -329,11 +343,11 @@ jobs:
             exit 1
           fi
 
-          if ! find release-upload -maxdepth 1 -type f -name "aster-macos-*.dmg" | grep -q .; then
+          if ! find release-upload -maxdepth 1 -type f -name "aster-${RELEASE_VERSION}-macos-x86_64.dmg" | grep -q .; then
             echo "::error::macOS DMG release asset missing."
             exit 1
           fi
-          if ! find release-upload -maxdepth 1 -type f \( -name "aster-windows-x64-*.exe" -o -name "aster-windows-x64-*.msi" \) | grep -q .; then
+          if ! find release-upload -maxdepth 1 -type f \( -name "aster-${RELEASE_VERSION}-windows-x86_64-setup.exe" -o -name "aster-${RELEASE_VERSION}-windows-x86_64.msi" \) | grep -q .; then
             echo "::error::Windows installer release asset missing."
             exit 1
           fi
@@ -348,16 +362,16 @@ jobs:
           RELEASE_VERSION: ${{ needs.prepare_release.outputs.release_version }}
         run: |
           mapfile -t assets < <(find release-upload -maxdepth 1 -type f | sort)
-          {
-            printf "Aster %s desktop installers.\n\n" "${RELEASE_VERSION}"
-            printf "Windows packages are built by GitHub Actions on windows-2022. macOS packages are built by the macOS matrix job.\n"
-          } > release-notes.md
+          node scripts/create-release-notes.mjs "${RELEASE_VERSION}" "${RELEASE_TAG}" release-upload release-notes.md
 
           release_args=(
             --title "Aster ${RELEASE_TAG}"
             --notes-file release-notes.md
             --verify-tag
           )
+          if [[ "${RELEASE_VERSION}" == *-* ]]; then
+            release_args+=(--prerelease)
+          fi
 
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
             gh release delete "${RELEASE_TAG}" --yes
