@@ -20,15 +20,20 @@ if (!existsSync(changelogPath)) {
 }
 
 const changelog = readFileSync(changelogPath, "utf8");
-const sectionPattern = new RegExp(
-  `(?:^|\\n)(## \\[${escapeRegExp(version)}\\][\\s\\S]*?)(?=\\n## \\[|$)`,
-);
-const section = changelog.match(sectionPattern)?.[1]?.trim();
+const exactSection = extractChangelogSection(version);
+const unreleasedSection = exactSection ? null : extractChangelogSection("Unreleased");
+const sectionSource = exactSection ? version : "Unreleased";
+const rawSection = exactSection || unreleasedSection;
 
-if (!section) {
-  console.error(`[create-release-notes] Missing changelog section for ${version}.`);
+if (!rawSection) {
+  console.error(`[create-release-notes] Missing changelog section for ${version} and [Unreleased].`);
   process.exit(1);
 }
+
+const section =
+  sectionSource === "Unreleased"
+    ? rawSection.replace(/^## \[Unreleased\]/, `## [${version}] - ${new Date().toISOString().slice(0, 10)}`)
+    : rawSection;
 
 const releaseUrl = `https://github.com/${process.env.GITHUB_REPOSITORY ?? "whalesky-labs/Aster"}/releases/download/${tag}`;
 const downloads = [
@@ -76,8 +81,21 @@ ${downloadRows}
 `;
 
 writeFileSync(outputPath, notes);
-console.log(`[create-release-notes] Wrote ${basename(outputPath)} from ${changelogPath}#${version}.`);
+console.log(`[create-release-notes] Wrote ${basename(outputPath)} from ${changelogPath}#${sectionSource}.`);
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function extractChangelogSection(name) {
+  const sectionPattern = new RegExp(`^## \\[${escapeRegExp(name)}\\](?:\\s|$)`);
+  const lines = changelog.split(/\r?\n/);
+  const startIndex = lines.findIndex((line) => sectionPattern.test(line));
+
+  if (startIndex === -1) {
+    return "";
+  }
+
+  const endIndex = lines.findIndex((line, index) => index > startIndex && /^## \[/.test(line));
+  return lines.slice(startIndex, endIndex === -1 ? undefined : endIndex).join("\n").trim();
 }

@@ -15,10 +15,12 @@
 - 界面语言切换已覆盖登录页、侧边导航、顶部栏、状态栏、仪表盘、系统设置页、连接与备份面板、备份记录和操作日志枚举标签。
 - 清理入库、出库和库存调整单据的作废控件布局，将审批单 ID、作废原因和经办人统一放到顶部工具栏，避免表格标题区拥挤混乱。
 - GitHub Release 资产收集和发布说明已区分 macOS Intel 与 Apple Silicon DMG，避免两个 macOS 安装包互相覆盖。
+- GitHub Release 发布脚本在自动版本没有对应历史小节时，会读取 `[Unreleased]` 生成发布说明，避免 `0.1.1` 这类自动递增版本发布失败。
+- GitHub Actions 官方步骤升级到 `v5`，适配 Node.js 24 运行时，消除 Node.js 20 运行时弃用告警。
 
 ### 验收说明
 
-- 已通过 `npm run build` 和 `git diff --check` 验证。
+- 已通过 `npm run build`、`npm run verify:coverage`、Release Notes 生成脚本和 `git diff --check` 验证。
 - 业务表单深层文案后续可继续沿用 `src/i18n.ts` 的翻译字典逐步迁移。
 
 ## [0.1.0] - 2026-07-02
