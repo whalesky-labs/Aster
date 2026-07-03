@@ -1035,11 +1035,13 @@ const navGroups: { titleKey: string; keys: NavKey[] }[] = [
       "items",
       "inbound",
       "outbound",
-      "stock",
-      "movements",
       "stocktake",
       "adjustments",
     ],
+  },
+  {
+    titleKey: "navGroup.reports",
+    keys: ["stock", "movements", "reports"],
   },
   {
     titleKey: "navGroup.masterData",
@@ -1047,7 +1049,7 @@ const navGroups: { titleKey: string; keys: NavKey[] }[] = [
   },
   {
     titleKey: "navGroup.management",
-    keys: ["reports", "import", "budgets", "approvals", "users"],
+    keys: ["import", "budgets", "approvals", "users"],
   },
   {
     titleKey: "navGroup.logs",
@@ -8534,6 +8536,10 @@ function ReportsPage({
     (sum, row) => sum + row.outboundAmount,
     0,
   );
+  const reportRangeLabel =
+    filterDraft.startDate || filterDraft.endDate
+      ? `${filterDraft.startDate || "不限"} 至 ${filterDraft.endDate || "不限"}`
+      : `${filterDraft.month || currentMonthString()} 月`;
 
   function printReport() {
     window.print();
@@ -8555,25 +8561,32 @@ function ReportsPage({
 
   return (
     <section className="report-layout">
-      <div className="module-panel report-toolbar">
-        <div>
-          <p>报表从库存流水实时汇总，导出文件不依赖 Office/WPS 宏。</p>
-        </div>
-        <div className="report-actions">
-          <button
-            className="primary-button"
-            disabled={!canViewReports}
-            onClick={() => onExport(query)}
-          >
-            导出 Excel
-          </button>
-          <button
-            className="ghost-button"
-            disabled={!canViewReports || !bundle}
-            onClick={printReport}
-          >
-            打印
-          </button>
+      <div className="module-panel report-command-center">
+        <div className="report-command-main">
+          <div>
+            <span className="report-kicker">报表中心</span>
+            <h2>{reportRangeLabel}经营报表</h2>
+            <p>
+              入库 {formatMoney(totalInbound)} 元 · 领用{" "}
+              {formatMoney(totalOutbound)} 元 · 库存预警 {stockWarnings.length} 项
+            </p>
+          </div>
+          <div className="report-actions">
+            <button
+              className="primary-button"
+              disabled={!canViewReports}
+              onClick={() => onExport(query)}
+            >
+              导出 Excel
+            </button>
+            <button
+              className="ghost-button"
+              disabled={!canViewReports || !bundle}
+              onClick={printReport}
+            >
+              打印
+            </button>
+          </div>
         </div>
         <div className="report-filters">
           <Field label="月份">
@@ -8678,7 +8691,7 @@ function ReportsPage({
         ) : null}
       </div>
 
-      <section className="metrics-grid">
+      <section className="report-metrics-grid">
         <div className="metric-card">
           <span>本月入库金额</span>
           <strong>{formatMoney(totalInbound)}</strong>
@@ -8706,6 +8719,10 @@ function ReportsPage({
         </div>
       </section>
 
+      <ReportGroupHeader
+        title="经营分析"
+        description="按部门、分类、物品和库存预警查看核心变化。"
+      />
       <div className="workspace-grid">
         <BarChartPanel
           rows={summary
@@ -8741,6 +8758,10 @@ function ReportsPage({
         />
       </div>
 
+      <ReportGroupHeader
+        title="库存总览"
+        description="月度进销存和当前库存余额，用于核对物品流转与结存。"
+      />
       <div className="table-panel report-section">
         <div className="table-toolbar">
           <h2>月度进销存</h2>
@@ -8783,6 +8804,62 @@ function ReportsPage({
         </table>
       </div>
 
+      <div className="table-panel report-section">
+        <div className="table-toolbar">
+          <h2>库存余额表</h2>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>编码</th>
+              <th>物品</th>
+              <th>规格</th>
+              <th>单位</th>
+              <th>当前库存</th>
+              <th>库存金额</th>
+              <th>移动均价</th>
+              <th>最近入库价</th>
+              <th>预警线</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <PaginatedTable
+            colSpan={10}
+            getRowKey={(row) => row.itemId}
+            rows={stockBalances}
+          >
+            {(row) => (
+              <>
+                <td>{row.itemCode}</td>
+                <td>{row.itemName}</td>
+                <td>{row.spec ?? "-"}</td>
+                <td>{row.unitName ?? "-"}</td>
+                <td>{row.quantity}</td>
+                <td>{formatMoney(row.amount)}</td>
+                <td>{formatMoney(row.averagePrice)}</td>
+                <td>{formatMoney(row.lastInboundPrice)}</td>
+                <td>{row.warningQuantity}</td>
+                <td>
+                  <span
+                    className={`status ${row.stockStatus === "normal" ? "enabled" : "disabled"}`}
+                  >
+                    {row.stockStatus === "normal"
+                      ? "正常"
+                      : row.stockStatus === "low"
+                        ? "低库存"
+                        : "负库存"}
+                  </span>
+                </td>
+              </>
+            )}
+          </PaginatedTable>
+        </table>
+      </div>
+
+      <ReportGroupHeader
+        title="领用分析"
+        description="按部门、分类和物品查看领用消耗结构。"
+      />
       <div className="workspace-grid">
         <div className="table-panel report-section">
           <div className="table-toolbar">
@@ -8907,6 +8984,10 @@ function ReportsPage({
         </div>
       </div>
 
+      <ReportGroupHeader
+        title="流水明细"
+        description="入库与出库明细，用于追溯单据来源。"
+      />
       <div className="table-panel report-section">
         <div className="table-toolbar">
           <h2>入库明细</h2>
@@ -8991,58 +9072,10 @@ function ReportsPage({
         </table>
       </div>
 
-      <div className="table-panel report-section">
-        <div className="table-toolbar">
-          <h2>库存余额表</h2>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th>编码</th>
-              <th>物品</th>
-              <th>规格</th>
-              <th>单位</th>
-              <th>当前库存</th>
-              <th>库存金额</th>
-              <th>移动均价</th>
-              <th>最近入库价</th>
-              <th>预警线</th>
-              <th>状态</th>
-            </tr>
-          </thead>
-          <PaginatedTable
-            colSpan={10}
-            getRowKey={(row) => row.itemId}
-            rows={stockBalances}
-          >
-            {(row) => (
-              <>
-                <td>{row.itemCode}</td>
-                <td>{row.itemName}</td>
-                <td>{row.spec ?? "-"}</td>
-                <td>{row.unitName ?? "-"}</td>
-                <td>{row.quantity}</td>
-                <td>{formatMoney(row.amount)}</td>
-                <td>{formatMoney(row.averagePrice)}</td>
-                <td>{formatMoney(row.lastInboundPrice)}</td>
-                <td>{row.warningQuantity}</td>
-                <td>
-                  <span
-                    className={`status ${row.stockStatus === "normal" ? "enabled" : "disabled"}`}
-                  >
-                    {row.stockStatus === "normal"
-                      ? "正常"
-                      : row.stockStatus === "low"
-                        ? "低库存"
-                        : "负库存"}
-                  </span>
-                </td>
-              </>
-            )}
-          </PaginatedTable>
-        </table>
-      </div>
-
+      <ReportGroupHeader
+        title="库存风险"
+        description="库存预警和盘点差异，用于定位缺口与账实不符。"
+      />
       <div className="table-panel report-section">
         <div className="table-toolbar">
           <h2>库存预警表</h2>
@@ -9133,6 +9166,21 @@ function ReportsPage({
         </table>
       </div>
     </section>
+  );
+}
+
+function ReportGroupHeader({
+  description,
+  title,
+}: {
+  description: string;
+  title: string;
+}) {
+  return (
+    <div className="report-group-header">
+      <h2>{title}</h2>
+      <p>{description}</p>
+    </div>
   );
 }
 

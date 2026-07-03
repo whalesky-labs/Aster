@@ -63,6 +63,7 @@ const zhCN = {
 
   "navGroup.overview": "概览",
   "navGroup.inventory": "库存业务",
+  "navGroup.reports": "报表分析",
   "navGroup.masterData": "资料",
   "navGroup.management": "管理",
   "navGroup.logs": "日志",
@@ -361,6 +362,7 @@ const enUS = {
 
   "navGroup.overview": "Overview",
   "navGroup.inventory": "Inventory",
+  "navGroup.reports": "Reports",
   "navGroup.masterData": "Master Data",
   "navGroup.management": "Management",
   "navGroup.logs": "Logs",

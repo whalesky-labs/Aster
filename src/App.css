@@ -1688,15 +1688,45 @@ tbody tr:hover {
 
 .report-filters {
   grid-column: 1 / -1;
-  grid-template-columns: repeat(5, minmax(130px, 1fr)) auto;
+  grid-template-columns: repeat(4, minmax(140px, 1fr)) auto;
+  border: 0;
+  border-top: 1px solid var(--native-panel-border);
+  padding: 12px 0 0;
+  background: transparent;
 }
 
-.report-toolbar,
+.report-command-center,
 .import-toolbar {
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 12px;
+  gap: 14px;
   min-height: auto;
+  padding: 14px;
+}
+
+.report-command-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.report-command-main h2 {
+  margin: 3px 0 5px;
+  color: var(--text-main);
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.report-command-main p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.report-kicker {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .report-actions {
@@ -1715,6 +1745,34 @@ tbody tr:hover {
 
 .report-section {
   overflow-x: auto;
+}
+
+.report-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.report-group-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  border-top: 1px solid var(--native-panel-border);
+  padding-top: 12px;
+}
+
+.report-group-header h2 {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 15px;
+  font-weight: 720;
+}
+
+.report-group-header p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .chart-panel {
@@ -2994,16 +3052,18 @@ tbody tr:hover {
     break-inside: avoid;
   }
 
-  .report-toolbar {
+  .report-command-center {
     display: block;
     padding: 0 0 8mm;
   }
 
-  .report-toolbar p {
+  .report-command-main p,
+  .report-group-header p {
     color: #374151;
   }
 
   .metrics-grid,
+  .report-metrics-grid,
   .workspace-grid {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -3096,6 +3156,15 @@ tbody tr:hover {
 
   .metrics-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .report-metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .report-command-main,
+  .report-group-header {
+    display: grid;
   }
 
   .settings-metric-list {
