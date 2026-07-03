@@ -2,17 +2,21 @@ use pbkdf2::password_hash::{
     rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
 };
 use pbkdf2::Pbkdf2;
+use rand::Rng;
 use rusqlite::{params, OptionalExtension};
 
 use crate::app::state::AppState;
+use crate::db::repository;
 use crate::db::user_repository;
 use crate::domain::users::{
-    ChangePasswordRequest, CurrentUser, LoginRequest, Role, SaveUserRequest, SetUserEnabledRequest,
-    UserAccount,
+    ChangePasswordRequest, CurrentUser, LoginRequest, RequestPasswordResetCodeRequest,
+    RequestPasswordResetCodeResponse, ResetPasswordWithCodeRequest, Role, SaveUserRequest,
+    SetUserEnabledRequest, UserAccount,
 };
 use crate::error::{AppError, AppResult};
 
 const DEFAULT_ADMIN_PASSWORD: &str = "admin123";
+const PASSWORD_RESET_EXPIRES_MINUTES: i64 = 10;
 
 pub fn ensure_default_admin(state: &AppState) -> AppResult<()> {
     let hash = hash_password(DEFAULT_ADMIN_PASSWORD)?;
@@ -127,6 +131,34 @@ pub fn change_password(state: &AppState, request: ChangePasswordRequest) -> AppR
     state.db.with_conn(|conn| {
         change_password_on_conn(conn, request, &current_operator(state), &current.id)
     })
+}
+
+pub fn request_password_reset_code(
+    state: &AppState,
+    request: RequestPasswordResetCodeRequest,
+) -> AppResult<RequestPasswordResetCodeResponse> {
+    if runtime_mode(state)? == crate::domain::runtime::RuntimeMode::Client
+        && client_has_pairing_token(state)?
+    {
+        return crate::services::host_service::remote_request_password_reset_code(state, request);
+    }
+    state
+        .db
+        .with_conn(|conn| request_password_reset_code_on_conn(conn, request))
+}
+
+pub fn reset_password_with_code(
+    state: &AppState,
+    request: ResetPasswordWithCodeRequest,
+) -> AppResult<()> {
+    if runtime_mode(state)? == crate::domain::runtime::RuntimeMode::Client
+        && client_has_pairing_token(state)?
+    {
+        return crate::services::host_service::remote_reset_password_with_code(state, request);
+    }
+    state
+        .db
+        .with_conn(|conn| reset_password_with_code_on_conn(conn, request))
 }
 
 pub fn require_admin(state: &AppState) -> AppResult<CurrentUser> {
@@ -303,6 +335,7 @@ pub fn save_user_on_conn(
         request.id,
         request.username.trim(),
         request.display_name.trim(),
+        request.email.as_deref().map(str::trim).map(str::to_string),
         password_hash,
         request.department_id,
         request.enabled,
@@ -319,6 +352,96 @@ pub fn save_user_on_conn(
         ],
     )?;
     Ok(user)
+}
+
+pub fn request_password_reset_code_on_conn(
+    conn: &rusqlite::Connection,
+    request: RequestPasswordResetCodeRequest,
+) -> AppResult<RequestPasswordResetCodeResponse> {
+    let username = request.username.trim();
+    if username.is_empty() {
+        return Err(AppError::Validation("请输入用户名".to_string()));
+    }
+    let Some((user, _hash)) = user_repository::find_user_by_username(conn, username)? else {
+        return Err(AppError::Validation("用户不存在或未绑定邮箱".to_string()));
+    };
+    if !user.enabled {
+        return Err(AppError::Validation("用户已停用".to_string()));
+    }
+    let email = user
+        .email
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::Validation("用户未绑定邮箱，请联系管理员重置密码".to_string()))?;
+    validate_email(email)?;
+    let smtp = smtp_settings_from_conn(conn)?;
+    if !smtp.enabled {
+        return Err(AppError::Validation(
+            "系统未开启邮箱验证码，请联系管理员配置 SMTP".to_string(),
+        ));
+    }
+
+    let code = format!("{:06}", rand::thread_rng().gen_range(0..1_000_000));
+    let code_hash = hash_password(&code)?;
+    let expires_at = (chrono::Utc::now()
+        + chrono::Duration::minutes(PASSWORD_RESET_EXPIRES_MINUTES))
+    .naive_utc()
+    .format("%Y-%m-%d %H:%M:%S")
+    .to_string();
+    user_repository::create_password_reset_code(conn, &user.id, &code_hash, &expires_at)?;
+    send_password_reset_email(&smtp, email, &user.display_name, &code)?;
+    conn.execute(
+        "INSERT INTO audit_logs (id, action, entity_type, entity_id, summary, operator)
+         VALUES (?1, 'request_password_reset', 'user', ?2, ?3, 'system')",
+        params![
+            uuid::Uuid::new_v4().to_string(),
+            user.id,
+            format!("发送密码找回验证码：{}", user.username)
+        ],
+    )?;
+    Ok(RequestPasswordResetCodeResponse {
+        masked_email: mask_email(email),
+        expires_minutes: PASSWORD_RESET_EXPIRES_MINUTES,
+    })
+}
+
+pub fn reset_password_with_code_on_conn(
+    conn: &rusqlite::Connection,
+    request: ResetPasswordWithCodeRequest,
+) -> AppResult<()> {
+    let username = request.username.trim();
+    let code = request.code.trim();
+    if username.is_empty() {
+        return Err(AppError::Validation("请输入用户名".to_string()));
+    }
+    if code.len() != 6 || !code.chars().all(|item| item.is_ascii_digit()) {
+        return Err(AppError::Validation("验证码必须是 6 位数字".to_string()));
+    }
+    if request.new_password.len() < 6 {
+        return Err(AppError::Validation("新密码至少 6 位".to_string()));
+    }
+    let Some((code_id, user_id, stored_username, code_hash)) =
+        user_repository::find_active_password_reset_code(conn, username)?
+    else {
+        return Err(AppError::Validation("验证码无效或已过期".to_string()));
+    };
+    if !verify_password(code, &code_hash) {
+        return Err(AppError::Validation("验证码错误".to_string()));
+    }
+    let next_hash = hash_password(&request.new_password)?;
+    user_repository::update_password_hash(conn, &user_id, &next_hash)?;
+    user_repository::mark_password_reset_code_used(conn, &code_id)?;
+    conn.execute(
+        "INSERT INTO audit_logs (id, action, entity_type, entity_id, summary, operator)
+         VALUES (?1, 'reset_password_with_code', 'user', ?2, ?3, 'system')",
+        params![
+            uuid::Uuid::new_v4().to_string(),
+            user_id,
+            format!("通过邮箱验证码重置密码：{}", stored_username)
+        ],
+    )?;
+    Ok(())
 }
 
 pub fn set_user_enabled_on_conn(
@@ -460,6 +583,102 @@ fn client_has_pairing_token(state: &AppState) -> AppResult<bool> {
         .is_some_and(|token| !token.trim().is_empty()))
 }
 
+struct SmtpSettings {
+    enabled: bool,
+    host: String,
+    port: u16,
+    username: String,
+    password: String,
+    from_email: String,
+    from_name: String,
+}
+
+fn smtp_settings_from_conn(conn: &rusqlite::Connection) -> AppResult<SmtpSettings> {
+    let enabled = repository::get_setting(conn, "smtp_enabled")?
+        .as_deref()
+        .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
+    let port = repository::get_setting(conn, "smtp_port")?
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(465);
+    Ok(SmtpSettings {
+        enabled,
+        host: repository::get_setting(conn, "smtp_host")?.unwrap_or_default(),
+        port,
+        username: repository::get_setting(conn, "smtp_username")?.unwrap_or_default(),
+        password: repository::get_setting(conn, "smtp_password")?.unwrap_or_default(),
+        from_email: repository::get_setting(conn, "smtp_from_email")?.unwrap_or_default(),
+        from_name: repository::get_setting(conn, "smtp_from_name")?
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "Aster".to_string()),
+    })
+}
+
+fn send_password_reset_email(
+    settings: &SmtpSettings,
+    recipient: &str,
+    display_name: &str,
+    code: &str,
+) -> AppResult<()> {
+    if settings.host.trim().is_empty()
+        || settings.username.trim().is_empty()
+        || settings.password.is_empty()
+        || settings.from_email.trim().is_empty()
+    {
+        return Err(AppError::Validation(
+            "SMTP 配置不完整，请在系统设置中配置发件邮箱".to_string(),
+        ));
+    }
+    let from = format!(
+        "{} <{}>",
+        settings.from_name.trim(),
+        settings.from_email.trim()
+    )
+    .parse()
+    .map_err(|error| AppError::Validation(format!("发件邮箱格式错误：{error}")))?;
+    let to = recipient
+        .parse()
+        .map_err(|error| AppError::Validation(format!("收件邮箱格式错误：{error}")))?;
+    let email = lettre::Message::builder()
+        .from(from)
+        .to(to)
+        .subject("Aster 密码找回验证码")
+        .body(format!(
+            "{display_name}，您好：\n\n您的 Aster 密码找回验证码是：{code}\n验证码将在 {PASSWORD_RESET_EXPIRES_MINUTES} 分钟后失效。如非本人操作，请忽略本邮件。\n\nAster"
+        ))
+        .map_err(|error| AppError::Validation(format!("邮件内容生成失败：{error}")))?;
+    let credentials = lettre::transport::smtp::authentication::Credentials::new(
+        settings.username.clone(),
+        settings.password.clone(),
+    );
+    let builder = if settings.port == 465 {
+        lettre::SmtpTransport::relay(settings.host.trim())
+    } else {
+        lettre::SmtpTransport::starttls_relay(settings.host.trim())
+    }
+    .map_err(|error| AppError::Validation(format!("SMTP 主机配置错误：{error}")))?;
+    let mailer = builder.port(settings.port).credentials(credentials).build();
+    lettre::Transport::send(&mailer, &email)
+        .map_err(|error| AppError::Validation(format!("验证码邮件发送失败：{error}")))?;
+    Ok(())
+}
+
+fn validate_email(email: &str) -> AppResult<()> {
+    let trimmed = email.trim();
+    if trimmed.contains('@') && trimmed.split('@').all(|part| !part.is_empty()) {
+        Ok(())
+    } else {
+        Err(AppError::Validation("邮箱格式不正确".to_string()))
+    }
+}
+
+fn mask_email(email: &str) -> String {
+    let Some((name, domain)) = email.split_once('@') else {
+        return "***".to_string();
+    };
+    let prefix: String = name.chars().take(2).collect();
+    format!("{prefix}***@{domain}")
+}
+
 fn to_current_user(user: UserAccount) -> CurrentUser {
     let permissions = permissions_for_roles(&user.roles);
     CurrentUser {
@@ -565,6 +784,7 @@ mod tests {
                 id: None,
                 username: "warehouse01".to_string(),
                 display_name: "仓库员 01".to_string(),
+                email: None,
                 password: Some("secret123".to_string()),
                 department_id: None,
                 enabled: true,
@@ -611,6 +831,7 @@ mod tests {
                 id: None,
                 username: "viewer-missing-dept".to_string(),
                 display_name: "未绑部门查看员".to_string(),
+                email: None,
                 password: Some("secret123".to_string()),
                 department_id: None,
                 enabled: true,
@@ -627,6 +848,7 @@ mod tests {
                 id: None,
                 username: "viewer-disabled-dept".to_string(),
                 display_name: "停用部门查看员".to_string(),
+                email: None,
                 password: Some("secret123".to_string()),
                 department_id: Some("dept-disabled-user-test".to_string()),
                 enabled: true,
@@ -652,6 +874,7 @@ mod tests {
                 id: Some("user-admin".to_string()),
                 username: "admin".to_string(),
                 display_name: "系统管理员".to_string(),
+                email: None,
                 password: None,
                 department_id: None,
                 enabled: true,
@@ -679,6 +902,7 @@ mod tests {
                 id: None,
                 username: "admin02".to_string(),
                 display_name: "管理员 02".to_string(),
+                email: None,
                 password: Some("secret123".to_string()),
                 department_id: None,
                 enabled: true,
@@ -794,6 +1018,7 @@ mod tests {
                         id: None,
                         username: "warehouse01".to_string(),
                         display_name: "仓库员 01".to_string(),
+                        email: None,
                         password: Some("secret123".to_string()),
                         department_id: None,
                         enabled: true,

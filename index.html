@@ -5,6 +5,41 @@
     <link rel="icon" type="image/png" href="/tauri.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Aster</title>
+    <script>
+      (() => {
+        try {
+          const raw = window.localStorage.getItem("aster.appearance");
+          const settings = raw ? JSON.parse(raw) : {};
+          const themeMode = settings.themeMode === "dark" || settings.themeMode === "light"
+            ? settings.themeMode
+            : "auto";
+          const theme = themeMode === "auto"
+            ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+            : themeMode;
+          const glassStyle = settings.liquidGlassStyle === "transparent"
+            ? "transparent"
+            : "tinted";
+          const accent = /^#[0-9a-fA-F]{6}$/.test(settings.accentColor ?? "")
+            ? settings.accentColor.toLowerCase()
+            : "#2f6dff";
+          const normalized = accent.replace("#", "");
+          const red = parseInt(normalized.slice(0, 2), 16) / 255;
+          const green = parseInt(normalized.slice(2, 4), 16) / 255;
+          const blue = parseInt(normalized.slice(4, 6), 16) / 255;
+          const contrast = 0.2126 * red + 0.7152 * green + 0.0722 * blue > 0.66
+            ? "#101114"
+            : "#ffffff";
+          document.documentElement.dataset.theme = theme;
+          document.documentElement.dataset.glassStyle = glassStyle;
+          document.documentElement.style.setProperty("--accent", accent);
+          document.documentElement.style.setProperty("--accent-contrast", contrast);
+          document.documentElement.lang = settings.locale === "en-US" ? "en-US" : "zh-CN";
+        } catch {
+          document.documentElement.dataset.theme = "light";
+          document.documentElement.dataset.glassStyle = "tinted";
+        }
+      })();
+    </script>
   </head>
 
   <body>

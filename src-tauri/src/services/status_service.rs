@@ -127,6 +127,15 @@ pub fn system_settings_from_conn(
         auto_backup_enabled: setting_bool(conn, "auto_backup_enabled", true)?,
         interval_backup_enabled: setting_bool(conn, "interval_backup_enabled", true)?,
         interval_backup_hours: setting_i64(conn, "interval_backup_hours", 6, 1, 168)?,
+        smtp_enabled: setting_bool(conn, "smtp_enabled", false)?,
+        smtp_host: setting_or(conn, "smtp_host", "")?,
+        smtp_port: setting_i64(conn, "smtp_port", 465, 1, 65535)?,
+        smtp_username: setting_or(conn, "smtp_username", "")?,
+        smtp_from_email: setting_or(conn, "smtp_from_email", "")?,
+        smtp_from_name: setting_or(conn, "smtp_from_name", "Aster")?,
+        smtp_password_configured: repository::get_setting(conn, "smtp_password")?
+            .as_deref()
+            .is_some_and(|value| !value.is_empty()),
     })
 }
 
@@ -185,6 +194,18 @@ pub fn save_system_settings(
             "interval_backup_hours",
             &request.interval_backup_hours.to_string(),
         )?;
+        repository::set_setting(conn, "smtp_enabled", bool_setting(request.smtp_enabled))?;
+        repository::set_setting(conn, "smtp_host", request.smtp_host.trim())?;
+        repository::set_setting(conn, "smtp_port", &request.smtp_port.to_string())?;
+        repository::set_setting(conn, "smtp_username", request.smtp_username.trim())?;
+        repository::set_setting(conn, "smtp_from_email", request.smtp_from_email.trim())?;
+        repository::set_setting(conn, "smtp_from_name", request.smtp_from_name.trim())?;
+        if let Some(password) = request.smtp_password.as_deref() {
+            let trimmed_password = password.trim();
+            if !trimmed_password.is_empty() {
+                repository::set_setting(conn, "smtp_password", trimmed_password)?;
+            }
+        }
         conn.execute(
             "INSERT INTO audit_logs (id, action, entity_type, entity_id, summary, operator)
              VALUES (?1, 'save_system_settings', 'setting', 'system', ?2, ?3)",
@@ -416,7 +437,30 @@ fn validate_settings(request: &SaveSystemSettingsRequest) -> AppResult<()> {
             "定时备份间隔必须在 1 到 168 小时之间".to_string(),
         ));
     }
+    if !(1..=65535).contains(&request.smtp_port) {
+        return Err(AppError::Validation(
+            "SMTP 端口必须在 1 到 65535 之间".to_string(),
+        ));
+    }
+    if request.smtp_enabled {
+        if request.smtp_host.trim().is_empty() {
+            return Err(AppError::Validation("SMTP 主机不能为空".to_string()));
+        }
+        if request.smtp_username.trim().is_empty() {
+            return Err(AppError::Validation("SMTP 账号不能为空".to_string()));
+        }
+        validate_email_field("发件邮箱", &request.smtp_from_email)?;
+    }
     Ok(())
+}
+
+fn validate_email_field(label: &str, value: &str) -> AppResult<()> {
+    let trimmed = value.trim();
+    if trimmed.contains('@') && trimmed.split('@').all(|part| !part.is_empty()) {
+        Ok(())
+    } else {
+        Err(AppError::Validation(format!("{label}格式不正确")))
+    }
 }
 
 fn validate_month(label: &str, value: &str) -> AppResult<()> {
@@ -563,6 +607,13 @@ mod tests {
                 auto_backup_enabled: false,
                 interval_backup_enabled: true,
                 interval_backup_hours: 2,
+                smtp_enabled: false,
+                smtp_host: String::new(),
+                smtp_port: 465,
+                smtp_username: String::new(),
+                smtp_password: None,
+                smtp_from_email: String::new(),
+                smtp_from_name: "Aster".to_string(),
             },
         )
         .unwrap();
@@ -615,6 +666,13 @@ mod tests {
                 auto_backup_enabled: true,
                 interval_backup_enabled: true,
                 interval_backup_hours: 6,
+                smtp_enabled: false,
+                smtp_host: String::new(),
+                smtp_port: 465,
+                smtp_username: String::new(),
+                smtp_password: None,
+                smtp_from_email: String::new(),
+                smtp_from_name: "Aster".to_string(),
             },
         )
         .unwrap_err();

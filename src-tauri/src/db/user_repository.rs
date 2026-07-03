@@ -18,7 +18,7 @@ pub fn list_roles(conn: &Connection) -> AppResult<Vec<Role>> {
 
 pub fn list_users(conn: &Connection) -> AppResult<Vec<UserAccount>> {
     let mut stmt = conn.prepare(
-        "SELECT u.id, u.username, u.display_name, u.department_id, d.name,
+        "SELECT u.id, u.username, u.display_name, u.email, u.department_id, d.name,
                 u.enabled, u.created_at, u.updated_at
          FROM users u
          LEFT JOIN departments d ON d.id = u.department_id
@@ -29,12 +29,13 @@ pub fn list_users(conn: &Connection) -> AppResult<Vec<UserAccount>> {
             id: row.get(0)?,
             username: row.get(1)?,
             display_name: row.get(2)?,
-            department_id: row.get(3)?,
-            department_name: row.get(4)?,
-            enabled: row.get::<_, i64>(5)? == 1,
+            email: row.get(3)?,
+            department_id: row.get(4)?,
+            department_name: row.get(5)?,
+            enabled: row.get::<_, i64>(6)? == 1,
             roles: Vec::new(),
-            created_at: row.get(6)?,
-            updated_at: row.get(7)?,
+            created_at: row.get(7)?,
+            updated_at: row.get(8)?,
         })
     })?;
     let mut users = collect_rows(rows)?;
@@ -50,7 +51,7 @@ pub fn find_user_by_username(
 ) -> AppResult<Option<(UserAccount, Option<String>)>> {
     let record = conn
         .query_row(
-            "SELECT u.id, u.username, u.display_name, u.password_hash, u.department_id, d.name,
+            "SELECT u.id, u.username, u.display_name, u.email, u.password_hash, u.department_id, d.name,
                     u.enabled, u.created_at, u.updated_at
              FROM users u
              LEFT JOIN departments d ON d.id = u.department_id
@@ -62,14 +63,15 @@ pub fn find_user_by_username(
                         id: row.get(0)?,
                         username: row.get(1)?,
                         display_name: row.get(2)?,
-                        department_id: row.get(4)?,
-                        department_name: row.get(5)?,
-                        enabled: row.get::<_, i64>(6)? == 1,
+                        email: row.get(3)?,
+                        department_id: row.get(5)?,
+                        department_name: row.get(6)?,
+                        enabled: row.get::<_, i64>(7)? == 1,
                         roles: Vec::new(),
-                        created_at: row.get(7)?,
-                        updated_at: row.get(8)?,
+                        created_at: row.get(8)?,
+                        updated_at: row.get(9)?,
                     },
-                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
                 ))
             },
         )
@@ -88,7 +90,7 @@ pub fn find_user_by_id(
 ) -> AppResult<Option<(UserAccount, Option<String>)>> {
     let record = conn
         .query_row(
-            "SELECT u.id, u.username, u.display_name, u.password_hash, u.department_id, d.name,
+            "SELECT u.id, u.username, u.display_name, u.email, u.password_hash, u.department_id, d.name,
                     u.enabled, u.created_at, u.updated_at
              FROM users u
              LEFT JOIN departments d ON d.id = u.department_id
@@ -100,14 +102,15 @@ pub fn find_user_by_id(
                         id: row.get(0)?,
                         username: row.get(1)?,
                         display_name: row.get(2)?,
-                        department_id: row.get(4)?,
-                        department_name: row.get(5)?,
-                        enabled: row.get::<_, i64>(6)? == 1,
+                        email: row.get(3)?,
+                        department_id: row.get(5)?,
+                        department_name: row.get(6)?,
+                        enabled: row.get::<_, i64>(7)? == 1,
                         roles: Vec::new(),
-                        created_at: row.get(7)?,
-                        updated_at: row.get(8)?,
+                        created_at: row.get(8)?,
+                        updated_at: row.get(9)?,
                     },
-                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
                 ))
             },
         )
@@ -125,6 +128,7 @@ pub fn save_user(
     id: Option<String>,
     username: &str,
     display_name: &str,
+    email: Option<String>,
     password_hash: Option<String>,
     department_id: Option<String>,
     enabled: bool,
@@ -134,11 +138,12 @@ pub fn save_user(
     let role_ids = role_ids_for_codes(conn, role_codes)?;
     if let Some(hash) = password_hash {
         conn.execute(
-            "INSERT INTO users (id, username, display_name, password_hash, department_id, enabled)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO users (id, username, display_name, email, password_hash, department_id, enabled)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(id) DO UPDATE SET
                username = excluded.username,
                display_name = excluded.display_name,
+               email = excluded.email,
                password_hash = excluded.password_hash,
                department_id = excluded.department_id,
                enabled = excluded.enabled,
@@ -147,6 +152,7 @@ pub fn save_user(
                 user_id,
                 username,
                 display_name,
+                blank_to_none(email.clone()),
                 hash,
                 blank_to_none(department_id),
                 bool_to_i64(enabled)
@@ -154,11 +160,12 @@ pub fn save_user(
         )?;
     } else {
         conn.execute(
-            "INSERT INTO users (id, username, display_name, department_id, enabled)
-             VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO users (id, username, display_name, email, department_id, enabled)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(id) DO UPDATE SET
                username = excluded.username,
                display_name = excluded.display_name,
+               email = excluded.email,
                department_id = excluded.department_id,
                enabled = excluded.enabled,
                updated_at = CURRENT_TIMESTAMP",
@@ -166,6 +173,7 @@ pub fn save_user(
                 user_id,
                 username,
                 display_name,
+                blank_to_none(email.clone()),
                 blank_to_none(department_id),
                 bool_to_i64(enabled)
             ],
@@ -196,6 +204,55 @@ pub fn update_password_hash(
     conn.execute(
         "UPDATE users SET password_hash = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
         params![password_hash, user_id],
+    )?;
+    Ok(())
+}
+
+pub fn create_password_reset_code(
+    conn: &Connection,
+    user_id: &str,
+    code_hash: &str,
+    expires_at: &str,
+) -> AppResult<()> {
+    conn.execute(
+        "UPDATE password_reset_codes
+         SET used_at = CURRENT_TIMESTAMP
+         WHERE user_id = ?1 AND used_at IS NULL",
+        params![user_id],
+    )?;
+    conn.execute(
+        "INSERT INTO password_reset_codes (id, user_id, code_hash, expires_at)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![Uuid::new_v4().to_string(), user_id, code_hash, expires_at],
+    )?;
+    Ok(())
+}
+
+pub fn find_active_password_reset_code(
+    conn: &Connection,
+    username: &str,
+) -> AppResult<Option<(String, String, String, String)>> {
+    Ok(conn
+        .query_row(
+            "SELECT c.id, u.id, u.username, c.code_hash
+             FROM password_reset_codes c
+             JOIN users u ON u.id = c.user_id
+             WHERE u.username = ?1
+               AND u.enabled = 1
+               AND c.used_at IS NULL
+               AND datetime(c.expires_at) > datetime('now')
+             ORDER BY c.created_at DESC
+             LIMIT 1",
+            params![username],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?)
+}
+
+pub fn mark_password_reset_code_used(conn: &Connection, code_id: &str) -> AppResult<()> {
+    conn.execute(
+        "UPDATE password_reset_codes SET used_at = CURRENT_TIMESTAMP WHERE id = ?1",
+        params![code_id],
     )?;
     Ok(())
 }
@@ -327,6 +384,7 @@ mod tests {
             None,
             "bad-role-user",
             "错误角色用户",
+            None,
             Some("hash".to_string()),
             None,
             true,

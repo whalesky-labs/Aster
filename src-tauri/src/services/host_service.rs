@@ -38,8 +38,9 @@ use crate::domain::stocktake::{
     UpdateStocktakeCountsRequest,
 };
 use crate::domain::users::{
-    ChangePasswordRequest, CurrentUser, LoginRequest, Role, SaveUserRequest, SetUserEnabledRequest,
-    UserAccount,
+    ChangePasswordRequest, CurrentUser, LoginRequest, RequestPasswordResetCodeRequest,
+    RequestPasswordResetCodeResponse, ResetPasswordWithCodeRequest, Role, SaveUserRequest,
+    SetUserEnabledRequest, UserAccount,
 };
 use crate::error::{AppError, AppResult};
 use crate::{app::state::AppState, domain::runtime::RuntimeMode};
@@ -725,6 +726,22 @@ pub fn remote_change_password(state: &AppState, request: ChangePasswordRequest) 
     http_post_json(&config, "/api/user/password", &request)
 }
 
+pub fn remote_request_password_reset_code(
+    state: &AppState,
+    request: RequestPasswordResetCodeRequest,
+) -> AppResult<RequestPasswordResetCodeResponse> {
+    let config = client_runtime_config(state)?;
+    http_post_json(&config, "/api/password-reset/request", &request)
+}
+
+pub fn remote_reset_password_with_code(
+    state: &AppState,
+    request: ResetPasswordWithCodeRequest,
+) -> AppResult<()> {
+    let config = client_runtime_config(state)?;
+    http_post_json(&config, "/api/password-reset/confirm", &request)
+}
+
 fn serve(
     listener: TcpListener,
     runtime: Arc<Mutex<HostServiceRuntime>>,
@@ -944,6 +961,24 @@ fn handle_connection_inner(
                     "client",
                     &current.id,
                 )
+            })?;
+            write_json(stream, 200, &())?;
+        }
+        ("POST", "/api/password-reset/request") => {
+            authenticate_request_and_touch_client(&request, &runtime, &db)?;
+            let request: RequestPasswordResetCodeRequest = serde_json::from_str(body)
+                .map_err(|error| AppError::Validation(format!("找回密码请求解析失败：{error}")))?;
+            let response = db.with_conn(|conn| {
+                crate::services::user_service::request_password_reset_code_on_conn(conn, request)
+            })?;
+            write_json(stream, 200, &response)?;
+        }
+        ("POST", "/api/password-reset/confirm") => {
+            authenticate_request_and_touch_client(&request, &runtime, &db)?;
+            let request: ResetPasswordWithCodeRequest = serde_json::from_str(body)
+                .map_err(|error| AppError::Validation(format!("重置密码请求解析失败：{error}")))?;
+            db.with_conn(|conn| {
+                crate::services::user_service::reset_password_with_code_on_conn(conn, request)
             })?;
             write_json(stream, 200, &())?;
         }

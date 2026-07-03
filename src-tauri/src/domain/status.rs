@@ -68,6 +68,13 @@ pub struct SystemSettings {
     pub auto_backup_enabled: bool,
     pub interval_backup_enabled: bool,
     pub interval_backup_hours: i64,
+    pub smtp_enabled: bool,
+    pub smtp_host: String,
+    pub smtp_port: i64,
+    pub smtp_username: String,
+    pub smtp_from_email: String,
+    pub smtp_from_name: String,
+    pub smtp_password_configured: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -84,6 +91,13 @@ pub struct SaveSystemSettingsRequest {
     pub auto_backup_enabled: bool,
     pub interval_backup_enabled: bool,
     pub interval_backup_hours: i64,
+    pub smtp_enabled: bool,
+    pub smtp_host: String,
+    pub smtp_port: i64,
+    pub smtp_username: String,
+    pub smtp_password: Option<String>,
+    pub smtp_from_email: String,
+    pub smtp_from_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

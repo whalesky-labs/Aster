@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { emitTo, listen } from "@tauri-apps/api/event";
+import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open, type OpenDialogOptions } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { LiquidEtherBackground } from "./components/LiquidEtherBackground";
+import { ColorBendsBackground } from "./components/ColorBendsBackground";
 import { createI18n, type I18n, type LocaleCode } from "./i18n";
 import "./App.css";
 import pantsFrame01 from "./assets/images/pants/pants_01.png";
@@ -16,6 +16,11 @@ import pantsFrame06 from "./assets/images/pants/pants_06.png";
 import pantsFrame07 from "./assets/images/pants/pants_07.png";
 import pantsFrame08 from "./assets/images/pants/pants_08.png";
 import pantsFrame09 from "./assets/images/pants/pants_09.png";
+
+const animatedExpressionModules = import.meta.glob("./assets/images/**/*.png", {
+  eager: true,
+  import: "default",
+}) as Record<string, string>;
 
 type RuntimeMode = "standalone" | "host" | "client";
 type ThemeMode = "auto" | "light" | "dark";
@@ -142,6 +147,7 @@ type UserAccount = {
   id: string;
   username: string;
   displayName: string;
+  email?: string | null;
   departmentId?: string | null;
   departmentName?: string | null;
   enabled: boolean;
@@ -183,6 +189,14 @@ type SystemSettings = {
   autoBackupEnabled: boolean;
   intervalBackupEnabled: boolean;
   intervalBackupHours: number;
+  smtpEnabled: boolean;
+  smtpHost: string;
+  smtpPort: number;
+  smtpUsername: string;
+  smtpPassword?: string | null;
+  smtpFromEmail: string;
+  smtpFromName: string;
+  smtpPasswordConfigured: boolean;
 };
 
 type Category = {
@@ -1076,7 +1090,43 @@ const pantsFrames = [
   pantsFrame09,
 ];
 
+const animatedExpressionGroups = Object.entries(animatedExpressionModules)
+  .filter(([path]) => !path.includes("/._"))
+  .reduce(
+    (groups, [path, src]) => {
+      const parts = path.split("/");
+      const groupName = parts[parts.length - 2];
+      const fileName = parts[parts.length - 1] ?? "";
+      if (!groupName || !/_[0-9]+\.png$/i.test(fileName)) return groups;
+
+      const existing = groups.get(groupName) ?? [];
+      existing.push({ path, src });
+      groups.set(groupName, existing);
+      return groups;
+    },
+    new Map<string, Array<{ path: string; src: string }>>(),
+  );
+
+const animatedExpressions = Array.from(animatedExpressionGroups.entries())
+  .map(([name, frames]) => ({
+    frames: frames
+      .sort((left, right) => left.path.localeCompare(right.path))
+      .map((frame) => frame.src),
+    name,
+  }))
+  .filter((group) => group.frames.length > 0)
+  .sort((left, right) => left.name.localeCompare(right.name));
+
+const loginExpressionItems = [
+  ...animatedExpressions,
+  {
+    frames: pantsFrames,
+    name: "pants-logo",
+  },
+];
+
 const APPEARANCE_STORAGE_KEY = "aster.appearance";
+const APPEARANCE_CHANGED_EVENT = "appearance:changed";
 
 declare global {
   interface Window {
@@ -1232,6 +1282,51 @@ function applyAppearanceSettings(settings: AppearanceSettings) {
     "--accent-contrast",
     resolveAccentContrast(settings.accentColor),
   );
+}
+
+function useSyncedAppearanceSettings(settings?: AppearanceSettings) {
+  useEffect(() => {
+    const appearance = settings ?? loadAppearanceSettings();
+    applyAppearanceSettings(appearance);
+    document.documentElement.lang = appearance.locale;
+    if (settings) {
+      window.localStorage.setItem(
+        APPEARANCE_STORAGE_KEY,
+        JSON.stringify(settings),
+      );
+    }
+  }, [settings]);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleSystemThemeChange = () => {
+      const appearance = settings ?? loadAppearanceSettings();
+      applyAppearanceSettings(appearance);
+    };
+    mediaQuery.addEventListener("change", handleSystemThemeChange);
+    return () =>
+      mediaQuery.removeEventListener("change", handleSystemThemeChange);
+  }, [settings]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<AppearanceSettings>(APPEARANCE_CHANGED_EVENT, (event) => {
+      const appearance = normalizeAppearanceSettings(event.payload);
+      applyAppearanceSettings(appearance);
+      document.documentElement.lang = appearance.locale;
+    }).then((nextUnlisten) => {
+      unlisten = nextUnlisten;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+}
+
+function useBroadcastAppearanceSettings(settings: AppearanceSettings) {
+  useEffect(() => {
+    void emit(APPEARANCE_CHANGED_EVENT, settings);
+  }, [settings]);
 }
 
 function effectiveLineAmount(line: {
@@ -1441,6 +1536,31 @@ function editorUrl(params: Record<string, string | undefined>) {
   return `${window.location.pathname}?${search.toString()}`;
 }
 
+function editorWindowSize(editor: EditorKind) {
+  const compactEditors: EditorKind[] = [
+    "department",
+    "category",
+    "unit",
+    "supplier",
+    "budget",
+    "changePassword",
+    "secondBackupDir",
+  ];
+  if (compactEditors.includes(editor)) {
+    return { width: 620, height: 380, minWidth: 520, minHeight: 320 };
+  }
+  if (editor === "item" || editor === "user" || editor === "businessSettings") {
+    return { width: 760, height: 560, minWidth: 640, minHeight: 420 };
+  }
+  if (editor === "clientConnection" || editor === "restoreBackup") {
+    return { width: 720, height: 560, minWidth: 620, minHeight: 420 };
+  }
+  if (editor === "clientPairing") {
+    return { width: 620, height: 420, minWidth: 520, minHeight: 340 };
+  }
+  return { width: 860, height: 720, minWidth: 680, minHeight: 560 };
+}
+
 async function bringEditorWindowToFront(windowRef: WebviewWindow) {
   if (await windowRef.isMinimized()) {
     await windowRef.unminimize();
@@ -1485,11 +1605,12 @@ async function openEditorWindow(
   }
   openingEditorWindows.add(label);
   try {
+    const size = editorWindowSize(editor);
     const windowRef = new WebviewWindow(label, {
       center: true,
-      height: options.height ?? 720,
-      minHeight: 560,
-      minWidth: 680,
+      height: options.height ?? size.height,
+      minHeight: size.minHeight,
+      minWidth: size.minWidth,
       resizable: true,
       title,
       url: editorUrl({
@@ -1499,7 +1620,7 @@ async function openEditorWindow(
         mode,
         ...options.extra,
       }),
-      width: options.width ?? 860,
+      width: options.width ?? size.width,
     });
     await new Promise<void>((resolve) => {
       windowRef.once("tauri://created", () => resolve());
@@ -1539,7 +1660,34 @@ function PantsLogo() {
   );
 }
 
+function AnimatedExpressionWall() {
+  const [frameIndex, setFrameIndex] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setFrameIndex((current) => current + 1);
+    }, 130);
+
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="login-expression-wall" aria-hidden="true">
+      {loginExpressionItems.map((expression, index) => (
+        <div className="login-expression-item" key={expression.name}>
+          <img
+            alt=""
+            draggable={false}
+            src={expression.frames[(frameIndex + index * 2) % expression.frames.length]}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function App() {
+  useSyncedAppearanceSettings();
   const editorParams = new URLSearchParams(window.location.search);
   const editorKind = editorParams.get("editor") as EditorKind | null;
   if (editorKind) {
@@ -1568,6 +1716,8 @@ function MainApp() {
     () => createI18n(appearanceSettings.locale),
     [appearanceSettings.locale],
   );
+  useSyncedAppearanceSettings(appearanceSettings);
+  useBroadcastAppearanceSettings(appearanceSettings);
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [userAccounts, setUserAccounts] = useState<UserAccount[]>([]);
@@ -1645,25 +1795,6 @@ function MainApp() {
   const [clientConnectionCheckedAt, setClientConnectionCheckedAt] = useState<
     string | null
   >(null);
-
-  useEffect(() => {
-    applyAppearanceSettings(appearanceSettings);
-    document.documentElement.lang = appearanceSettings.locale;
-    window.localStorage.setItem(
-      APPEARANCE_STORAGE_KEY,
-      JSON.stringify(appearanceSettings),
-    );
-  }, [appearanceSettings]);
-
-  useEffect(() => {
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    const handleSystemThemeChange = () => {
-      setAppearanceSettings((current) => ({ ...current }));
-    };
-    mediaQuery.addEventListener("change", handleSystemThemeChange);
-    return () =>
-      mediaQuery.removeEventListener("change", handleSystemThemeChange);
-  }, []);
 
   function clearBusinessState() {
     setCategories([]);
@@ -1753,16 +1884,6 @@ function MainApp() {
       } else {
         clearSessionScopedState();
       }
-    } catch (err) {
-      setError(formatError(err));
-    }
-  }
-
-  async function refreshLoginStatus() {
-    try {
-      setError(null);
-      const nextStatus = await invoke<AppStatus>("get_app_status");
-      setStatus(nextStatus);
     } catch (err) {
       setError(formatError(err));
     }
@@ -2272,6 +2393,47 @@ function MainApp() {
     }
   }
 
+  async function requestPasswordResetCode(username: string) {
+    try {
+      setIsLoginPending(true);
+      setError(null);
+      setNotice(null);
+      const result = await invoke<{ maskedEmail: string; expiresMinutes: number }>(
+        "request_password_reset_code",
+        { request: { username } },
+      );
+      setNotice(
+        `验证码已发送至 ${result.maskedEmail}，${result.expiresMinutes} 分钟内有效。`,
+      );
+    } catch (err) {
+      setError(formatError(err));
+      throw err;
+    } finally {
+      setIsLoginPending(false);
+    }
+  }
+
+  async function resetPasswordWithCode(
+    username: string,
+    code: string,
+    newPassword: string,
+  ) {
+    try {
+      setIsLoginPending(true);
+      setError(null);
+      setNotice(null);
+      await invoke("reset_password_with_code", {
+        request: { username, code, newPassword },
+      });
+      setNotice("密码已重置，请使用新密码登录。");
+    } catch (err) {
+      setError(formatError(err));
+      throw err;
+    } finally {
+      setIsLoginPending(false);
+    }
+  }
+
   async function logoutUser() {
     try {
       await invoke("logout");
@@ -2455,8 +2617,8 @@ function MainApp() {
         isLoginPending={isLoginPending}
         notice={notice}
         onLogin={loginUser}
-        onRefresh={refreshLoginStatus}
-        status={status}
+        onRequestPasswordResetCode={requestPasswordResetCode}
+        onResetPasswordWithCode={resetPasswordWithCode}
       />
     );
   }
@@ -3091,75 +3253,80 @@ function LoginScreen({
   isLoginPending,
   notice,
   onLogin,
-  onRefresh,
-  status,
+  onRequestPasswordResetCode,
+  onResetPasswordWithCode,
 }: {
   error: string | null;
   i18n?: I18n;
   isLoginPending: boolean;
   notice: string | null;
   onLogin: (username: string, password: string) => Promise<void>;
-  onRefresh: () => Promise<void>;
-  status: AppStatus | null;
+  onRequestPasswordResetCode: (username: string) => Promise<void>;
+  onResetPasswordWithCode: (
+    username: string,
+    code: string,
+    newPassword: string,
+  ) => Promise<void>;
 }) {
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
+  const [isResetOpen, setIsResetOpen] = useState(false);
+  const [resetCode, setResetCode] = useState("");
+  const [resetPassword, setResetPassword] = useState("");
+  const canResetPassword =
+    username.trim() && resetCode.trim().length === 6 && resetPassword.length >= 6;
 
   function submitLogin(event: React.FormEvent) {
     event.preventDefault();
     void onLogin(username, password);
   }
 
+  async function submitResetCode() {
+    await onRequestPasswordResetCode(username);
+    setResetCode("");
+    setResetPassword("");
+  }
+
+  async function submitResetPassword(event: React.FormEvent) {
+    event.preventDefault();
+    await onResetPasswordWithCode(username, resetCode, resetPassword);
+    setIsResetOpen(false);
+    setPassword("");
+    setResetCode("");
+    setResetPassword("");
+  }
+
   return (
     <main className="login-shell">
       <section className="login-brand-panel">
-        <LiquidEtherBackground className="login-liquid-bg" />
+        <ColorBendsBackground
+          bandWidth={6}
+          className="login-color-bends-bg"
+          colors={["#ff5c7a", "#8a5cff", "#00ffd1"]}
+          frequency={1}
+          intensity={1.5}
+          iterations={1}
+          mouseInfluence={1}
+          noise={0.15}
+          parallax={0.5}
+          rotation={90}
+          scale={1}
+          speed={0.2}
+          transparent
+          warpStrength={1}
+        />
         <div className="login-brand-content">
-          <div className="login-brand-lockup">
-            <PantsLogo />
-            <div>
-              <strong>Aster</strong>
-              <span>{i18n.t("login.productTagline")}</span>
-            </div>
-          </div>
+          <AnimatedExpressionWall />
           <div className="login-copy">
             <h1>{i18n.t("login.title")}</h1>
             <p>{i18n.t("login.description")}</p>
           </div>
-          <dl className="login-status-list">
-            <div>
-              <dt>{i18n.t("login.runtimeMode")}</dt>
-              <dd>
-                {status
-                  ? modeLabel(status.runtime.mode, i18n)
-                  : i18n.t("login.reading")}
-              </dd>
-            </div>
-            <div>
-              <dt>{i18n.t("login.database")}</dt>
-              <dd>
-                {status?.health.databaseOk
-                  ? i18n.t("login.databaseHealthy")
-                  : i18n.t("login.databasePending")}
-              </dd>
-            </div>
-            <div>
-              <dt>{i18n.t("login.version")}</dt>
-              <dd>{status?.appVersion ?? "0.1.0"}</dd>
-            </div>
-          </dl>
         </div>
       </section>
 
       <section className="login-card">
         <div className="login-card-header">
-          <div>
-            <h2>{i18n.t("login.accountLogin")}</h2>
-            <p>{i18n.t("login.defaultAdmin")}</p>
-          </div>
-          <button className="ghost-button" onClick={onRefresh}>
-            {i18n.t("login.refreshStatus")}
-          </button>
+          <h2>{i18n.t("login.accountLogin")}</h2>
         </div>
 
         {error ? (
@@ -3196,6 +3363,57 @@ function LoginScreen({
             {isLoginPending ? i18n.t("login.loggingIn") : i18n.t("login.login")}
           </button>
         </form>
+        <div className="login-reset-panel">
+          <button
+            className="link-button login-reset-toggle"
+            disabled={isLoginPending}
+            onClick={() => setIsResetOpen((value) => !value)}
+            type="button"
+          >
+            {isResetOpen ? i18n.t("login.backToLogin") : i18n.t("login.forgotPassword")}
+          </button>
+          {isResetOpen ? (
+            <form className="login-form" onSubmit={submitResetPassword}>
+              <p className="login-reset-hint">{i18n.t("login.resetHint")}</p>
+              <button
+                className="ghost-button"
+                disabled={isLoginPending || !username.trim()}
+                onClick={() => void submitResetCode()}
+                type="button"
+              >
+                {i18n.t("login.sendCode")}
+              </button>
+              <Field label={i18n.t("login.resetCode")}>
+                <input
+                  autoComplete="one-time-code"
+                  disabled={isLoginPending}
+                  inputMode="numeric"
+                  maxLength={6}
+                  value={resetCode}
+                  onChange={(event) =>
+                    setResetCode(event.target.value.replace(/\D/g, "").slice(0, 6))
+                  }
+                />
+              </Field>
+              <Field label={i18n.t("login.newPassword")}>
+                <input
+                  autoComplete="new-password"
+                  disabled={isLoginPending}
+                  type="password"
+                  value={resetPassword}
+                  onChange={(event) => setResetPassword(event.target.value)}
+                />
+              </Field>
+              <button
+                className="primary-button login-submit"
+                disabled={isLoginPending || !canResetPassword}
+                type="submit"
+              >
+                {i18n.t("login.resetPassword")}
+              </button>
+            </form>
+          ) : null}
+        </div>
       </section>
     </main>
   );
@@ -3805,12 +4023,11 @@ function ItemEditor({
       saveLabel="保存物品"
       onSave={() => onSave(draft)}
     >
-      <Field label="编码">
-        <input
-          value={draft.code}
-          onChange={(e) => setDraft({ ...draft, code: e.target.value })}
-        />
-      </Field>
+      {mode === "edit" ? (
+        <Field label="编码">
+          <input value={draft.code || "系统生成"} readOnly />
+        </Field>
+      ) : null}
       <Field label="条码">
         <input
           value={draft.barcode}
@@ -4346,6 +4563,7 @@ function UserEditor({
     id?: string;
     username: string;
     displayName: string;
+    email?: string | null;
     password?: string | null;
     departmentId?: string | null;
     enabled: boolean;
@@ -4358,6 +4576,7 @@ function UserEditor({
     id: undefined as string | undefined,
     username: "",
     displayName: "",
+    email: "",
     password: "",
     departmentId: "",
     enabled: true,
@@ -4370,6 +4589,7 @@ function UserEditor({
         id: user.id,
         username: user.username,
         displayName: user.displayName,
+        email: user.email ?? "",
         password: "",
         departmentId: user.departmentId ?? "",
         enabled: user.enabled,
@@ -4392,6 +4612,7 @@ function UserEditor({
       onSave={() =>
         onSave({
           ...draft,
+          email: draft.email.trim() ? draft.email.trim() : null,
           departmentId: draft.departmentId || null,
           password: draft.password.trim() ? draft.password : null,
         })
@@ -4407,6 +4628,13 @@ function UserEditor({
         <input
           value={draft.displayName}
           onChange={(e) => setDraft({ ...draft, displayName: e.target.value })}
+        />
+      </Field>
+      <Field label="邮箱">
+        <input
+          autoComplete="email"
+          value={draft.email}
+          onChange={(e) => setDraft({ ...draft, email: e.target.value })}
         />
       </Field>
       <Field label={draft.id ? "新密码" : "初始密码"}>
@@ -4509,6 +4737,14 @@ function BusinessSettingsEditor({
       autoBackupEnabled: true,
       intervalBackupEnabled: false,
       intervalBackupHours: 24,
+      smtpEnabled: false,
+      smtpHost: "",
+      smtpPort: 465,
+      smtpUsername: "",
+      smtpPassword: "",
+      smtpFromEmail: "",
+      smtpFromName: "Aster",
+      smtpPasswordConfigured: false,
     },
   );
 
@@ -4635,6 +4871,71 @@ function BusinessSettingsEditor({
         />
         运行中定时备份
       </label>
+      <label className="checkbox-field">
+        <input
+          checked={draft.smtpEnabled}
+          onChange={(event) =>
+            setDraft({ ...draft, smtpEnabled: event.target.checked })
+          }
+          type="checkbox"
+        />
+        启用邮箱验证码找回密码
+      </label>
+      <Field label="SMTP 主机">
+        <input
+          placeholder="smtp.example.com"
+          value={draft.smtpHost}
+          onChange={(event) => setDraft({ ...draft, smtpHost: event.target.value })}
+        />
+      </Field>
+      <Field label="SMTP 端口">
+        <input
+          max="65535"
+          min="1"
+          type="number"
+          value={draft.smtpPort}
+          onChange={(event) =>
+            setDraft({ ...draft, smtpPort: Number(event.target.value) })
+          }
+        />
+      </Field>
+      <Field label="SMTP 账号">
+        <input
+          autoComplete="username"
+          value={draft.smtpUsername}
+          onChange={(event) =>
+            setDraft({ ...draft, smtpUsername: event.target.value })
+          }
+        />
+      </Field>
+      <Field label="SMTP 授权码">
+        <input
+          autoComplete="new-password"
+          placeholder={draft.smtpPasswordConfigured ? "已配置，留空不修改" : ""}
+          type="password"
+          value={draft.smtpPassword ?? ""}
+          onChange={(event) =>
+            setDraft({ ...draft, smtpPassword: event.target.value })
+          }
+        />
+      </Field>
+      <Field label="发件邮箱">
+        <input
+          autoComplete="email"
+          value={draft.smtpFromEmail}
+          onChange={(event) =>
+            setDraft({ ...draft, smtpFromEmail: event.target.value })
+          }
+        />
+      </Field>
+      <Field label="发件名称">
+        <input
+          value={draft.smtpFromName}
+          onChange={(event) =>
+            setDraft({ ...draft, smtpFromName: event.target.value })
+          }
+        />
+      </Field>
     </EditorForm>
   );
 }
@@ -6348,6 +6649,7 @@ function UsersPage({
           <tr>
             <th>用户名</th>
             <th>显示名称</th>
+            <th>邮箱</th>
             <th>所属部门</th>
             <th>角色</th>
             <th>状态</th>
@@ -6359,6 +6661,7 @@ function UsersPage({
             <tr key={user.id}>
               <td>{user.username}</td>
               <td>{user.displayName}</td>
+              <td>{user.email ?? "-"}</td>
               <td>{user.departmentName ?? "-"}</td>
               <td>{user.roles.map((role) => role.name).join("、") || "-"}</td>
               <td>
@@ -6378,7 +6681,7 @@ function UsersPage({
               </td>
             </tr>
           ))}
-          {users.length === 0 ? <EmptyRow colSpan={6} /> : null}
+          {users.length === 0 ? <EmptyRow colSpan={7} /> : null}
         </tbody>
       </table>
     </section>
@@ -6749,25 +7052,47 @@ function SuppliersPage({
   purchaseRecords: SupplierPurchaseRecord[];
   suppliers: Supplier[];
 }) {
+  const [activeTab, setActiveTab] = useState<"suppliers" | "purchases">(
+    "suppliers",
+  );
+
+  async function openPurchaseRecords(supplier: Supplier) {
+    await onSelect(supplier);
+    setActiveTab("purchases");
+  }
+
   return (
     <MasterTablePanel
       actions={
-        <button
-          className="primary-button"
-          disabled={!canWrite}
-          onClick={() => openEditorWindow("supplier")}
-        >
-          新增供应商
-        </button>
+        <div className="supplier-toolbar">
+          <div className="segmented supplier-tabs">
+            <button
+              className={activeTab === "suppliers" ? "selected" : ""}
+              onClick={() => setActiveTab("suppliers")}
+            >
+              供应商档案
+            </button>
+            <button
+              className={activeTab === "purchases" ? "selected" : ""}
+              onClick={() => setActiveTab("purchases")}
+            >
+              采购记录
+            </button>
+          </div>
+          <button
+            className="primary-button"
+            disabled={!canWrite}
+            onClick={() => openEditorWindow("supplier")}
+          >
+            新增供应商
+          </button>
+        </div>
       }
       description="供应商用于入库单和采购记录查询。"
       hideHeading
       title="供应商管理"
     >
-      <div className="subtable">
-        <div className="subtable-heading">
-          <h3>供应商列表</h3>
-        </div>
+      {activeTab === "suppliers" ? (
         <table>
           <thead>
             <tr>
@@ -6809,59 +7134,61 @@ function SuppliersPage({
                   >
                     {item.enabled ? "停用" : "启用"}
                   </button>
-                  <button onClick={() => onSelect(item)}>采购记录</button>
+                  <button onClick={() => void openPurchaseRecords(item)}>
+                    采购记录
+                  </button>
                 </td>
               </tr>
             ))}
             {suppliers.length === 0 ? <EmptyRow colSpan={6} /> : null}
           </tbody>
         </table>
-      </div>
-
-      <div className="subtable">
-        <div className="subtable-heading">
-          <h3>
-            {activeSupplier
-              ? `${activeSupplier.name} 采购记录`
-              : "供应商采购记录"}
-          </h3>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th>日期</th>
-              <th>单号</th>
-              <th>物品</th>
-              <th>规格</th>
-              <th>单位</th>
-              <th>数量</th>
-              <th>单价</th>
-              <th>金额</th>
-              <th>备注</th>
-            </tr>
-          </thead>
-          <tbody>
-            {purchaseRecords.map((record, index) => (
-              <tr
-                key={`${record.documentNo ?? "doc"}-${record.itemCode}-${index}`}
-              >
-                <td>{record.movementDate}</td>
-                <td>{record.documentNo ?? "-"}</td>
-                <td>
-                  {record.itemCode} · {record.itemName}
-                </td>
-                <td>{record.spec ?? "-"}</td>
-                <td>{record.unitName ?? "-"}</td>
-                <td>{record.quantity}</td>
-                <td>{formatMoney(record.unitPrice)}</td>
-                <td>{formatMoney(record.amount)}</td>
-                <td>{record.remark ?? "-"}</td>
+      ) : (
+        <div className="subtable supplier-purchase-panel">
+          <div className="subtable-heading">
+            <h3>
+              {activeSupplier
+                ? `${activeSupplier.name} 采购记录`
+                : "供应商采购记录"}
+            </h3>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>日期</th>
+                <th>单号</th>
+                <th>物品</th>
+                <th>规格</th>
+                <th>单位</th>
+                <th>数量</th>
+                <th>单价</th>
+                <th>金额</th>
+                <th>备注</th>
               </tr>
-            ))}
-            {purchaseRecords.length === 0 ? <EmptyRow colSpan={9} /> : null}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {purchaseRecords.map((record, index) => (
+                <tr
+                  key={`${record.documentNo ?? "doc"}-${record.itemCode}-${index}`}
+                >
+                  <td>{record.movementDate}</td>
+                  <td>{record.documentNo ?? "-"}</td>
+                  <td>
+                    {record.itemCode} · {record.itemName}
+                  </td>
+                  <td>{record.spec ?? "-"}</td>
+                  <td>{record.unitName ?? "-"}</td>
+                  <td>{record.quantity}</td>
+                  <td>{formatMoney(record.unitPrice)}</td>
+                  <td>{formatMoney(record.amount)}</td>
+                  <td>{record.remark ?? "-"}</td>
+                </tr>
+              ))}
+              {purchaseRecords.length === 0 ? <EmptyRow colSpan={9} /> : null}
+            </tbody>
+          </table>
+        </div>
+      )}
     </MasterTablePanel>
   );
 }
@@ -9633,7 +9960,7 @@ function MasterTablePanel({
             <span className="table-note">{description}</span>
           </div>
         )}
-        {actions}
+        {actions ? <div className="toolbar-actions">{actions}</div> : null}
       </div>
       {children}
     </section>

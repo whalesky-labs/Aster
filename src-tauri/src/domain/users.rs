@@ -14,6 +14,7 @@ pub struct UserAccount {
     pub id: String,
     pub username: String,
     pub display_name: String,
+    pub email: Option<String>,
     pub department_id: Option<String>,
     pub department_name: Option<String>,
     pub enabled: bool,
@@ -47,6 +48,7 @@ pub struct SaveUserRequest {
     pub id: Option<String>,
     pub username: String,
     pub display_name: String,
+    pub email: Option<String>,
     pub password: Option<String>,
     pub department_id: Option<String>,
     pub enabled: bool,
@@ -58,6 +60,27 @@ pub struct SaveUserRequest {
 pub struct ChangePasswordRequest {
     pub user_id: Option<String>,
     pub old_password: Option<String>,
+    pub new_password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestPasswordResetCodeRequest {
+    pub username: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestPasswordResetCodeResponse {
+    pub masked_email: String,
+    pub expires_minutes: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResetPasswordWithCodeRequest {
+    pub username: String,
+    pub code: String,
     pub new_password: String,
 }
 

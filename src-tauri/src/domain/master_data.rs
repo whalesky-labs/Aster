@@ -140,7 +140,7 @@ pub struct Item {
 pub struct SaveItemRequest {
     pub id: Option<String>,
     pub expected_updated_at: Option<String>,
-    pub code: String,
+    pub code: Option<String>,
     pub barcode: Option<String>,
     pub name: String,
     pub category_id: Option<String>,

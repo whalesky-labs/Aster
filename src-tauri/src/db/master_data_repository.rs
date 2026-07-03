@@ -411,6 +411,18 @@ pub fn list_items(conn: &Connection, search: Option<String>) -> AppResult<Vec<It
 pub fn save_item(conn: &Connection, request: SaveItemRequest) -> AppResult<Item> {
     let id = request.id.unwrap_or_else(new_id);
     let is_update = record_exists(conn, "master_items", &id)?;
+    let code = match request
+        .code
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(code) => code.to_string(),
+        None if is_update => {
+            return Err(AppError::Validation("物品编码不能为空".to_string()));
+        }
+        None => next_item_code(conn)?,
+    };
     let category_id = blank_to_none(request.category_id);
     let unit_id = blank_to_none(request.unit_id);
     let supplier_id = blank_to_none(request.supplier_id);
@@ -432,7 +444,7 @@ pub fn save_item(conn: &Connection, request: SaveItemRequest) -> AppResult<Item>
                  updated_at = ?12
              WHERE id = ?13",
             params![
-                request.code.trim(),
+                code,
                 blank_to_none(request.barcode),
                 request.name.trim(),
                 category_id,
@@ -456,7 +468,7 @@ pub fn save_item(conn: &Connection, request: SaveItemRequest) -> AppResult<Item>
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 id,
-                request.code.trim(),
+                code,
                 blank_to_none(request.barcode),
                 request.name.trim(),
                 category_id,
@@ -475,6 +487,24 @@ pub fn save_item(conn: &Connection, request: SaveItemRequest) -> AppResult<Item>
         params![new_id(), id],
     )?;
     get_item(conn, &id)
+}
+
+fn next_item_code(conn: &Connection) -> AppResult<String> {
+    let mut index: i64 = conn.query_row("SELECT COUNT(*) + 1 FROM master_items", [], |row| {
+        row.get(0)
+    })?;
+    loop {
+        let code = format!("HC-{index:04}");
+        let exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM master_items WHERE code = ?1",
+            params![code],
+            |row| row.get(0),
+        )?;
+        if exists == 0 {
+            return Ok(code);
+        }
+        index += 1;
+    }
 }
 
 pub fn set_item_enabled(
@@ -1031,7 +1061,7 @@ mod tests {
             SaveItemRequest {
                 id: Some("item-disabled-category".to_string()),
                 expected_updated_at: None,
-                code: "REF-001".to_string(),
+                code: Some("REF-001".to_string()),
                 barcode: None,
                 name: "停用分类物品".to_string(),
                 category_id: Some("cat-disabled".to_string()),
@@ -1052,7 +1082,7 @@ mod tests {
             SaveItemRequest {
                 id: Some("item-disabled-unit".to_string()),
                 expected_updated_at: None,
-                code: "REF-002".to_string(),
+                code: Some("REF-002".to_string()),
                 barcode: None,
                 name: "停用单位物品".to_string(),
                 category_id: None,
@@ -1073,7 +1103,7 @@ mod tests {
             SaveItemRequest {
                 id: Some("item-disabled-supplier".to_string()),
                 expected_updated_at: None,
-                code: "REF-003".to_string(),
+                code: Some("REF-003".to_string()),
                 barcode: None,
                 name: "停用供应商物品".to_string(),
                 category_id: None,
@@ -1088,6 +1118,41 @@ mod tests {
         )
         .unwrap_err();
         assert!(supplier_error.to_string().contains("默认供应商已停用"));
+    }
+
+    #[test]
+    fn save_item_generates_code_for_new_item_when_blank() {
+        let conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrations::run(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO master_items (id, code, name, unit_id, default_price)
+             VALUES ('item-existing', 'HC-0001', '已有物品', 'unit-piece', 1)",
+            [],
+        )
+        .unwrap();
+
+        let item = save_item(
+            &conn,
+            SaveItemRequest {
+                id: None,
+                expected_updated_at: None,
+                code: None,
+                barcode: None,
+                name: "自动编码物品".to_string(),
+                category_id: None,
+                spec: None,
+                unit_id: Some("unit-piece".to_string()),
+                default_price: 1.0,
+                supplier_id: None,
+                warning_quantity: 0.0,
+                enabled: true,
+                remark: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(item.code, "HC-0002");
     }
 
     #[test]
@@ -1162,7 +1227,7 @@ mod tests {
             SaveItemRequest {
                 id: Some("item-lock".to_string()),
                 expected_updated_at: None,
-                code: "LOCK-001".to_string(),
+                code: Some("LOCK-001".to_string()),
                 barcode: None,
                 name: "乐观锁物品".to_string(),
                 category_id: None,
@@ -1182,7 +1247,7 @@ mod tests {
             SaveItemRequest {
                 id: Some(item.id.clone()),
                 expected_updated_at: None,
-                code: "LOCK-001".to_string(),
+                code: Some("LOCK-001".to_string()),
                 barcode: None,
                 name: "缺版本覆盖".to_string(),
                 category_id: None,
@@ -1203,7 +1268,7 @@ mod tests {
             SaveItemRequest {
                 id: Some(item.id.clone()),
                 expected_updated_at: Some(item.updated_at.clone()),
-                code: "LOCK-001".to_string(),
+                code: Some("LOCK-001".to_string()),
                 barcode: None,
                 name: "已更新物品".to_string(),
                 category_id: None,
@@ -1224,7 +1289,7 @@ mod tests {
             SaveItemRequest {
                 id: Some(item.id.clone()),
                 expected_updated_at: Some(item.updated_at.clone()),
-                code: "LOCK-001".to_string(),
+                code: Some("LOCK-001".to_string()),
                 barcode: None,
                 name: "旧页面覆盖".to_string(),
                 category_id: None,

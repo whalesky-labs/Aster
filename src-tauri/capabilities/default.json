@@ -5,6 +5,7 @@
   "windows": ["main", "editor-*"],
   "permissions": [
     "core:default",
+    "core:window:allow-close",
     "core:webview:allow-create-webview-window",
     "dialog:allow-open",
     "opener:default"

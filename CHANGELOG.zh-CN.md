@@ -9,6 +9,7 @@
 - 完成系统设置中的“界面语言”功能，新增前端轻量 i18n 架构，支持简体中文与 English 切换。
 - 语言设置会即时作用于主窗口，并持久化到本地外观设置；应用会同步更新 HTML `lang` 属性为 `zh-CN` 或 `en-US`。
 - 新增 macOS Apple Silicon 构建，GitHub Actions 会使用 `macos-15` 与 `aarch64-apple-darwin` 生成 `aster-<version>-macos-aarch64.dmg`。
+- 新增邮箱验证码找回密码功能，支持管理员配置 SMTP 发件账号、用户绑定邮箱、登录页发送验证码并重置密码。
 
 ### 优化
 
@@ -17,10 +18,11 @@
 - GitHub Release 资产收集和发布说明已区分 macOS Intel 与 Apple Silicon DMG，避免两个 macOS 安装包互相覆盖。
 - GitHub Release 发布脚本在自动版本没有对应历史小节时，会读取 `[Unreleased]` 生成发布说明，避免 `0.1.1` 这类自动递增版本发布失败。
 - GitHub Actions 官方步骤升级到 `v5`，适配 Node.js 24 运行时，消除 Node.js 20 运行时弃用告警。
+- 找回密码在主机/客户端模式下由主机统一发送验证码和更新主机数据库，验证码仅保存哈希并带 10 分钟有效期。
 
 ### 验收说明
 
-- 已通过 `npm run build`、`npm run verify:coverage`、Release Notes 生成脚本和 `git diff --check` 验证。
+- 已通过 `npm run build`、`npm run verify:coverage`、`cargo test`、Release Notes 生成脚本和 `git diff --check` 验证。
 - 业务表单深层文案后续可继续沿用 `src/i18n.ts` 的翻译字典逐步迁移。
 
 ## [0.1.0] - 2026-07-02

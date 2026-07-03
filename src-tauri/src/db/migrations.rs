@@ -45,6 +45,25 @@ fn run_compatibility_migrations(conn: &Connection) -> AppResult<()> {
             [],
         )?;
     }
+    if !column_exists(conn, "users", "email")? {
+        conn.execute("ALTER TABLE users ADD COLUMN email TEXT", [])?;
+    }
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS password_reset_codes (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          code_hash TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          used_at TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_password_reset_codes_user_id
+         ON password_reset_codes(user_id)",
+        [],
+    )?;
     if !column_exists(conn, "master_items", "barcode")? {
         conn.execute("ALTER TABLE master_items ADD COLUMN barcode TEXT", [])?;
         conn.execute(

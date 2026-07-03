@@ -40,7 +40,8 @@ use commands::stocktake_commands::{
 };
 use commands::user_commands::{
     change_password, get_current_user, list_roles, list_user_accounts, login, logout,
-    save_user_account, set_user_account_enabled,
+    request_password_reset_code, reset_password_with_code, save_user_account,
+    set_user_account_enabled,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -117,6 +118,8 @@ pub fn run() {
             save_user_account,
             set_user_account_enabled,
             change_password,
+            request_password_reset_code,
+            reset_password_with_code,
             start_host_service,
             get_host_service_status,
             list_client_connections,

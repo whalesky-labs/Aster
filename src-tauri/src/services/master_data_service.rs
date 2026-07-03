@@ -302,7 +302,9 @@ pub(crate) fn validate_supplier(request: &SaveSupplierRequest) -> AppResult<()> 
 }
 
 pub(crate) fn validate_item(request: &SaveItemRequest) -> AppResult<()> {
-    require_text("物品编码", &request.code)?;
+    if request.id.is_some() {
+        require_text("物品编码", request.code.as_deref().unwrap_or_default())?;
+    }
     require_text("物品名称", &request.name)?;
     if request.default_price < 0.0 {
         return Err(AppError::Validation("默认单价不能小于 0".to_string()));

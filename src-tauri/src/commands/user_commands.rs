@@ -2,8 +2,9 @@ use tauri::State;
 
 use crate::app::state::AppState;
 use crate::domain::users::{
-    ChangePasswordRequest, CurrentUser, LoginRequest, Role, SaveUserRequest, SetUserEnabledRequest,
-    UserAccount,
+    ChangePasswordRequest, CurrentUser, LoginRequest, RequestPasswordResetCodeRequest,
+    RequestPasswordResetCodeResponse, ResetPasswordWithCodeRequest, Role, SaveUserRequest,
+    SetUserEnabledRequest, UserAccount,
 };
 use crate::error::AppResult;
 use crate::services::user_service;
@@ -58,4 +59,30 @@ pub fn change_password(
     request: ChangePasswordRequest,
 ) -> AppResult<()> {
     user_service::change_password(&state, request)
+}
+
+#[tauri::command]
+pub async fn request_password_reset_code(
+    state: State<'_, AppState>,
+    request: RequestPasswordResetCodeRequest,
+) -> AppResult<RequestPasswordResetCodeResponse> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        user_service::request_password_reset_code(&state, request)
+    })
+    .await
+    .map_err(|err| crate::error::AppError::Validation(format!("验证码发送任务异常：{err}")))?
+}
+
+#[tauri::command]
+pub async fn reset_password_with_code(
+    state: State<'_, AppState>,
+    request: ResetPasswordWithCodeRequest,
+) -> AppResult<()> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        user_service::reset_password_with_code(&state, request)
+    })
+    .await
+    .map_err(|err| crate::error::AppError::Validation(format!("密码重置任务异常：{err}")))?
 }
