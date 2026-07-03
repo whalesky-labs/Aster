@@ -340,6 +340,7 @@ pub fn remote_list_stock_documents(
     let config = client_runtime_config(state)?;
     let mut params = Vec::new();
     push_query_param(&mut params, "documentType", query.document_type);
+    push_query_param(&mut params, "outboundKind", query.outbound_kind);
     push_query_param(&mut params, "month", query.month);
     push_query_param(&mut params, "departmentId", query.department_id);
     push_query_param(&mut params, "supplierId", query.supplier_id);
@@ -1032,6 +1033,7 @@ fn handle_connection_inner(
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
             let query = StockDocumentQuery {
                 document_type: query_param(path, "documentType"),
+                outbound_kind: query_param(path, "outboundKind"),
                 month: query_param(path, "month"),
                 department_id: query_param(path, "departmentId"),
                 supplier_id: query_param(path, "supplierId"),

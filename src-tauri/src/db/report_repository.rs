@@ -150,7 +150,12 @@ fn department_details(
     filters: &ReportFilters<'_>,
 ) -> AppResult<Vec<DepartmentIssueDetailRow>> {
     let mut stmt = conn.prepare(
-        "SELECT m.movement_date, COALESCE(m.department_name, d.name), i.code, i.name, i.spec, u.name,
+        "SELECT m.movement_date,
+                CASE
+                  WHEN doc.outbound_kind = 'guest_sale' THEN '酒店客人'
+                  ELSE COALESCE(m.department_name, d.name)
+                END,
+                i.code, i.name, i.spec, u.name,
                 m.quantity, m.unit_price, m.amount, doc.document_no,
                 doc.purpose, m.remark
          FROM stock_movements m

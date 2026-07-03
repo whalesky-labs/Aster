@@ -1404,6 +1404,21 @@ select:focus,
   font-weight: 500;
 }
 
+.month-select {
+  display: grid;
+  grid-template-columns: minmax(92px, 1fr) minmax(76px, 0.8fr);
+  gap: 8px;
+  min-width: 0;
+}
+
+.month-select.compact {
+  width: 190px;
+}
+
+.month-select select {
+  min-width: 0;
+}
+
 .form-actions,
 .row-actions,
 .report-actions,
@@ -1688,7 +1703,7 @@ tbody tr:hover {
 
 .report-filters {
   grid-column: 1 / -1;
-  grid-template-columns: repeat(4, minmax(140px, 1fr)) auto;
+  grid-template-columns: repeat(5, minmax(140px, 1fr)) auto;
   border: 0;
   border-top: 1px solid var(--native-panel-border);
   padding: 12px 0 0;
@@ -1773,6 +1788,40 @@ tbody tr:hover {
   margin: 0;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.report-insight-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.report-insight-card {
+  display: grid;
+  gap: 8px;
+  min-height: 120px;
+  border: 1px solid var(--native-panel-border);
+  border-radius: 8px;
+  padding: 14px;
+  background: var(--surface);
+}
+
+.report-insight-card span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.report-insight-card strong {
+  color: var(--text-main);
+  font-size: 24px;
+  line-height: 1.1;
+}
+
+.report-insight-card p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .chart-panel {
@@ -3160,6 +3209,10 @@ tbody tr:hover {
 
   .report-metrics-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .report-insight-grid {
+    grid-template-columns: 1fr;
   }
 
   .report-command-main,

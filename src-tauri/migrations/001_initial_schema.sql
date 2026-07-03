@@ -112,6 +112,7 @@ CREATE TABLE IF NOT EXISTS stock_documents (
   id TEXT PRIMARY KEY,
   document_no TEXT NOT NULL UNIQUE,
   document_type TEXT NOT NULL CHECK(document_type IN ('inbound', 'outbound', 'stocktake', 'adjustment')),
+  outbound_kind TEXT CHECK(outbound_kind IS NULL OR outbound_kind IN ('internal', 'guest_sale')),
   business_date TEXT NOT NULL,
   department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
   department_name TEXT,

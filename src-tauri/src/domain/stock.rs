@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct SubmitStockDocumentRequest {
     pub document_type: String,
+    pub outbound_kind: Option<String>,
     pub business_date: String,
     pub department_id: Option<String>,
     pub supplier_id: Option<String>,
@@ -19,6 +20,7 @@ pub struct SubmitStockDocumentRequest {
 pub struct SaveStockDocumentDraftRequest {
     pub document_id: Option<String>,
     pub document_type: String,
+    pub outbound_kind: Option<String>,
     pub business_date: String,
     pub department_id: Option<String>,
     pub supplier_id: Option<String>,
@@ -79,6 +81,7 @@ pub struct VoidStockDocumentRequest {
 #[serde(rename_all = "camelCase")]
 pub struct StockDocumentQuery {
     pub document_type: Option<String>,
+    pub outbound_kind: Option<String>,
     pub month: Option<String>,
     pub department_id: Option<String>,
     pub supplier_id: Option<String>,
@@ -111,6 +114,7 @@ pub struct StockDocument {
     pub id: String,
     pub document_no: String,
     pub document_type: String,
+    pub outbound_kind: Option<String>,
     pub business_date: String,
     pub department_id: Option<String>,
     pub department_name: Option<String>,

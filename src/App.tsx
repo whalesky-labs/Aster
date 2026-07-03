@@ -1,4 +1,11 @@
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -274,6 +281,7 @@ type StockDocument = {
   id: string;
   documentNo: string;
   documentType: "inbound" | "outbound" | "adjustment" | "stocktake";
+  outboundKind?: "internal" | "guest_sale" | null;
   businessDate: string;
   departmentName?: string | null;
   supplierName?: string | null;
@@ -288,6 +296,7 @@ type StockDocument = {
 
 type StockDocumentQuery = {
   documentType: "inbound" | "outbound" | "adjustment" | "stocktake";
+  outboundKind?: "internal" | "guest_sale" | null;
   month?: string | null;
   departmentId?: string | null;
   supplierId?: string | null;
@@ -638,6 +647,7 @@ type RestorePreview = {
 type StockDocumentDraft = {
   documentId?: string;
   documentType: "inbound" | "outbound";
+  outboundKind?: "internal" | "guest_sale";
   businessDate: string;
   departmentId: string;
   supplierId: string;
@@ -4546,10 +4556,9 @@ function BudgetRuleEditor({
       onSave={() => onSave(draft)}
     >
       <Field label="月份">
-        <input
-          type="month"
+        <MonthSelect
           value={draft.periodMonth}
-          onChange={(e) => setDraft({ ...draft, periodMonth: e.target.value })}
+          onChange={(periodMonth) => setDraft({ ...draft, periodMonth })}
         />
       </Field>
       <Field label="部门">
@@ -4830,17 +4839,15 @@ function BusinessSettingsEditor({
         />
       </Field>
       <Field label="当前账期">
-        <input
-          type="month"
+        <MonthSelect
           value={draft.currentPeriod}
-          onChange={(event) => setDraft({ ...draft, currentPeriod: event.target.value })}
+          onChange={(currentPeriod) => setDraft({ ...draft, currentPeriod })}
         />
       </Field>
       <Field label="默认月份">
-        <input
-          type="month"
+        <MonthSelect
           value={draft.defaultMonth}
-          onChange={(event) => setDraft({ ...draft, defaultMonth: event.target.value })}
+          onChange={(defaultMonth) => setDraft({ ...draft, defaultMonth })}
         />
       </Field>
       <Field label="数量小数位">
@@ -5772,6 +5779,7 @@ function StockDocumentEditor({
   const [draft, setDraft] = useState<StockDocumentDraft>({
     documentId: undefined,
     documentType,
+    outboundKind: documentType === "outbound" ? "internal" : undefined,
     businessDate: todayString(),
     departmentId: "",
     supplierId: "",
@@ -5783,6 +5791,8 @@ function StockDocumentEditor({
   });
   const [scanCode, setScanCode] = useState("");
   const isOutbound = documentType === "outbound";
+  const isInternalOutbound =
+    isOutbound && (draft.outboundKind ?? "internal") === "internal";
   const totalAmount = draft.lines.reduce(
     (sum, line) => sum + effectiveLineAmount(line),
     0,
@@ -5875,6 +5885,28 @@ function StockDocumentEditor({
           />
         </Field>
         {isOutbound ? (
+          <Field label="出库类型">
+            <select
+              value={draft.outboundKind ?? "internal"}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  outboundKind: e.target.value as "internal" | "guest_sale",
+                  departmentId:
+                    e.target.value === "guest_sale" ? "" : draft.departmentId,
+                  approvalRequestId:
+                    e.target.value === "guest_sale"
+                      ? ""
+                      : draft.approvalRequestId,
+                })
+              }
+            >
+              <option value="internal">内部员工领用</option>
+              <option value="guest_sale">酒店客人销售</option>
+            </select>
+          </Field>
+        ) : null}
+        {isInternalOutbound ? (
           <Field label="领用部门">
             <select
               value={draft.departmentId}
@@ -5889,6 +5921,10 @@ function StockDocumentEditor({
                 </option>
               ))}
             </select>
+          </Field>
+        ) : isOutbound ? (
+          <Field label="销售对象">
+            <input disabled value="酒店客人" />
           </Field>
         ) : (
           <Field label="供应商">
@@ -5923,7 +5959,7 @@ function StockDocumentEditor({
             }
           />
         </Field>
-        {isOutbound ? (
+        {isInternalOutbound ? (
           <Field label="审批单 ID">
             <input
               value={draft.approvalRequestId}
@@ -6057,7 +6093,7 @@ function StockDocumentEditor({
 
       <div className="editor-actions">
         <strong>合计金额：{formatMoney(totalAmount)} 元</strong>
-        {isOutbound ? (
+        {isInternalOutbound ? (
           <button
             className="ghost-button"
             disabled={disabled || !draft.departmentId || !draft.businessDate}
@@ -7454,10 +7490,10 @@ function BudgetRulesPage({
     >
       <div className="table-toolbar">
         <h2>预算规则</h2>
-        <input
-          type="month"
+        <MonthSelect
+          compact
           value={month}
-          onChange={(e) => onMonthChange(e.target.value)}
+          onChange={onMonthChange}
         />
       </div>
       <table>
@@ -7788,6 +7824,7 @@ function DocumentList({
     onQueryChange({
       ...filterDraft,
       documentType: query.documentType,
+      outboundKind: isOutbound ? filterDraft.outboundKind || null : null,
       month: filterDraft.month || null,
       departmentId: isOutbound ? filterDraft.departmentId || null : null,
       supplierId: isOutbound ? null : filterDraft.supplierId || null,
@@ -7813,10 +7850,9 @@ function DocumentList({
       {query && onQueryChange ? (
         <div className="document-filters">
           <Field label="月份">
-            <input
-              type="month"
+            <MonthSelect
               value={filterDraft.month ?? ""}
-              onChange={(e) => updateFilter({ month: e.target.value })}
+              onChange={(month) => updateFilter({ month })}
             />
           </Field>
           <Field label={partyLabel}>
@@ -7836,6 +7872,25 @@ function DocumentList({
               ))}
             </select>
           </Field>
+          {isOutbound ? (
+            <Field label="出库类型">
+              <select
+                value={filterDraft.outboundKind ?? ""}
+                onChange={(e) =>
+                  updateFilter({
+                    outboundKind:
+                      e.target.value === ""
+                        ? null
+                        : (e.target.value as "internal" | "guest_sale"),
+                  })
+                }
+              >
+                <option value="">全部</option>
+                <option value="internal">内部员工领用</option>
+                <option value="guest_sale">酒店客人销售</option>
+              </select>
+            </Field>
+          ) : null}
           <Field label="物品">
             <select
               value={filterDraft.itemId ?? ""}
@@ -7871,6 +7926,7 @@ function DocumentList({
           <tr>
             <th>单号</th>
             <th>日期</th>
+            {isOutbound ? <th>类型</th> : null}
             <th>对象</th>
             <th>审批单</th>
             <th>数量</th>
@@ -7880,7 +7936,7 @@ function DocumentList({
           </tr>
         </thead>
         <PaginatedTable
-          colSpan={8}
+          colSpan={isOutbound ? 9 : 8}
           getRowKey={(doc) => doc.id}
           rows={documents}
         >
@@ -7888,9 +7944,14 @@ function DocumentList({
             <>
               <td>{doc.documentNo}</td>
               <td>{doc.businessDate}</td>
+              {isOutbound ? (
+                <td>{outboundKindLabel(doc.outboundKind)}</td>
+              ) : null}
               <td>
                 {doc.documentType === "outbound"
-                  ? (doc.departmentName ?? "-")
+                  ? doc.outboundKind === "guest_sale"
+                    ? "酒店客人"
+                    : (doc.departmentName ?? "-")
                   : (doc.supplierName ?? "-")}
               </td>
               <td>{doc.approvalRequestId ?? "-"}</td>
@@ -8225,6 +8286,10 @@ function StockMovementPage({
   );
 }
 
+function outboundKindLabel(kind?: "internal" | "guest_sale" | null) {
+  return kind === "guest_sale" ? "酒店客人销售" : "内部员工领用";
+}
+
 function StocktakePage({
   canViewReports,
   canWrite,
@@ -8520,7 +8585,6 @@ function ReportsPage({
 
   const inventory = bundle?.monthlyInventory ?? [];
   const summary = bundle?.departmentSummary ?? [];
-  const details = bundle?.departmentDetails ?? [];
   const categoryConsumption = bundle?.categoryConsumption ?? [];
   const itemRanking = bundle?.itemConsumptionRanking ?? [];
   const inboundDetails = bundle?.inboundDetails ?? [];
@@ -8536,10 +8600,7 @@ function ReportsPage({
     (sum, row) => sum + row.outboundAmount,
     0,
   );
-  const reportRangeLabel =
-    filterDraft.startDate || filterDraft.endDate
-      ? `${filterDraft.startDate || "不限"} 至 ${filterDraft.endDate || "不限"}`
-      : `${filterDraft.month || currentMonthString()} 月`;
+  const reportRangeLabel = `${filterDraft.month || currentMonthString()} 月`;
 
   function printReport() {
     window.print();
@@ -8550,11 +8611,19 @@ function ReportsPage({
   }
 
   function applyFilters() {
-    onQueryChange(filterDraft);
+    onQueryChange({
+      ...filterDraft,
+      startDate: null,
+      endDate: null,
+    });
   }
 
   function resetFilters() {
-    const nextQuery = { month: filterDraft.month || currentMonthString() };
+    const nextQuery = {
+      month: filterDraft.month || currentMonthString(),
+      startDate: null,
+      endDate: null,
+    };
     setFilterDraft(nextQuery);
     onQueryChange(nextQuery);
   }
@@ -8590,27 +8659,10 @@ function ReportsPage({
         </div>
         <div className="report-filters">
           <Field label="月份">
-            <input
+            <MonthSelect
               disabled={!canViewReports}
-              type="month"
               value={filterDraft.month}
-              onChange={(e) => updateFilter({ month: e.target.value })}
-            />
-          </Field>
-          <Field label="开始日期">
-            <input
-              disabled={!canViewReports}
-              type="date"
-              value={filterDraft.startDate ?? ""}
-              onChange={(e) => updateFilter({ startDate: e.target.value })}
-            />
-          </Field>
-          <Field label="结束日期">
-            <input
-              disabled={!canViewReports}
-              type="date"
-              value={filterDraft.endDate ?? ""}
-              onChange={(e) => updateFilter({ endDate: e.target.value })}
+              onChange={(month) => updateFilter({ month })}
             />
           </Field>
           <Field label="部门">
@@ -8760,411 +8812,106 @@ function ReportsPage({
 
       <ReportGroupHeader
         title="库存总览"
-        description="月度进销存和当前库存余额，用于核对物品流转与结存。"
+        description="保留库存规模、结存金额和预警概览，明细数据通过导出查看。"
       />
-      <div className="table-panel report-section">
-        <div className="table-toolbar">
-          <h2>月度进销存</h2>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th>编码</th>
-              <th>物品</th>
-              <th>规格</th>
-              <th>单位</th>
-              <th>入库数量</th>
-              <th>入库金额</th>
-              <th>出库数量</th>
-              <th>出库金额</th>
-              <th>结存数量</th>
-              <th>结存金额</th>
-            </tr>
-          </thead>
-          <PaginatedTable
-            colSpan={10}
-            getRowKey={(row) => row.itemId}
-            rows={inventory}
-          >
-            {(row) => (
-              <>
-                <td>{row.itemCode}</td>
-                <td>{row.itemName}</td>
-                <td>{row.spec ?? "-"}</td>
-                <td>{row.unitName ?? "-"}</td>
-                <td>{row.inboundQuantity}</td>
-                <td>{formatMoney(row.inboundAmount)}</td>
-                <td>{row.outboundQuantity}</td>
-                <td>{formatMoney(row.outboundAmount)}</td>
-                <td>{row.endingQuantity}</td>
-                <td>{formatMoney(row.endingAmount)}</td>
-              </>
-            )}
-          </PaginatedTable>
-        </table>
-      </div>
-
-      <div className="table-panel report-section">
-        <div className="table-toolbar">
-          <h2>库存余额表</h2>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th>编码</th>
-              <th>物品</th>
-              <th>规格</th>
-              <th>单位</th>
-              <th>当前库存</th>
-              <th>库存金额</th>
-              <th>移动均价</th>
-              <th>最近入库价</th>
-              <th>预警线</th>
-              <th>状态</th>
-            </tr>
-          </thead>
-          <PaginatedTable
-            colSpan={10}
-            getRowKey={(row) => row.itemId}
-            rows={stockBalances}
-          >
-            {(row) => (
-              <>
-                <td>{row.itemCode}</td>
-                <td>{row.itemName}</td>
-                <td>{row.spec ?? "-"}</td>
-                <td>{row.unitName ?? "-"}</td>
-                <td>{row.quantity}</td>
-                <td>{formatMoney(row.amount)}</td>
-                <td>{formatMoney(row.averagePrice)}</td>
-                <td>{formatMoney(row.lastInboundPrice)}</td>
-                <td>{row.warningQuantity}</td>
-                <td>
-                  <span
-                    className={`status ${row.stockStatus === "normal" ? "enabled" : "disabled"}`}
-                  >
-                    {row.stockStatus === "normal"
-                      ? "正常"
-                      : row.stockStatus === "low"
-                        ? "低库存"
-                        : "负库存"}
-                  </span>
-                </td>
-              </>
-            )}
-          </PaginatedTable>
-        </table>
-      </div>
+      <ReportInsightGrid>
+        <ReportInsightCard
+          label="统计物品"
+          value={`${inventory.length} 项`}
+          detail={`当前余额覆盖 ${stockBalances.length} 项物品`}
+        />
+        <ReportInsightCard
+          label="结存金额"
+          value={`${formatMoney(
+            inventory.reduce((sum, row) => sum + row.endingAmount, 0),
+          )} 元`}
+          detail="按所选期间的进销存汇总计算"
+        />
+        <ReportInsightCard
+          label="库存风险"
+          value={`${stockWarnings.length} 项`}
+          detail="低库存、负库存和预警缺口会进入导出明细"
+        />
+      </ReportInsightGrid>
 
       <ReportGroupHeader
         title="领用分析"
-        description="按部门、分类和物品查看领用消耗结构。"
+        description="突出领用结构和消耗集中度，不在页面铺开明细清单。"
       />
-      <div className="workspace-grid">
-        <div className="table-panel report-section">
-          <div className="table-toolbar">
-            <h2>部门领用汇总</h2>
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th>部门</th>
-                <th>数量</th>
-                <th>金额</th>
-              </tr>
-            </thead>
-            <tbody>
-              {summary.map((row) => (
-                <tr key={row.departmentId}>
-                  <td>{row.departmentName}</td>
-                  <td>{row.quantity}</td>
-                  <td>{formatMoney(row.amount)}</td>
-                </tr>
-              ))}
-              {summary.length === 0 ? <EmptyRow colSpan={3} /> : null}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="table-panel report-section">
-          <div className="table-toolbar">
-            <h2>部门领用明细</h2>
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th>日期</th>
-                <th>部门</th>
-                <th>物品</th>
-                <th>数量</th>
-                <th>金额</th>
-              </tr>
-            </thead>
-            <PaginatedTable
-              colSpan={5}
-              getRowKey={(row, index) =>
-                `${row.documentNo}-${row.itemCode}-${index}`
-              }
-              rows={details}
-            >
-              {(row) => (
-                <>
-                  <td>{row.movementDate}</td>
-                  <td>{row.departmentName}</td>
-                  <td>
-                    {row.itemCode} · {row.itemName}
-                  </td>
-                  <td>{row.quantity}</td>
-                  <td>{formatMoney(row.amount)}</td>
-                </>
-              )}
-            </PaginatedTable>
-          </table>
-        </div>
-      </div>
-
-      <div className="workspace-grid">
-        <div className="table-panel report-section">
-          <div className="table-toolbar">
-            <h2>分类消耗统计</h2>
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th>分类</th>
-                <th>数量</th>
-                <th>金额</th>
-              </tr>
-            </thead>
-            <tbody>
-              {categoryConsumption.map((row) => (
-                <tr key={row.categoryId ?? row.categoryName}>
-                  <td>{row.categoryName}</td>
-                  <td>{row.quantity}</td>
-                  <td>{formatMoney(row.amount)}</td>
-                </tr>
-              ))}
-              {categoryConsumption.length === 0 ? (
-                <EmptyRow colSpan={3} />
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="table-panel report-section">
-          <div className="table-toolbar">
-            <h2>物品消耗排行</h2>
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th>编码</th>
-                <th>物品</th>
-                <th>数量</th>
-                <th>金额</th>
-              </tr>
-            </thead>
-            <PaginatedTable
-              colSpan={4}
-              getRowKey={(row) => row.itemId}
-              rows={itemRanking}
-            >
-              {(row) => (
-                <>
-                  <td>{row.itemCode}</td>
-                  <td>{row.itemName}</td>
-                  <td>
-                    {row.quantity} {row.unitName ?? ""}
-                  </td>
-                  <td>{formatMoney(row.amount)}</td>
-                </>
-              )}
-            </PaginatedTable>
-          </table>
-        </div>
-      </div>
+      <ReportInsightGrid>
+        <ReportInsightCard
+          label="参与部门"
+          value={`${summary.filter((row) => row.amount > 0).length} 个`}
+          detail="按部门图表查看主要消耗来源"
+        />
+        <ReportInsightCard
+          label="最高消耗部门"
+          value={summary[0]?.departmentName ?? "暂无"}
+          detail={
+            summary[0] ? `${formatMoney(summary[0].amount)} 元` : "暂无领用记录"
+          }
+        />
+        <ReportInsightCard
+          label="最高消耗物品"
+          value={itemRanking[0]?.itemName ?? "暂无"}
+          detail={
+            itemRanking[0]
+              ? `${formatMoney(itemRanking[0].amount)} 元`
+              : "暂无物品消耗"
+          }
+        />
+      </ReportInsightGrid>
 
       <ReportGroupHeader
-        title="流水明细"
-        description="入库与出库明细，用于追溯单据来源。"
+        title="流水概览"
+        description="页面只展示流转规模，具体入库和出库明细请使用导出或库存流水。"
       />
-      <div className="table-panel report-section">
-        <div className="table-toolbar">
-          <h2>入库明细</h2>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th>日期</th>
-              <th>供应商</th>
-              <th>物品</th>
-              <th>数量</th>
-              <th>单价</th>
-              <th>金额</th>
-              <th>单号</th>
-            </tr>
-          </thead>
-          <PaginatedTable
-            colSpan={7}
-            getRowKey={(row, index) =>
-              `${row.documentNo}-${row.itemCode}-${index}`
-            }
-            rows={inboundDetails}
-          >
-            {(row) => (
-              <>
-                <td>{row.movementDate}</td>
-                <td>{row.supplierName}</td>
-                <td>
-                  {row.itemCode} · {row.itemName}
-                </td>
-                <td>
-                  {row.quantity} {row.unitName ?? ""}
-                </td>
-                <td>{formatMoney(row.unitPrice)}</td>
-                <td>{formatMoney(row.amount)}</td>
-                <td>{row.documentNo ?? "-"}</td>
-              </>
-            )}
-          </PaginatedTable>
-        </table>
-      </div>
-
-      <div className="table-panel report-section">
-        <div className="table-toolbar">
-          <h2>出库明细</h2>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th>日期</th>
-              <th>部门</th>
-              <th>物品</th>
-              <th>数量</th>
-              <th>单价</th>
-              <th>金额</th>
-              <th>单号</th>
-            </tr>
-          </thead>
-          <PaginatedTable
-            colSpan={7}
-            getRowKey={(row, index) =>
-              `${row.documentNo}-${row.itemCode}-${index}`
-            }
-            rows={outboundDetails}
-          >
-            {(row) => (
-              <>
-                <td>{row.movementDate}</td>
-                <td>{row.departmentName}</td>
-                <td>
-                  {row.itemCode} · {row.itemName}
-                </td>
-                <td>
-                  {row.quantity} {row.unitName ?? ""}
-                </td>
-                <td>{formatMoney(row.unitPrice)}</td>
-                <td>{formatMoney(row.amount)}</td>
-                <td>{row.documentNo ?? "-"}</td>
-              </>
-            )}
-          </PaginatedTable>
-        </table>
-      </div>
+      <ReportInsightGrid>
+        <ReportInsightCard
+          label="入库明细"
+          value={`${inboundDetails.length} 行`}
+          detail={`${formatMoney(totalInbound)} 元，完整明细随 Excel 导出`}
+        />
+        <ReportInsightCard
+          label="出库明细"
+          value={`${outboundDetails.length} 行`}
+          detail={`${formatMoney(totalOutbound)} 元，含内部领用与客人销售`}
+        />
+        <ReportInsightCard
+          label="导出范围"
+          value="完整报表"
+          detail="导出文件保留全部明细表和追溯字段"
+        />
+      </ReportInsightGrid>
 
       <ReportGroupHeader
         title="库存风险"
-        description="库存预警和盘点差异，用于定位缺口与账实不符。"
+        description="只保留风险摘要，风险明细从导出表继续追溯。"
       />
-      <div className="table-panel report-section">
-        <div className="table-toolbar">
-          <h2>库存预警表</h2>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th>编码</th>
-              <th>物品</th>
-              <th>规格</th>
-              <th>单位</th>
-              <th>当前库存</th>
-              <th>预警线</th>
-              <th>缺口</th>
-              <th>库存金额</th>
-            </tr>
-          </thead>
-          <PaginatedTable
-            colSpan={8}
-            getRowKey={(row) => row.itemId}
-            rows={stockWarnings}
-          >
-            {(row) => (
-              <>
-                <td>{row.itemCode}</td>
-                <td>{row.itemName}</td>
-                <td>{row.spec ?? "-"}</td>
-                <td>{row.unitName ?? "-"}</td>
-                <td>{row.quantity}</td>
-                <td>{row.warningQuantity}</td>
-                <td>{row.shortageQuantity}</td>
-                <td>{formatMoney(row.amount)}</td>
-              </>
-            )}
-          </PaginatedTable>
-        </table>
-      </div>
-
-      <div className="table-panel report-section">
-        <div className="table-toolbar">
-          <h2>盘点差异表</h2>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th>日期</th>
-              <th>单号</th>
-              <th>范围</th>
-              <th>物品</th>
-              <th>账面数</th>
-              <th>实盘数</th>
-              <th>差异数</th>
-              <th>移动均价</th>
-              <th>差异金额</th>
-              <th>备注</th>
-            </tr>
-          </thead>
-          <PaginatedTable
-            colSpan={10}
-            getRowKey={(row, index) =>
-              `${row.documentNo}-${row.itemCode}-${index}`
-            }
-            rows={stocktakeDifferences}
-          >
-            {(row) => (
-              <>
-                <td>{row.businessDate}</td>
-                <td>{row.documentNo}</td>
-                <td>{stocktakeScopeLabel(row.scopeType)}</td>
-                <td>
-                  {row.itemCode} · {row.itemName}
-                </td>
-                <td>
-                  {row.bookQuantity} {row.unitName ?? ""}
-                </td>
-                <td>
-                  {row.countedQuantity} {row.unitName ?? ""}
-                </td>
-                <td>
-                  {row.differenceQuantity} {row.unitName ?? ""}
-                </td>
-                <td>{formatMoney(row.averagePrice)}</td>
-                <td>{formatMoney(row.differenceAmount)}</td>
-                <td>{row.remark ?? "-"}</td>
-              </>
-            )}
-          </PaginatedTable>
-        </table>
-      </div>
+      <ReportInsightGrid>
+        <ReportInsightCard
+          label="预警物品"
+          value={`${stockWarnings.length} 项`}
+          detail={`合计缺口 ${stockWarnings
+            .reduce((sum, row) => sum + row.shortageQuantity, 0)
+            .toFixed(2)}`}
+        />
+        <ReportInsightCard
+          label="盘点差异"
+          value={`${stocktakeDifferences.length} 行`}
+          detail={`${formatMoney(
+            stocktakeDifferences.reduce(
+              (sum, row) => sum + Math.abs(row.differenceAmount),
+              0,
+            ),
+          )} 元差异金额`}
+        />
+        <ReportInsightCard
+          label="风险处理"
+          value={stockWarnings.length || stocktakeDifferences.length ? "需关注" : "正常"}
+          detail="库存预警和盘点差异建议在导出表中逐项核对"
+        />
+      </ReportInsightGrid>
     </section>
   );
 }
@@ -9180,6 +8927,28 @@ function ReportGroupHeader({
     <div className="report-group-header">
       <h2>{title}</h2>
       <p>{description}</p>
+    </div>
+  );
+}
+
+function ReportInsightGrid({ children }: { children: ReactNode }) {
+  return <div className="report-insight-grid">{children}</div>;
+}
+
+function ReportInsightCard({
+  detail,
+  label,
+  value,
+}: {
+  detail: string;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="report-insight-card">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <p>{detail}</p>
     </div>
   );
 }
@@ -10349,6 +10118,60 @@ function Field({
       <span>{label}</span>
       {children}
     </label>
+  );
+}
+
+function MonthSelect({
+  compact = false,
+  disabled = false,
+  onChange,
+  value,
+}: {
+  compact?: boolean;
+  disabled?: boolean;
+  onChange: (value: string) => void | Promise<void>;
+  value: string;
+}) {
+  const safeValue = /^\d{4}-\d{2}$/.test(value) ? value : currentMonthString();
+  const selectedYear = Number(safeValue.slice(0, 4));
+  const selectedMonth = safeValue.slice(5, 7);
+  const currentYear = new Date().getFullYear();
+  const years = Array.from({ length: 11 }, (_, index) => currentYear - 5 + index);
+
+  function emitChange(year: number, month: string) {
+    void onChange(`${year}-${month}`);
+  }
+
+  return (
+    <div className={compact ? "month-select compact" : "month-select"}>
+      <select
+        aria-label="年份"
+        disabled={disabled}
+        value={selectedYear}
+        onChange={(event) => emitChange(Number(event.target.value), selectedMonth)}
+      >
+        {years.map((year) => (
+          <option key={year} value={year}>
+            {year}年
+          </option>
+        ))}
+      </select>
+      <select
+        aria-label="月份"
+        disabled={disabled}
+        value={selectedMonth}
+        onChange={(event) => emitChange(selectedYear, event.target.value)}
+      >
+        {Array.from({ length: 12 }, (_, index) => {
+          const month = String(index + 1).padStart(2, "0");
+          return (
+            <option key={month} value={month}>
+              {month}月
+            </option>
+          );
+        })}
+      </select>
+    </div>
   );
 }
 

@@ -114,6 +114,19 @@ fn run_compatibility_migrations(conn: &Connection) -> AppResult<()> {
                 [],
             )?;
         }
+        if !column_exists(conn, "stock_documents", "outbound_kind")? {
+            conn.execute(
+                "ALTER TABLE stock_documents ADD COLUMN outbound_kind TEXT",
+                [],
+            )?;
+        }
+        conn.execute(
+            "UPDATE stock_documents
+             SET outbound_kind = 'internal'
+             WHERE document_type = 'outbound'
+               AND (outbound_kind IS NULL OR TRIM(outbound_kind) = '')",
+            [],
+        )?;
     }
     if table_exists(conn, "stock_movements")? {
         if !column_exists(conn, "stock_movements", "department_name")? {

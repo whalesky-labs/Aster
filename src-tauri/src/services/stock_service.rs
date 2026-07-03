@@ -135,7 +135,19 @@ pub(crate) fn validate_document(request: &SubmitStockDocumentRequest) -> AppResu
     if request.business_date.trim().is_empty() {
         return Err(AppError::Validation("业务日期不能为空".to_string()));
     }
+    let outbound_kind = request
+        .outbound_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("internal");
+    if request.document_type == "outbound" && !matches!(outbound_kind, "internal" | "guest_sale") {
+        return Err(AppError::Validation(
+            "出库类型必须是内部领用或客人销售".to_string(),
+        ));
+    }
     if request.document_type == "outbound"
+        && outbound_kind == "internal"
         && request
             .department_id
             .as_deref()
@@ -168,6 +180,7 @@ pub(crate) fn validate_document(request: &SubmitStockDocumentRequest) -> AppResu
 pub(crate) fn validate_draft_document(request: &SaveStockDocumentDraftRequest) -> AppResult<()> {
     validate_document(&SubmitStockDocumentRequest {
         document_type: request.document_type.clone(),
+        outbound_kind: request.outbound_kind.clone(),
         business_date: request.business_date.clone(),
         department_id: request.department_id.clone(),
         supplier_id: request.supplier_id.clone(),
@@ -282,6 +295,7 @@ mod tests {
     fn sample_request() -> SubmitStockDocumentRequest {
         SubmitStockDocumentRequest {
             document_type: "inbound".to_string(),
+            outbound_kind: None,
             business_date: "2026-06-30".to_string(),
             department_id: None,
             supplier_id: None,

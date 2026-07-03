@@ -40,6 +40,8 @@ pub fn save_stock_document_draft(
     let document_id = request.document_id.clone().unwrap_or_else(new_id);
     let department_id = blank_to_none(request.department_id.clone());
     let supplier_id = blank_to_none(request.supplier_id.clone());
+    let outbound_kind =
+        normalized_outbound_kind(&request.document_type, request.outbound_kind.as_deref())?;
     let department_name = snapshot_department_name(&tx, department_id.as_deref())?;
     let supplier_name = snapshot_supplier_name(&tx, supplier_id.as_deref())?;
     let existing = tx
@@ -66,8 +68,9 @@ pub fn save_stock_document_draft(
             "UPDATE stock_documents
              SET business_date = ?1, department_id = ?2, department_name = ?3,
                  supplier_id = ?4, supplier_name = ?5,
-                 handler = ?6, purpose = ?7, approval_request_id = ?8, remark = ?9
-             WHERE id = ?10",
+                 handler = ?6, purpose = ?7, approval_request_id = ?8, remark = ?9,
+                 outbound_kind = ?10
+             WHERE id = ?11",
             params![
                 request.business_date,
                 department_id,
@@ -78,6 +81,7 @@ pub fn save_stock_document_draft(
                 blank_to_none(request.purpose.clone()),
                 blank_to_none(request.approval_request_id.clone()),
                 blank_to_none(request.remark.clone()),
+                outbound_kind,
                 document_id
             ],
         )?;
@@ -90,15 +94,16 @@ pub fn save_stock_document_draft(
         let document_no = next_document_no(&tx, &request.document_type, &request.business_date)?;
         tx.execute(
             "INSERT INTO stock_documents (
-               id, document_no, document_type, business_date, department_id,
+               id, document_no, document_type, outbound_kind, business_date, department_id,
                department_name, supplier_id, supplier_name, handler, purpose,
                approval_request_id, status, remark
              )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'draft', ?12)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'draft', ?13)",
             params![
                 document_id,
                 document_no,
                 request.document_type,
+                outbound_kind,
                 request.business_date,
                 department_id,
                 department_name,
@@ -153,6 +158,7 @@ pub fn confirm_stock_document_draft(
     let (
         document_no,
         document_type,
+        outbound_kind,
         business_date,
         department_id,
         department_name,
@@ -165,7 +171,7 @@ pub fn confirm_stock_document_draft(
         saved_approval_request_id,
     ) = tx
         .query_row(
-            "SELECT document_no, document_type, business_date, department_id, department_name,
+            "SELECT document_no, document_type, outbound_kind, business_date, department_id, department_name,
                     supplier_id, supplier_name, handler, purpose, remark, status,
                     approval_request_id
              FROM stock_documents WHERE id = ?1",
@@ -174,16 +180,17 @@ pub fn confirm_stock_document_draft(
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
                     row.get::<_, Option<String>>(4)?,
                     row.get::<_, Option<String>>(5)?,
                     row.get::<_, Option<String>>(6)?,
                     row.get::<_, Option<String>>(7)?,
                     row.get::<_, Option<String>>(8)?,
                     row.get::<_, Option<String>>(9)?,
-                    row.get::<_, String>(10)?,
-                    row.get::<_, Option<String>>(11)?,
+                    row.get::<_, Option<String>>(10)?,
+                    row.get::<_, String>(11)?,
+                    row.get::<_, Option<String>>(12)?,
                 ))
             },
         )
@@ -196,6 +203,7 @@ pub fn confirm_stock_document_draft(
     let final_approval_request_id = request.approval_request_id.or(saved_approval_request_id);
     let submit_request = SubmitStockDocumentRequest {
         document_type,
+        outbound_kind,
         business_date,
         department_id,
         supplier_id,
@@ -439,6 +447,7 @@ pub fn list_stock_documents(
     query: StockDocumentQuery,
 ) -> AppResult<Vec<StockDocument>> {
     let document_type = blank_to_none(query.document_type);
+    let outbound_kind = blank_to_none(query.outbound_kind);
     let month = blank_to_none(query.month);
     let department_id = blank_to_none(query.department_id);
     let supplier_id = blank_to_none(query.supplier_id);
@@ -446,7 +455,7 @@ pub fn list_stock_documents(
     let search = blank_to_none(query.search);
     let search_like = search.as_ref().map(|value| format!("%{}%", value.trim()));
     let mut stmt = conn.prepare(
-        "SELECT d.id, d.document_no, d.document_type, d.business_date,
+        "SELECT d.id, d.document_no, d.document_type, d.outbound_kind, d.business_date,
                 d.department_id, COALESCE(d.department_name, dep.name),
                 d.supplier_id, COALESCE(d.supplier_name, sup.name),
                 d.handler, d.purpose, d.approval_request_id, d.status, d.remark,
@@ -457,22 +466,24 @@ pub fn list_stock_documents(
          LEFT JOIN suppliers sup ON sup.id = d.supplier_id
          LEFT JOIN stock_document_lines l ON l.document_id = d.id
          WHERE (?1 IS NULL OR d.document_type = ?1)
-           AND (?2 IS NULL OR strftime('%Y-%m', d.business_date) = ?2)
-           AND (?3 IS NULL OR d.department_id = ?3)
-           AND (?4 IS NULL OR d.supplier_id = ?4)
-           AND (?5 IS NULL OR EXISTS (
+           AND (?2 IS NULL OR d.outbound_kind = ?2)
+           AND (?3 IS NULL OR strftime('%Y-%m', d.business_date) = ?3)
+           AND (?4 IS NULL OR d.department_id = ?4)
+           AND (?5 IS NULL OR d.supplier_id = ?5)
+           AND (?6 IS NULL OR EXISTS (
              SELECT 1 FROM stock_document_lines line_filter
              WHERE line_filter.document_id = d.id
-               AND line_filter.item_id = ?5
+               AND line_filter.item_id = ?6
            ))
-           AND (?6 IS NULL OR d.document_no LIKE ?6 OR COALESCE(d.handler, '') LIKE ?6 OR COALESCE(d.purpose, '') LIKE ?6 OR COALESCE(d.remark, '') LIKE ?6 OR COALESCE(d.department_name, '') LIKE ?6 OR COALESCE(d.supplier_name, '') LIKE ?6)
+           AND (?7 IS NULL OR d.document_no LIKE ?7 OR COALESCE(d.handler, '') LIKE ?7 OR COALESCE(d.purpose, '') LIKE ?7 OR COALESCE(d.remark, '') LIKE ?7 OR COALESCE(d.department_name, '') LIKE ?7 OR COALESCE(d.supplier_name, '') LIKE ?7)
          GROUP BY d.id
          ORDER BY d.business_date DESC, d.created_at DESC
-         LIMIT ?7",
+         LIMIT ?8",
     )?;
     let rows = stmt.query_map(
         params![
             document_type,
+            outbound_kind,
             month,
             department_id,
             supplier_id,
@@ -607,7 +618,7 @@ pub fn list_stock_movements(
 
 fn get_document_detail(conn: &Connection, id: &str) -> AppResult<StockDocumentDetail> {
     let document = conn.query_row(
-        "SELECT d.id, d.document_no, d.document_type, d.business_date,
+        "SELECT d.id, d.document_no, d.document_type, d.outbound_kind, d.business_date,
                 d.department_id, COALESCE(d.department_name, dep.name),
                 d.supplier_id, COALESCE(d.supplier_name, sup.name),
                 d.handler, d.purpose, d.approval_request_id, d.status, d.remark,
@@ -662,19 +673,22 @@ fn insert_confirmed_document(
 ) -> AppResult<()> {
     let department_id = blank_to_none(request.department_id.clone());
     let supplier_id = blank_to_none(request.supplier_id.clone());
+    let outbound_kind =
+        normalized_outbound_kind(&request.document_type, request.outbound_kind.as_deref())?;
     let department_name = snapshot_department_name(tx, department_id.as_deref())?;
     let supplier_name = snapshot_supplier_name(tx, supplier_id.as_deref())?;
     tx.execute(
         "INSERT INTO stock_documents (
-           id, document_no, document_type, business_date, department_id,
+           id, document_no, document_type, outbound_kind, business_date, department_id,
            department_name, supplier_id, supplier_name, handler, purpose,
            approval_request_id, status, remark, confirmed_at
          )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'confirmed', ?12, CURRENT_TIMESTAMP)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'confirmed', ?13, CURRENT_TIMESTAMP)",
         params![
             document_id,
             document_no,
             request.document_type,
+            outbound_kind,
             request.business_date,
             department_id,
             department_name,
@@ -1039,6 +1053,11 @@ fn enforce_budget_limits(conn: &Connection, request: &SubmitStockDocumentRequest
     if request.document_type != "outbound" {
         return Ok(());
     }
+    if normalized_outbound_kind(&request.document_type, request.outbound_kind.as_deref())?
+        == Some("guest_sale".to_string())
+    {
+        return Ok(());
+    }
     let Some(department_id) = request
         .department_id
         .as_deref()
@@ -1169,21 +1188,39 @@ fn map_document(row: &rusqlite::Row<'_>) -> rusqlite::Result<StockDocument> {
         id: row.get(0)?,
         document_no: row.get(1)?,
         document_type: row.get(2)?,
-        business_date: row.get(3)?,
-        department_id: row.get(4)?,
-        department_name: row.get(5)?,
-        supplier_id: row.get(6)?,
-        supplier_name: row.get(7)?,
-        handler: row.get(8)?,
-        purpose: row.get(9)?,
-        approval_request_id: row.get(10)?,
-        status: row.get(11)?,
-        remark: row.get(12)?,
-        total_quantity: row.get(13)?,
-        total_amount: row.get(14)?,
-        created_at: row.get(15)?,
-        confirmed_at: row.get(16)?,
+        outbound_kind: row.get(3)?,
+        business_date: row.get(4)?,
+        department_id: row.get(5)?,
+        department_name: row.get(6)?,
+        supplier_id: row.get(7)?,
+        supplier_name: row.get(8)?,
+        handler: row.get(9)?,
+        purpose: row.get(10)?,
+        approval_request_id: row.get(11)?,
+        status: row.get(12)?,
+        remark: row.get(13)?,
+        total_quantity: row.get(14)?,
+        total_amount: row.get(15)?,
+        created_at: row.get(16)?,
+        confirmed_at: row.get(17)?,
     })
+}
+
+fn normalized_outbound_kind(
+    document_type: &str,
+    outbound_kind: Option<&str>,
+) -> AppResult<Option<String>> {
+    if document_type != "outbound" {
+        return Ok(None);
+    }
+    let value = outbound_kind
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("internal");
+    match value {
+        "internal" | "guest_sale" => Ok(Some(value.to_string())),
+        other => Err(AppError::Validation(format!("不支持的出库类型：{other}"))),
+    }
 }
 
 struct ItemForStock {
@@ -1341,6 +1378,7 @@ mod tests {
             &mut conn,
             SubmitStockDocumentRequest {
                 document_type: "inbound".to_string(),
+                outbound_kind: None,
                 business_date: "2026-06-30".to_string(),
                 department_id: None,
                 supplier_id: None,
@@ -1364,6 +1402,7 @@ mod tests {
             &mut conn,
             SubmitStockDocumentRequest {
                 document_type: "outbound".to_string(),
+                outbound_kind: None,
                 business_date: "2026-06-30".to_string(),
                 department_id: Some("dept-admin-office".to_string()),
                 supplier_id: None,
@@ -1433,6 +1472,7 @@ mod tests {
             &mut conn,
             SubmitStockDocumentRequest {
                 document_type: "inbound".to_string(),
+                outbound_kind: None,
                 business_date: "2026-06-30".to_string(),
                 department_id: None,
                 supplier_id: None,
@@ -1458,6 +1498,7 @@ mod tests {
             &mut conn,
             SubmitStockDocumentRequest {
                 document_type: "outbound".to_string(),
+                outbound_kind: None,
                 business_date: "2026-06-30".to_string(),
                 department_id: Some("dept-admin-office".to_string()),
                 supplier_id: None,
@@ -1532,6 +1573,7 @@ mod tests {
             &mut conn,
             SubmitStockDocumentRequest {
                 document_type: "inbound".to_string(),
+                outbound_kind: None,
                 business_date: "2026-06-30".to_string(),
                 department_id: None,
                 supplier_id: Some("supplier-snapshot".to_string()),
@@ -1554,6 +1596,7 @@ mod tests {
             &mut conn,
             SubmitStockDocumentRequest {
                 document_type: "outbound".to_string(),
+                outbound_kind: None,
                 business_date: "2026-06-30".to_string(),
                 department_id: Some("dept-snapshot".to_string()),
                 supplier_id: None,
@@ -1638,6 +1681,7 @@ mod tests {
             &mut conn,
             SubmitStockDocumentRequest {
                 document_type: "inbound".to_string(),
+                outbound_kind: None,
                 business_date: "2026-06-30".to_string(),
                 department_id: None,
                 supplier_id: Some("supplier-disabled".to_string()),
@@ -1662,6 +1706,7 @@ mod tests {
             &mut conn,
             SubmitStockDocumentRequest {
                 document_type: "outbound".to_string(),
+                outbound_kind: None,
                 business_date: "2026-06-30".to_string(),
                 department_id: Some("dept-disabled".to_string()),
                 supplier_id: None,
@@ -1706,6 +1751,7 @@ mod tests {
             &mut conn,
             SubmitStockDocumentRequest {
                 document_type: "inbound".to_string(),
+                outbound_kind: None,
                 business_date: "2026-06-10".to_string(),
                 department_id: None,
                 supplier_id: Some("supplier-filter".to_string()),
@@ -1728,6 +1774,7 @@ mod tests {
             &mut conn,
             SubmitStockDocumentRequest {
                 document_type: "inbound".to_string(),
+                outbound_kind: None,
                 business_date: "2026-07-10".to_string(),
                 department_id: None,
                 supplier_id: None,
@@ -1750,6 +1797,7 @@ mod tests {
             &mut conn,
             SubmitStockDocumentRequest {
                 document_type: "outbound".to_string(),
+                outbound_kind: None,
                 business_date: "2026-06-11".to_string(),
                 department_id: Some("dept-admin-office".to_string()),
                 supplier_id: None,
@@ -2035,6 +2083,7 @@ mod tests {
             &mut conn,
             SubmitStockDocumentRequest {
                 document_type: "outbound".to_string(),
+                outbound_kind: None,
                 business_date: "2026-06-30".to_string(),
                 department_id: Some("dept-admin-office".to_string()),
                 supplier_id: None,
@@ -2063,6 +2112,85 @@ mod tests {
             )
             .unwrap();
         assert_eq!(document_count, 0);
+    }
+
+    #[test]
+    fn guest_sale_outbound_skips_department_budget_and_reduces_stock() {
+        let mut conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrations::run(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO categories (id, name, enabled) VALUES ('cat-budget', '预算分类', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO master_items (id, code, name, category_id, unit_id, default_price)
+             VALUES ('item-budget', 'BUD-001', '预算物品', 'cat-budget', 'unit-piece', 10)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO stock_balances (id, item_id, quantity, amount, average_price)
+             VALUES ('balance-budget', 'item-budget', 20, 200, 10)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO budget_rules (
+               id, department_id, category_id, period_month, amount_limit, enabled
+             )
+             VALUES ('budget-1', 'dept-admin-office', 'cat-budget', '2026-06', 100, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO stock_movements (
+               id, movement_date, item_id, direction, quantity, unit_price, amount,
+               department_id, movement_type
+             )
+             VALUES (
+               'mov-used', '2026-06-10', 'item-budget', 'out', 10, 10, 100,
+               'dept-admin-office', 'outbound'
+             )",
+            [],
+        )
+        .unwrap();
+
+        let detail = submit_stock_document(
+            &mut conn,
+            SubmitStockDocumentRequest {
+                document_type: "outbound".to_string(),
+                outbound_kind: Some("guest_sale".to_string()),
+                business_date: "2026-06-30".to_string(),
+                department_id: None,
+                supplier_id: None,
+                handler: Some("tester".to_string()),
+                purpose: Some("客人购买".to_string()),
+                remark: None,
+                approval_request_id: None,
+                lines: vec![SubmitStockDocumentLine {
+                    item_id: "item-budget".to_string(),
+                    quantity: 5.0,
+                    unit_price: 10.0,
+                    amount: None,
+                    remark: None,
+                }],
+            },
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(detail.document.outbound_kind.as_deref(), Some("guest_sale"));
+        assert_eq!(detail.document.department_id, None);
+        let quantity: f64 = conn
+            .query_row(
+                "SELECT quantity FROM stock_balances WHERE item_id = 'item-budget'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(quantity, 15.0);
     }
 
     #[test]
@@ -2123,6 +2251,7 @@ mod tests {
             &mut conn,
             SubmitStockDocumentRequest {
                 document_type: "outbound".to_string(),
+                outbound_kind: None,
                 business_date: "2026-06-30".to_string(),
                 department_id: Some("dept-admin-office".to_string()),
                 supplier_id: None,
@@ -2184,6 +2313,7 @@ mod tests {
             &mut conn,
             SubmitStockDocumentRequest {
                 document_type: "outbound".to_string(),
+                outbound_kind: None,
                 business_date: "2026-06-30".to_string(),
                 department_id: Some("dept-admin-office".to_string()),
                 supplier_id: None,
@@ -2208,6 +2338,7 @@ mod tests {
             &mut conn,
             SubmitStockDocumentRequest {
                 document_type: "outbound".to_string(),
+                outbound_kind: None,
                 business_date: "2026-06-30".to_string(),
                 department_id: Some("dept-admin-office".to_string()),
                 supplier_id: None,
@@ -2259,6 +2390,7 @@ mod tests {
             SaveStockDocumentDraftRequest {
                 document_id: None,
                 document_type: "inbound".to_string(),
+                outbound_kind: None,
                 business_date: "2026-06-30".to_string(),
                 department_id: None,
                 supplier_id: None,
