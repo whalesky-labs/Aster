@@ -3,7 +3,8 @@ use tauri::{AppHandle, State};
 use crate::app::state::AppState;
 use crate::domain::runtime::{
     ClientConnectionInfo, HostConnectionTestRequest, HostConnectionTestResult, HostDiscoveryResult,
-    HostServiceStatus, PairWithHostRequest, RuntimeConfig, SaveClientConfigRequest,
+    HostServiceStatus, PairWithHostRequest, RemoveClientConnectionRequest, RuntimeConfig,
+    SaveClientConfigRequest,
 };
 use crate::error::AppResult;
 use crate::services::host_service;
@@ -25,6 +26,14 @@ pub fn get_host_service_status(state: State<'_, AppState>) -> AppResult<HostServ
 #[tauri::command]
 pub fn list_client_connections(state: State<'_, AppState>) -> AppResult<Vec<ClientConnectionInfo>> {
     host_service::list_client_connections(&state)
+}
+
+#[tauri::command]
+pub fn remove_client_connection(
+    state: State<'_, AppState>,
+    request: RemoveClientConnectionRequest,
+) -> AppResult<()> {
+    host_service::remove_client_connection(&state, request)
 }
 
 #[tauri::command]

@@ -109,3 +109,9 @@ pub struct PairWithHostRequest {
     pub client_name: String,
     pub client_device_id: String,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveClientConnectionRequest {
+    pub client_device_id: String,
+}

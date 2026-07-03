@@ -2462,6 +2462,19 @@ function MainApp() {
     });
   }
 
+  async function removeClientConnection(client: ClientConnectionInfo) {
+    const confirmed = window.confirm(
+      i18n.t("settings.removeClientConfirm", { name: client.clientName }),
+    );
+    if (!confirmed) return;
+    await runAction("客户端设备已移除", async () => {
+      await invoke("remove_client_connection", {
+        request: { clientDeviceId: client.clientDeviceId },
+      });
+      await loadHostRuntime();
+    });
+  }
+
   async function decideApprovalRequest(
     approvalId: string,
     approve: boolean,
@@ -3034,6 +3047,7 @@ function MainApp() {
               })
             }
             onLogout={logoutUser}
+            onRemoveClientConnection={removeClientConnection}
             onStartHostService={startHostRuntime}
             clientConnections={clientConnections}
             hostStatus={hostStatus}
@@ -9222,6 +9236,7 @@ function SettingsPage({
   onAppearanceChange,
   onLogout,
   onOpenConnectionWizard,
+  onRemoveClientConnection,
   onStartHostService,
   status,
   systemSettings,
@@ -9240,6 +9255,7 @@ function SettingsPage({
   onAppearanceChange: React.Dispatch<React.SetStateAction<AppearanceSettings>>;
   onLogout: () => Promise<void>;
   onOpenConnectionWizard: () => void;
+  onRemoveClientConnection: (client: ClientConnectionInfo) => Promise<void>;
   onStartHostService: () => Promise<void>;
   status: AppStatus | null;
   systemSettings: SystemSettings | null;
@@ -9680,6 +9696,7 @@ function SettingsPage({
                     <th>{i18n.t("settings.clientVersion")}</th>
                     <th>{i18n.t("settings.clientStatus")}</th>
                     <th>{i18n.t("settings.clientLastSeen")}</th>
+                    <th>{i18n.t("settings.clientActions")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -9693,9 +9710,19 @@ function SettingsPage({
                         <span className="status enabled">{client.status}</span>
                       </td>
                       <td>{client.lastSeenAt}</td>
+                      <td className="row-actions">
+                        <button
+                          className="ghost-button"
+                          disabled={!canManage || isWorking}
+                          type="button"
+                          onClick={() => void onRemoveClientConnection(client)}
+                        >
+                          {i18n.t("settings.removeClient")}
+                        </button>
+                      </td>
                     </tr>
                   ))}
-                  {clientConnections.length === 0 ? <EmptyRow colSpan={6} /> : null}
+                  {clientConnections.length === 0 ? <EmptyRow colSpan={7} /> : null}
                 </tbody>
               </table>
             </div>

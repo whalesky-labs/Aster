@@ -19,7 +19,7 @@ use commands::backup_commands::{
 };
 use commands::host_commands::{
     discover_hosts, get_host_service_status, list_client_connections, pair_with_host,
-    save_client_config, start_host_service, test_host_connection,
+    remove_client_connection, save_client_config, start_host_service, test_host_connection,
 };
 use commands::import_commands::{preview_excel_import, run_excel_import};
 use commands::master_data_commands::{
@@ -123,6 +123,7 @@ pub fn run() {
             start_host_service,
             get_host_service_status,
             list_client_connections,
+            remove_client_connection,
             save_client_config,
             test_host_connection,
             discover_hosts,

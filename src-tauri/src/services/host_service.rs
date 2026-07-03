@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -25,7 +26,7 @@ use crate::domain::master_data::{
 use crate::domain::reports::{ReportBundle, ReportQuery};
 use crate::domain::runtime::{
     ClientConnectionInfo, HostConnectionTestRequest, HostConnectionTestResult, HostDiscoveryResult,
-    HostServiceStatus, SaveClientConfigRequest,
+    HostServiceStatus, RemoveClientConnectionRequest, SaveClientConfigRequest,
 };
 use crate::domain::status::{AppStatus, AuditLogRow, SystemSettings};
 use crate::domain::stock::{
@@ -143,6 +144,42 @@ pub fn stop_host_service_runtime(state: &AppState) {
 pub fn list_client_connections(state: &AppState) -> AppResult<Vec<ClientConnectionInfo>> {
     crate::services::user_service::require_admin(state)?;
     state.db.with_conn(list_client_connections_from_conn)
+}
+
+pub fn remove_client_connection(
+    state: &AppState,
+    request: RemoveClientConnectionRequest,
+) -> AppResult<()> {
+    crate::services::user_service::require_admin(state)?;
+    let client_device_id = request.client_device_id.trim().to_string();
+    if client_device_id.is_empty() {
+        return Err(AppError::Validation("客户端设备不能为空".to_string()));
+    }
+    let removed = state
+        .db
+        .with_conn(|conn| remove_client_connection_from_conn(conn, &client_device_id))?;
+    {
+        let mut runtime = state
+            .host_service
+            .lock()
+            .expect("host runtime mutex poisoned");
+        runtime
+            .clients
+            .retain(|_, client| client.client_device_id != client_device_id);
+    }
+    state.db.with_conn(|conn| {
+        conn.execute(
+            "INSERT INTO audit_logs (id, action, entity_type, entity_id, summary, operator)
+             VALUES (?1, 'remove_client_connection', 'client_connection', ?2, ?3, ?4)",
+            rusqlite::params![
+                Uuid::new_v4().to_string(),
+                client_device_id,
+                format!("移除客户端设备：{}", removed.client_name),
+                crate::services::user_service::current_operator(state)
+            ],
+        )?;
+        Ok(())
+    })
 }
 
 pub fn save_client_config(
@@ -2030,6 +2067,38 @@ fn touch_client_connection(
     Ok(())
 }
 
+fn remove_client_connection_from_conn(
+    conn: &rusqlite::Connection,
+    client_device_id: &str,
+) -> AppResult<ClientConnectionInfo> {
+    let client = conn
+        .query_row(
+            "SELECT id, client_name, client_device_id, COALESCE(client_ip, ''),
+                    COALESCE(app_version, ''), status, last_seen_at
+             FROM client_connections
+             WHERE client_device_id = ?1",
+            rusqlite::params![client_device_id],
+            |row| {
+                Ok(ClientConnectionInfo {
+                    id: row.get(0)?,
+                    client_name: row.get(1)?,
+                    client_device_id: row.get(2)?,
+                    client_ip: row.get(3)?,
+                    app_version: row.get(4)?,
+                    status: row.get(5)?,
+                    last_seen_at: row.get(6)?,
+                })
+            },
+        )
+        .optional()?
+        .ok_or_else(|| AppError::Validation("客户端设备不存在".to_string()))?;
+    conn.execute(
+        "DELETE FROM client_connections WHERE client_device_id = ?1",
+        rusqlite::params![client_device_id],
+    )?;
+    Ok(client)
+}
+
 fn token_hash(token: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(token.as_bytes());
@@ -2464,6 +2533,103 @@ mod tests {
         assert_eq!(clients.len(), 1);
         assert_eq!(clients[0].id, "persisted-client");
         assert_eq!(clients[0].client_name, "客房电脑");
+    }
+
+    #[test]
+    fn remove_client_connection_revokes_token_and_runtime_client() {
+        let (_dir, db) = test_db();
+        let state = AppState {
+            paths: AppPaths {
+                data_dir: _dir.path().to_path_buf(),
+                database_path: _dir.path().join("aster.sqlite"),
+                backup_dir: _dir.path().join("backups"),
+                export_dir: _dir.path().join("exports"),
+                import_report_dir: _dir.path().join("import-reports"),
+            },
+            db,
+            session: Arc::new(Mutex::new(Some(CurrentUser {
+                id: "user-admin".to_string(),
+                username: "admin".to_string(),
+                display_name: "管理员".to_string(),
+                department_id: None,
+                department_name: None,
+                roles: vec![Role {
+                    id: "role-admin".to_string(),
+                    code: "admin".to_string(),
+                    name: "管理员".to_string(),
+                }],
+                permissions: vec!["manage_settings".to_string()],
+            }))),
+            host_service: Arc::new(Mutex::new(HostServiceRuntime::default())),
+        };
+        state
+            .db
+            .with_conn(|conn| {
+                upsert_client_connection(
+                    conn,
+                    &ClientConnectionInfo {
+                        id: "persisted-client".to_string(),
+                        client_name: "前台电脑".to_string(),
+                        client_device_id: "device-frontdesk".to_string(),
+                        client_ip: "192.168.1.20".to_string(),
+                        app_version: "0.1.0".to_string(),
+                        status: "paired".to_string(),
+                        last_seen_at: "2026-06-30T10:00:00+08:00".to_string(),
+                    },
+                    &token_hash("revoked-token"),
+                )
+            })
+            .unwrap();
+        {
+            let mut runtime = state.host_service.lock().unwrap();
+            runtime.clients.insert(
+                "revoked-token".to_string(),
+                ClientConnectionInfo {
+                    id: "revoked-token".to_string(),
+                    client_name: "前台电脑".to_string(),
+                    client_device_id: "device-frontdesk".to_string(),
+                    client_ip: "192.168.1.20".to_string(),
+                    app_version: "0.1.0".to_string(),
+                    status: "online".to_string(),
+                    last_seen_at: "2026-06-30T10:00:00+08:00".to_string(),
+                },
+            );
+        }
+
+        remove_client_connection(
+            &state,
+            RemoveClientConnectionRequest {
+                client_device_id: "device-frontdesk".to_string(),
+            },
+        )
+        .unwrap();
+
+        let clients = list_client_connections(&state).unwrap();
+        assert!(clients.is_empty());
+        let removed_token = state
+            .db
+            .with_conn(|conn| {
+                find_client_connection_by_token_hash(conn, &token_hash("revoked-token"))
+            })
+            .unwrap();
+        assert!(removed_token.is_none());
+        let runtime = state.host_service.lock().unwrap();
+        assert!(!runtime.clients.contains_key("revoked-token"));
+        drop(runtime);
+        let audit_count: i64 = state
+            .db
+            .with_conn(|conn| {
+                Ok(conn.query_row(
+                    "SELECT COUNT(*) FROM audit_logs
+                     WHERE action = 'remove_client_connection'
+                       AND entity_type = 'client_connection'
+                       AND entity_id = 'device-frontdesk'",
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(audit_count, 1);
     }
 
     #[test]
