@@ -31,7 +31,7 @@
 
 ### 验收说明
 
-- 已通过 `npm run build`、`npm run verify:coverage`、`cargo test`、Release Notes 生成脚本和 `git diff --check` 验证。
+- 本轮已通过 `npm run build`、`cargo check`、`cargo test stock_repository` 和 `git diff --check` 验证；CI 构建时会继续执行发布验证并生成 release evidence。
 - 业务表单深层文案后续可继续沿用 `src/i18n.ts` 的翻译字典逐步迁移。
 
 ## [0.1.0] - 2026-07-02
