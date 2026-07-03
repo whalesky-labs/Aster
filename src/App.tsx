@@ -3480,6 +3480,7 @@ function EditorWindowApp({
   const [departments, setDepartments] = useState<Department[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [items, setItems] = useState<Item[]>([]);
+  const [stockBalances, setStockBalances] = useState<StockBalanceRow[]>([]);
   const [users, setUsers] = useState<UserAccount[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
   const [budgetRules, setBudgetRules] = useState<BudgetRule[]>([]);
@@ -3551,6 +3552,13 @@ function EditorWindowApp({
       if (editor === "budget") {
         setBudgetRules(
           await invoke<BudgetRule[]>("list_budget_rules", { periodMonth }),
+        );
+      }
+      if (editor === "stockDocument") {
+        setStockBalances(
+          await invoke<StockBalanceRow[]>("list_stock_balances", {
+            query: {},
+          }),
         );
       }
       if (
@@ -3907,6 +3915,7 @@ function EditorWindowApp({
   } else if (editor === "stockDocument" && documentType) {
     content = (
       <StockDocumentEditor
+        balances={stockBalances}
         departments={enabledDepartments}
         disabled={isSaving || isLoading}
         documentType={documentType}
@@ -5731,6 +5740,7 @@ function RestoreBackupEditor({
 }
 
 function StockDocumentEditor({
+  balances,
   departments,
   disabled,
   documentType,
@@ -5740,6 +5750,7 @@ function StockDocumentEditor({
   onSubmit,
   suppliers,
 }: {
+  balances: StockBalanceRow[];
   departments: Department[];
   disabled: boolean;
   documentType: "inbound" | "outbound";
@@ -5774,6 +5785,20 @@ function StockDocumentEditor({
     (sum, line) => sum + effectiveLineAmount(line),
     0,
   );
+  const balanceByItemId = useMemo(
+    () => new Map(balances.map((balance) => [balance.itemId, balance])),
+    [balances],
+  );
+
+  function availableStockInfo(itemId: string) {
+    if (!itemId) return { label: "-", empty: true };
+    const balance = balanceByItemId.get(itemId);
+    if (!balance) return { label: "0", empty: true };
+    return {
+      label: `${balance.quantity} ${balance.unitName ?? ""}`.trim(),
+      empty: balance.quantity <= 0,
+    };
+  }
 
   function updateLine(
     index: number,
@@ -5939,6 +5964,7 @@ function StockDocumentEditor({
           <thead>
             <tr>
               <th>物品</th>
+              {isOutbound ? <th>可用库存</th> : null}
               <th>数量</th>
               <th>单价</th>
               <th>金额</th>
@@ -5957,6 +5983,19 @@ function StockDocumentEditor({
                     onChange={(itemId) => updateLine(index, { itemId })}
                   />
                 </td>
+                {isOutbound ? (
+                  <td>
+                    <span
+                      className={
+                        availableStockInfo(line.itemId).empty
+                          ? "available-stock empty"
+                          : "available-stock"
+                      }
+                    >
+                      {availableStockInfo(line.itemId).label}
+                    </span>
+                  </td>
+                ) : null}
                 <td>
                   <input
                     className="table-input"
