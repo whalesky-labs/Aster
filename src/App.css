@@ -1242,6 +1242,15 @@ select:focus,
   justify-content: flex-end;
 }
 
+.document-action-toolbar {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.document-action-toolbar .void-controls {
+  flex: 0 1 680px;
+}
+
 .table-toolbar form {
   display: grid;
   grid-template-columns: 220px 68px;
@@ -1427,7 +1436,7 @@ tbody tr:hover {
 }
 
 .subtable {
-  border-top: 1px solid var(--native-panel-border);
+  border-top: 0;
   padding-top: 0;
 }
 
@@ -1446,7 +1455,7 @@ tbody tr:hover {
 
 .void-controls {
   display: grid;
-  grid-template-columns: repeat(3, minmax(110px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 7px;
 }
 

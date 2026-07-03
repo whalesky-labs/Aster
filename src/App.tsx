@@ -7039,10 +7039,22 @@ function StockDocumentPage({
   suppliers: Supplier[];
 }) {
   const isOutbound = documentType === "outbound";
+  const [approvalRequestId, setApprovalRequestId] = useState("");
+  const [voidReason, setVoidReason] = useState("");
+  const [voidHandler, setVoidHandler] = useState("");
 
   return (
     <section className="table-panel">
-      <div className="table-toolbar actions-only">
+      <div className="table-toolbar document-action-toolbar">
+        <DocumentVoidControls
+          approvalRequestId={approvalRequestId}
+          isOutbound={isOutbound}
+          setApprovalRequestId={setApprovalRequestId}
+          setVoidHandler={setVoidHandler}
+          setVoidReason={setVoidReason}
+          voidHandler={voidHandler}
+          voidReason={voidReason}
+        />
         <button
           className="primary-button"
           disabled={!canWrite}
@@ -7063,17 +7075,61 @@ function StockDocumentPage({
         items={items}
         isOutbound={isOutbound}
         canVoid={canWrite}
+        approvalRequestId={approvalRequestId}
         onConfirmDraft={onConfirmDraft}
         onQueryChange={onQueryChange}
         onVoid={onVoid}
         query={query}
+        voidHandler={voidHandler}
+        voidReason={voidReason}
         suppliers={suppliers}
       />
     </section>
   );
 }
 
+function DocumentVoidControls({
+  approvalRequestId,
+  isOutbound,
+  setApprovalRequestId,
+  setVoidHandler,
+  setVoidReason,
+  voidHandler,
+  voidReason,
+}: {
+  approvalRequestId: string;
+  isOutbound: boolean;
+  setApprovalRequestId: (value: string) => void;
+  setVoidHandler: (value: string) => void;
+  setVoidReason: (value: string) => void;
+  voidHandler: string;
+  voidReason: string;
+}) {
+  return (
+    <div className="void-controls">
+      {isOutbound ? (
+        <input
+          placeholder="审批单 ID"
+          value={approvalRequestId}
+          onChange={(e) => setApprovalRequestId(e.target.value)}
+        />
+      ) : null}
+      <input
+        placeholder="作废原因"
+        value={voidReason}
+        onChange={(e) => setVoidReason(e.target.value)}
+      />
+      <input
+        placeholder="经办人"
+        value={voidHandler}
+        onChange={(e) => setVoidHandler(e.target.value)}
+      />
+    </div>
+  );
+}
+
 function DocumentList({
+  approvalRequestId = "",
   canVoid = true,
   departments = [],
   documents,
@@ -7085,7 +7141,10 @@ function DocumentList({
   query,
   suppliers = [],
   title,
+  voidHandler = "",
+  voidReason = "",
 }: {
+  approvalRequestId?: string;
   canVoid?: boolean;
   departments?: Department[];
   documents: StockDocument[];
@@ -7104,10 +7163,9 @@ function DocumentList({
   query?: StockDocumentQuery;
   suppliers?: Supplier[];
   title?: string;
+  voidHandler?: string;
+  voidReason?: string;
 }) {
-  const [approvalRequestId, setApprovalRequestId] = useState("");
-  const [voidReason, setVoidReason] = useState("");
-  const [voidHandler, setVoidHandler] = useState("");
   const [filterDraft, setFilterDraft] = useState<StockDocumentQuery>(
     query ?? { documentType: isOutbound ? "outbound" : "inbound" },
   );
@@ -7147,30 +7205,9 @@ function DocumentList({
 
   return (
     <div className="subtable">
-      {title || onVoid ? (
+      {title ? (
         <div className="subtable-heading">
-          {title ? <h3>{title}</h3> : <span />}
-          {onVoid ? (
-          <div className="void-controls">
-            {isOutbound ? (
-              <input
-                placeholder="审批单 ID"
-                value={approvalRequestId}
-                onChange={(e) => setApprovalRequestId(e.target.value)}
-              />
-            ) : null}
-            <input
-              placeholder="作废原因"
-              value={voidReason}
-              onChange={(e) => setVoidReason(e.target.value)}
-            />
-            <input
-              placeholder="经办人"
-              value={voidHandler}
-              onChange={(e) => setVoidHandler(e.target.value)}
-            />
-          </div>
-          ) : null}
+          <h3>{title}</h3>
         </div>
       ) : null}
       {query && onQueryChange ? (
@@ -7818,9 +7855,21 @@ function AdjustmentPage({
     handler: string,
   ) => Promise<void>;
 }) {
+  const [voidReason, setVoidReason] = useState("");
+  const [voidHandler, setVoidHandler] = useState("");
+
   return (
     <section className="table-panel">
-      <div className="table-toolbar actions-only">
+      <div className="table-toolbar document-action-toolbar">
+        <DocumentVoidControls
+          approvalRequestId=""
+          isOutbound={false}
+          setApprovalRequestId={() => undefined}
+          setVoidHandler={setVoidHandler}
+          setVoidReason={setVoidReason}
+          voidHandler={voidHandler}
+          voidReason={voidReason}
+        />
         <button
           className="primary-button"
           disabled={!canWrite}
@@ -7836,6 +7885,8 @@ function AdjustmentPage({
         documents={documents}
         isOutbound={false}
         onVoid={onVoid}
+        voidHandler={voidHandler}
+        voidReason={voidReason}
       />
     </section>
   );
@@ -9525,7 +9576,9 @@ function MasterTablePanel({
 }) {
   return (
     <section className="table-panel">
-      <div className={hideHeading ? "table-toolbar actions-only" : "table-toolbar"}>
+      <div
+        className={hideHeading ? "table-toolbar actions-only" : "table-toolbar"}
+      >
         {hideHeading ? null : (
           <div>
             <h2>{title}</h2>
