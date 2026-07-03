@@ -1287,6 +1287,24 @@ function connectionStatusHint(
   return i18n.t("connection.hint.standalone");
 }
 
+function connectionStatusKind(
+  status: AppStatus | null,
+  hostStatus: HostServiceStatus | null,
+  hostTestResult: HostConnectionTestResult | null,
+) {
+  if (!status) return "idle";
+  if (status.runtime.mode === "host") {
+    return hostStatus?.running ? "success" : "warning";
+  }
+  if (status.runtime.mode === "client") {
+    if (!status.runtime.clientToken || hostTestResult?.ok === false) {
+      return "warning";
+    }
+    return "success";
+  }
+  return "success";
+}
+
 function optionName(options: OptionRecord[], id?: string | null) {
   return options.find((item) => item.id === id)?.name ?? "-";
 }
@@ -2399,6 +2417,11 @@ function MainApp() {
   const settingsNavItem = visibleNavItems.find(
     (item) => item.key === "settings",
   );
+  const sidebarConnectionKind = connectionStatusKind(
+    status,
+    hostStatus,
+    hostTestResult,
+  );
   const clientPauseMessage =
     isClientMode && currentUser && !isBusinessConnectionReady
       ? i18n.t("app.clientPaused", {
@@ -2492,6 +2515,31 @@ function MainApp() {
               <NavIcon name={settingsNavItem.key} />
               <span className="nav-item-label">
                 {i18n.t(settingsNavItem.labelKey)}
+              </span>
+            </button>
+            <button
+              className={`sidebar-connection sidebar-connection-${sidebarConnectionKind}`}
+              onClick={() => setActiveNav(settingsNavItem.key)}
+              title={connectionStatusHint(
+                status,
+                hostStatus,
+                hostTestResult,
+                i18n,
+              )}
+            >
+              <span className="sidebar-connection-dot" />
+              <span className="sidebar-connection-copy">
+                <strong>
+                  {connectionStatusLabel(status, hostTestResult, i18n)}
+                </strong>
+                <em>
+                  {connectionStatusHint(
+                    status,
+                    hostStatus,
+                    hostTestResult,
+                    i18n,
+                  )}
+                </em>
               </span>
             </button>
           </div>
