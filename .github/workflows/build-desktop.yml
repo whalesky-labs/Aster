@@ -155,11 +155,23 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: macOS
+          - name: macOS Intel
             os: macos-15-intel
             rust_target: x86_64-apple-darwin
-            artifact_name: aster-macos
-            evidence_artifact_name: aster-macos-release-evidence
+            artifact_name: aster-macos-x64
+            evidence_artifact_name: aster-macos-x64-release-evidence
+            release_asset_name: macos-x86_64
+            artifact_path: |
+              src-tauri/target/*/release/bundle/macos/*.app/**
+              src-tauri/target/*/release/bundle/dmg/*.dmg
+              src-tauri/target/release/bundle/macos/*.app/**
+              src-tauri/target/release/bundle/dmg/*.dmg
+          - name: macOS Apple Silicon
+            os: macos-15
+            rust_target: aarch64-apple-darwin
+            artifact_name: aster-macos-aarch64
+            evidence_artifact_name: aster-macos-aarch64-release-evidence
+            release_asset_name: macos-aarch64
             artifact_path: |
               src-tauri/target/*/release/bundle/macos/*.app/**
               src-tauri/target/*/release/bundle/dmg/*.dmg
@@ -170,6 +182,7 @@ jobs:
             rust_target: x86_64-pc-windows-msvc
             artifact_name: aster-windows-x64
             evidence_artifact_name: aster-windows-x64-release-evidence
+            release_asset_name: windows-x86_64
             artifact_path: |
               src-tauri/target/*/release/bundle/**/*.exe
               src-tauri/target/*/release/bundle/**/*.msi
@@ -305,7 +318,8 @@ jobs:
           mkdir -p release-upload
 
           installer_dirs=(
-            "release-assets/aster-macos"
+            "release-assets/aster-macos-x64"
+            "release-assets/aster-macos-aarch64"
             "release-assets/aster-windows-x64"
           )
           for dir in "${installer_dirs[@]}"; do
@@ -316,10 +330,15 @@ jobs:
           done
 
           while IFS= read -r -d '' file; do
+            cp "${file}" "release-upload/aster-${RELEASE_VERSION}-macos-x86_64.dmg"
+          done < <(find release-assets/aster-macos-x64 -type f -name "*.dmg" -print0)
+
+          while IFS= read -r -d '' file; do
+            cp "${file}" "release-upload/aster-${RELEASE_VERSION}-macos-aarch64.dmg"
+          done < <(find release-assets/aster-macos-aarch64 -type f -name "*.dmg" -print0)
+
+          while IFS= read -r -d '' file; do
             case "${file}" in
-              *.dmg)
-                cp "${file}" "release-upload/aster-${RELEASE_VERSION}-macos-x86_64.dmg"
-                ;;
               *.msi)
                 cp "${file}" "release-upload/aster-${RELEASE_VERSION}-windows-x86_64.msi"
                 ;;
@@ -327,13 +346,13 @@ jobs:
                 cp "${file}" "release-upload/aster-${RELEASE_VERSION}-windows-x86_64-setup.exe"
                 ;;
               *)
-                echo "::error::Unsupported release asset: ${file}"
+                echo "::error::Unsupported Windows release asset: ${file}"
                 exit 1
                 ;;
             esac
           done < <(
-            find "${installer_dirs[@]}" -type f \
-              \( -name "*.dmg" -o -name "*.msi" -o -name "*.exe" \) \
+            find release-assets/aster-windows-x64 -type f \
+              \( -name "*.msi" -o -name "*.exe" \) \
               -print0
           )
 
@@ -344,7 +363,11 @@ jobs:
           fi
 
           if ! find release-upload -maxdepth 1 -type f -name "aster-${RELEASE_VERSION}-macos-x86_64.dmg" | grep -q .; then
-            echo "::error::macOS DMG release asset missing."
+            echo "::error::macOS Intel DMG release asset missing."
+            exit 1
+          fi
+          if ! find release-upload -maxdepth 1 -type f -name "aster-${RELEASE_VERSION}-macos-aarch64.dmg" | grep -q .; then
+            echo "::error::macOS Apple Silicon DMG release asset missing."
             exit 1
           fi
           if ! find release-upload -maxdepth 1 -type f \( -name "aster-${RELEASE_VERSION}-windows-x86_64-setup.exe" -o -name "aster-${RELEASE_VERSION}-windows-x86_64.msi" \) | grep -q .; then

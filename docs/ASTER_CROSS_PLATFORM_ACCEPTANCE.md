@@ -6,10 +6,12 @@
 
 ## 2. 当前已验证
 
-macOS 本机已完成 Tauri release 打包；GitHub Actions 的 `Build Desktop Bundles` workflow 也会在 `macos-15-intel` 上使用 `x86_64-apple-darwin` target 生成 macOS Intel/x64 包：
+macOS 本机已完成 Tauri release 打包；GitHub Actions 的 `Build Desktop Bundles` workflow 会同时生成 macOS Intel/x64 和 Apple Silicon 包：
 
 - 应用产物：`src-tauri/target/release/bundle/macos/Aster.app`
 - DMG 产物：`src-tauri/target/release/bundle/dmg/Aster_0.1.0_x64.dmg`
+- GitHub Intel DMG：`aster-<version>-macos-x86_64.dmg`，runner 为 `macos-15-intel`，Rust target 为 `x86_64-apple-darwin`。
+- GitHub Apple Silicon DMG：`aster-<version>-macos-aarch64.dmg`，runner 为 `macos-15`，Rust target 为 `aarch64-apple-darwin`。
 
 验证命令：
 

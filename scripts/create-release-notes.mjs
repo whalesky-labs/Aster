@@ -38,6 +38,11 @@ const downloads = [
     purpose: "Intel Mac 安装包",
   },
   {
+    file: `aster-${version}-macos-aarch64.dmg`,
+    usage: "Apple Silicon Mac installer",
+    purpose: "Apple Silicon Mac 安装包",
+  },
+  {
     file: `aster-${version}-windows-x86_64-setup.exe`,
     usage: "Windows 64-bit installer",
     purpose: "Windows 64 位安装包",

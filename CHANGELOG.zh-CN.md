@@ -8,11 +8,13 @@
 
 - 完成系统设置中的“界面语言”功能，新增前端轻量 i18n 架构，支持简体中文与 English 切换。
 - 语言设置会即时作用于主窗口，并持久化到本地外观设置；应用会同步更新 HTML `lang` 属性为 `zh-CN` 或 `en-US`。
+- 新增 macOS Apple Silicon 构建，GitHub Actions 会使用 `macos-15` 与 `aarch64-apple-darwin` 生成 `aster-<version>-macos-aarch64.dmg`。
 
 ### 优化
 
 - 界面语言切换已覆盖登录页、侧边导航、顶部栏、状态栏、仪表盘、系统设置页、连接与备份面板、备份记录和操作日志枚举标签。
 - 清理入库、出库和库存调整单据的作废控件布局，将审批单 ID、作废原因和经办人统一放到顶部工具栏，避免表格标题区拥挤混乱。
+- GitHub Release 资产收集和发布说明已区分 macOS Intel 与 Apple Silicon DMG，避免两个 macOS 安装包互相覆盖。
 
 ### 验收说明
 
