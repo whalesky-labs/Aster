@@ -48,9 +48,9 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
 
       - name: Resolve version
         id: version
@@ -195,9 +195,9 @@ jobs:
           ref: ${{ needs.prepare_release.outputs.target_commit }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - name: Setup Rust
@@ -256,7 +256,7 @@ jobs:
           find src-tauri/target -maxdepth 8 -type f \( -name "*.app" -o -name "*.dmg" -o -name "*.exe" -o -name "*.msi" -o -name "*.zip" \) -print || true
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_path }}
@@ -264,7 +264,7 @@ jobs:
 
       - name: Upload release evidence
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.evidence_artifact_name }}
           path: docs/release-evidence/
@@ -286,7 +286,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           path: release-assets
 
@@ -315,46 +315,58 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.prepare_release.outputs.release_version }}
         run: |
+          set -euo pipefail
           mkdir -p release-upload
 
-          installer_dirs=(
-            "release-assets/aster-macos-x64"
-            "release-assets/aster-macos-aarch64"
-            "release-assets/aster-windows-x64"
-          )
-          for dir in "${installer_dirs[@]}"; do
-            if [[ ! -d "${dir}" ]]; then
-              echo "::error::Expected installer artifact directory missing: ${dir}"
+          copy_single_asset() {
+            local pattern="$1"
+            local output="$2"
+            local description="$3"
+            local matches_file
+            local match_count
+            matches_file="$(mktemp)"
+            find release-assets -type f -path "${pattern}" -print | sort > "${matches_file}"
+            match_count="$(wc -l < "${matches_file}" | tr -d ' ')"
+            if [[ "${match_count}" -eq 0 ]]; then
+              echo "::error::${description} missing."
+              find release-assets -maxdepth 4 -type f -print | sort
+              rm -f "${matches_file}"
               exit 1
             fi
-          done
+            if [[ "${match_count}" -gt 1 ]]; then
+              echo "::error::Multiple ${description} artifacts found:"
+              cat "${matches_file}"
+              rm -f "${matches_file}"
+              exit 1
+            fi
+            cp "$(cat "${matches_file}")" "release-upload/${output}"
+            rm -f "${matches_file}"
+          }
 
-          while IFS= read -r -d '' file; do
-            cp "${file}" "release-upload/aster-${RELEASE_VERSION}-macos-x86_64.dmg"
-          done < <(find release-assets/aster-macos-x64 -type f -name "*.dmg" -print0)
+          copy_optional_asset() {
+            local pattern="$1"
+            local output="$2"
+            local matches_file
+            local match_count
+            matches_file="$(mktemp)"
+            find release-assets -type f -path "${pattern}" -print | sort > "${matches_file}"
+            match_count="$(wc -l < "${matches_file}" | tr -d ' ')"
+            if [[ "${match_count}" -gt 1 ]]; then
+              echo "::error::Multiple optional release artifacts found for ${output}:"
+              cat "${matches_file}"
+              rm -f "${matches_file}"
+              exit 1
+            fi
+            if [[ "${match_count}" -eq 1 ]]; then
+              cp "$(cat "${matches_file}")" "release-upload/${output}"
+            fi
+            rm -f "${matches_file}"
+          }
 
-          while IFS= read -r -d '' file; do
-            cp "${file}" "release-upload/aster-${RELEASE_VERSION}-macos-aarch64.dmg"
-          done < <(find release-assets/aster-macos-aarch64 -type f -name "*.dmg" -print0)
-
-          while IFS= read -r -d '' file; do
-            case "${file}" in
-              *.msi)
-                cp "${file}" "release-upload/aster-${RELEASE_VERSION}-windows-x86_64.msi"
-                ;;
-              *.exe)
-                cp "${file}" "release-upload/aster-${RELEASE_VERSION}-windows-x86_64-setup.exe"
-                ;;
-              *)
-                echo "::error::Unsupported Windows release asset: ${file}"
-                exit 1
-                ;;
-            esac
-          done < <(
-            find release-assets/aster-windows-x64 -type f \
-              \( -name "*.msi" -o -name "*.exe" \) \
-              -print0
-          )
+          copy_single_asset "*/aster-macos-x64/*.dmg" "aster-${RELEASE_VERSION}-macos-x86_64.dmg" "macOS Intel DMG release asset"
+          copy_single_asset "*/aster-macos-aarch64/*.dmg" "aster-${RELEASE_VERSION}-macos-aarch64.dmg" "macOS Apple Silicon DMG release asset"
+          copy_single_asset "*/aster-windows-x64/*.exe" "aster-${RELEASE_VERSION}-windows-x86_64-setup.exe" "Windows NSIS release asset"
+          copy_optional_asset "*/aster-windows-x64/*.msi" "aster-${RELEASE_VERSION}-windows-x86_64.msi"
 
           asset_count="$(find release-upload -type f | wc -l | tr -d ' ')"
           if [[ "${asset_count}" == "0" ]]; then
@@ -384,7 +396,14 @@ jobs:
           RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
           RELEASE_VERSION: ${{ needs.prepare_release.outputs.release_version }}
         run: |
-          mapfile -t assets < <(find release-upload -maxdepth 1 -type f | sort)
+          set -euo pipefail
+          assets_file="$(mktemp)"
+          find release-upload -maxdepth 1 -type f | sort > "${assets_file}"
+          if [[ ! -s "${assets_file}" ]]; then
+            echo "::error::No release assets prepared."
+            rm -f "${assets_file}"
+            exit 1
+          fi
           node scripts/create-release-notes.mjs "${RELEASE_VERSION}" "${RELEASE_TAG}" release-upload release-notes.md
 
           release_args=(
@@ -402,7 +421,8 @@ jobs:
 
           gh release create "${RELEASE_TAG}" "${release_args[@]}"
 
-          printf "%s\0" "${assets[@]}" | xargs -0 -n 1 -P 4 bash -c '
+          cat "${assets_file}" | xargs -n 1 -P 4 bash -c '
             asset="$1"
             gh release upload "$RELEASE_TAG" "$asset" --clobber
           ' _
+          rm -f "${assets_file}"
