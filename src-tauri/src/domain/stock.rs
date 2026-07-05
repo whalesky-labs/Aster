@@ -127,6 +127,7 @@ pub struct StockDocument {
     pub remark: Option<String>,
     pub total_quantity: f64,
     pub total_amount: f64,
+    pub item_summary: Option<String>,
     pub created_at: String,
     pub confirmed_at: Option<String>,
 }

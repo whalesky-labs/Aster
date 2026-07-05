@@ -29,7 +29,7 @@ pub fn submit_stock_document(
         allow_negative_stock,
     )?;
     tx.commit()?;
-    get_document_detail(conn, &document_id)
+    get_stock_document_detail(conn, &document_id)
 }
 
 pub fn save_stock_document_draft(
@@ -146,7 +146,7 @@ pub fn save_stock_document_draft(
         ],
     )?;
     tx.commit()?;
-    get_document_detail(conn, &document_id)
+    get_stock_document_detail(conn, &document_id)
 }
 
 pub fn confirm_stock_document_draft(
@@ -237,7 +237,7 @@ pub fn confirm_stock_document_draft(
         ],
     )?;
     tx.commit()?;
-    get_document_detail(conn, &request.document_id)
+    get_stock_document_detail(conn, &request.document_id)
 }
 
 pub fn submit_adjustment(
@@ -327,7 +327,7 @@ pub fn submit_adjustment(
     )?;
 
     tx.commit()?;
-    get_document_detail(conn, &document_id)
+    get_stock_document_detail(conn, &document_id)
 }
 
 pub fn void_stock_document(
@@ -439,7 +439,7 @@ pub fn void_stock_document(
     )?;
 
     tx.commit()?;
-    get_document_detail(conn, &document_id)
+    get_stock_document_detail(conn, &document_id)
 }
 
 pub fn list_stock_documents(
@@ -455,16 +455,43 @@ pub fn list_stock_documents(
     let search = blank_to_none(query.search);
     let search_like = search.as_ref().map(|value| format!("%{}%", value.trim()));
     let mut stmt = conn.prepare(
-        "SELECT d.id, d.document_no, d.document_type, d.outbound_kind, d.business_date,
+        "WITH document_items AS (
+           SELECT ranked.document_id,
+                  GROUP_CONCAT(ranked.item_label, '、') ||
+                    CASE
+                      WHEN totals.item_count > 3 THEN ' 等 ' || totals.item_count || ' 项'
+                      ELSE ''
+                    END AS item_summary
+           FROM (
+             SELECT l.document_id,
+                    i.code || ' · ' || i.name AS item_label,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY l.document_id
+                      ORDER BY MIN(l.created_at), i.code, i.name
+                    ) AS row_number
+             FROM stock_document_lines l
+             JOIN master_items i ON i.id = l.item_id
+             GROUP BY l.document_id, l.item_id
+           ) ranked
+           JOIN (
+             SELECT document_id, COUNT(DISTINCT item_id) AS item_count
+             FROM stock_document_lines
+             GROUP BY document_id
+           ) totals ON totals.document_id = ranked.document_id
+           WHERE ranked.row_number <= 3
+           GROUP BY ranked.document_id
+         )
+         SELECT d.id, d.document_no, d.document_type, d.outbound_kind, d.business_date,
                 d.department_id, COALESCE(d.department_name, dep.name),
                 d.supplier_id, COALESCE(d.supplier_name, sup.name),
                 d.handler, d.purpose, d.approval_request_id, d.status, d.remark,
                 COALESCE(SUM(l.quantity), 0), COALESCE(SUM(l.amount), 0),
-                d.created_at, d.confirmed_at
+                di.item_summary, d.created_at, d.confirmed_at
          FROM stock_documents d
          LEFT JOIN departments dep ON dep.id = d.department_id
          LEFT JOIN suppliers sup ON sup.id = d.supplier_id
          LEFT JOIN stock_document_lines l ON l.document_id = d.id
+         LEFT JOIN document_items di ON di.document_id = d.id
          WHERE (?1 IS NULL OR d.document_type = ?1)
            AND (?2 IS NULL OR d.outbound_kind = ?2)
            AND (?3 IS NULL OR strftime('%Y-%m', d.business_date) = ?3)
@@ -475,7 +502,26 @@ pub fn list_stock_documents(
              WHERE line_filter.document_id = d.id
                AND line_filter.item_id = ?6
            ))
-           AND (?7 IS NULL OR d.document_no LIKE ?7 OR COALESCE(d.handler, '') LIKE ?7 OR COALESCE(d.purpose, '') LIKE ?7 OR COALESCE(d.remark, '') LIKE ?7 OR COALESCE(d.department_name, '') LIKE ?7 OR COALESCE(d.supplier_name, '') LIKE ?7)
+           AND (
+             ?7 IS NULL
+             OR d.document_no LIKE ?7
+             OR COALESCE(d.handler, '') LIKE ?7
+             OR COALESCE(d.purpose, '') LIKE ?7
+             OR COALESCE(d.remark, '') LIKE ?7
+             OR COALESCE(d.department_name, '') LIKE ?7
+             OR COALESCE(d.supplier_name, '') LIKE ?7
+             OR EXISTS (
+               SELECT 1
+               FROM stock_document_lines search_line
+               JOIN master_items search_item ON search_item.id = search_line.item_id
+               WHERE search_line.document_id = d.id
+                 AND (
+                   search_item.code LIKE ?7
+                   OR search_item.name LIKE ?7
+                   OR COALESCE(search_item.spec, '') LIKE ?7
+                 )
+             )
+           )
          GROUP BY d.id
          ORDER BY d.business_date DESC, d.created_at DESC
          LIMIT ?8",
@@ -616,14 +662,14 @@ pub fn list_stock_movements(
     collect_rows(rows)
 }
 
-fn get_document_detail(conn: &Connection, id: &str) -> AppResult<StockDocumentDetail> {
+pub fn get_stock_document_detail(conn: &Connection, id: &str) -> AppResult<StockDocumentDetail> {
     let document = conn.query_row(
         "SELECT d.id, d.document_no, d.document_type, d.outbound_kind, d.business_date,
                 d.department_id, COALESCE(d.department_name, dep.name),
                 d.supplier_id, COALESCE(d.supplier_name, sup.name),
                 d.handler, d.purpose, d.approval_request_id, d.status, d.remark,
                 COALESCE(SUM(l.quantity), 0), COALESCE(SUM(l.amount), 0),
-                d.created_at, d.confirmed_at
+                NULL, d.created_at, d.confirmed_at
          FROM stock_documents d
          LEFT JOIN departments dep ON dep.id = d.department_id
          LEFT JOIN suppliers sup ON sup.id = d.supplier_id
@@ -1248,8 +1294,9 @@ fn map_document(row: &rusqlite::Row<'_>) -> rusqlite::Result<StockDocument> {
         remark: row.get(13)?,
         total_quantity: row.get(14)?,
         total_amount: row.get(15)?,
-        created_at: row.get(16)?,
-        confirmed_at: row.get(17)?,
+        item_summary: row.get(16)?,
+        created_at: row.get(17)?,
+        confirmed_at: row.get(18)?,
     })
 }
 
@@ -1674,8 +1721,8 @@ mod tests {
         )
         .unwrap();
 
-        let inbound_detail = get_document_detail(&conn, &inbound.document.id).unwrap();
-        let outbound_detail = get_document_detail(&conn, &outbound.document.id).unwrap();
+        let inbound_detail = get_stock_document_detail(&conn, &inbound.document.id).unwrap();
+        let outbound_detail = get_stock_document_detail(&conn, &outbound.document.id).unwrap();
         assert_eq!(
             inbound_detail.document.supplier_name.as_deref(),
             Some("旧供应商名称")
@@ -1875,6 +1922,10 @@ mod tests {
         .unwrap();
         assert_eq!(june_inbound.len(), 1);
         assert_eq!(june_inbound[0].id, inbound.document.id);
+        assert_eq!(
+            june_inbound[0].item_summary.as_deref(),
+            Some("FIL-A · 筛选物品A")
+        );
 
         let supplier_docs = list_stock_documents(
             &conn,
@@ -1921,6 +1972,21 @@ mod tests {
         .unwrap();
         assert_eq!(search_docs.len(), 1);
         assert_eq!(search_docs[0].document_type, "inbound");
+
+        let item_search_docs = list_stock_documents(
+            &conn,
+            StockDocumentQuery {
+                search: Some("筛选物品A".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(item_search_docs.len(), 2);
+
+        let detail = get_stock_document_detail(&conn, &inbound.document.id).unwrap();
+        assert_eq!(detail.lines.len(), 1);
+        assert_eq!(detail.lines[0].item_name, "筛选物品A");
+        assert_eq!(detail.lines[0].quantity, 5.0);
     }
 
     #[test]

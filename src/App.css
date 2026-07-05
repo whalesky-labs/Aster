@@ -750,6 +750,11 @@ select:focus-visible {
   min-width: 260px;
 }
 
+.field .item-search-select {
+  width: 100%;
+  min-width: 0;
+}
+
 .item-search-input-row {
   position: relative;
 }
@@ -1562,6 +1567,56 @@ tfoot td {
 
 td {
   color: var(--text-main);
+}
+
+.item-summary-cell {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-detail-viewer {
+  display: grid;
+  gap: 14px;
+}
+
+.detail-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.info-tile {
+  display: grid;
+  gap: 4px;
+  min-height: 58px;
+  padding: 10px 12px;
+  border: 1px solid var(--native-panel-border);
+  background: var(--native-subpanel-bg);
+}
+
+.info-tile span,
+.muted-inline {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.info-tile strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.muted-inline {
+  display: block;
+  margin-top: 3px;
+}
+
+.document-detail-lines {
+  min-height: 0;
 }
 
 tbody tr:hover {

@@ -96,6 +96,19 @@ pub fn list_stock_documents(
         .with_conn(|conn| stock_repository::list_stock_documents(conn, query))
 }
 
+pub fn get_stock_document_detail(
+    state: &AppState,
+    document_id: String,
+) -> AppResult<StockDocumentDetail> {
+    crate::services::user_service::require_permission(state, "view_reports")?;
+    if runtime_mode(state)? == RuntimeMode::Client {
+        return crate::services::host_service::remote_get_stock_document_detail(state, document_id);
+    }
+    state
+        .db
+        .with_conn(|conn| stock_repository::get_stock_document_detail(conn, &document_id))
+}
+
 pub fn list_stock_balances(
     state: &AppState,
     query: StockBalanceQuery,

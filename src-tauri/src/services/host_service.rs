@@ -354,6 +354,20 @@ pub fn remote_list_stock_documents(
     http_get_json(&config, &path)
 }
 
+pub fn remote_get_stock_document_detail(
+    state: &AppState,
+    document_id: String,
+) -> AppResult<crate::domain::stock::StockDocumentDetail> {
+    let config = client_runtime_config(state)?;
+    http_get_json(
+        &config,
+        &format!(
+            "/api/stock/document?documentId={}",
+            url_encode(&document_id)
+        ),
+    )
+}
+
 pub fn remote_list_stock_balances(
     state: &AppState,
     query: StockBalanceQuery,
@@ -1045,6 +1059,16 @@ fn handle_connection_inner(
                 let mut query = query;
                 query.department_id = remote_department_scope(&current)?.or(query.department_id);
                 stock_repository::list_stock_documents(conn, query)
+            })?;
+            write_json(stream, 200, &response)?;
+        }
+        ("GET", path) if path.starts_with("/api/stock/document?") => {
+            authenticate_request_and_touch_client(&request, &runtime, &db)?;
+            let document_id = query_param(path, "documentId")
+                .ok_or_else(|| AppError::Validation("缺少单据 ID".to_string()))?;
+            let response = db.with_conn(|conn| {
+                require_remote_permission(&auth_request, conn, "view_reports")?;
+                stock_repository::get_stock_document_detail(conn, &document_id)
             })?;
             write_json(stream, 200, &response)?;
         }

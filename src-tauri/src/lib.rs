@@ -31,8 +31,9 @@ use commands::master_data_commands::{
 };
 use commands::report_commands::{export_monthly_report, get_report_bundle};
 use commands::stock_commands::{
-    confirm_stock_document_draft, list_stock_balances, list_stock_documents, list_stock_movements,
-    save_stock_document_draft, submit_adjustment, submit_stock_document, void_stock_document,
+    confirm_stock_document_draft, get_stock_document_detail, list_stock_balances,
+    list_stock_documents, list_stock_movements, save_stock_document_draft, submit_adjustment,
+    submit_stock_document, void_stock_document,
 };
 use commands::stocktake_commands::{
     confirm_stocktake, create_stocktake, export_stocktake_sheet, get_stocktake_detail,
@@ -92,6 +93,7 @@ pub fn run() {
             confirm_stock_document_draft,
             submit_adjustment,
             void_stock_document,
+            get_stock_document_detail,
             list_stock_documents,
             list_stock_balances,
             list_stock_movements,

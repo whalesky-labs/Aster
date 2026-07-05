@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -291,7 +292,26 @@ type StockDocument = {
   status: string;
   totalQuantity: number;
   totalAmount: number;
+  itemSummary?: string | null;
   createdAt: string;
+};
+
+type StockDocumentDetail = {
+  document: StockDocument;
+  lines: StockDocumentLine[];
+};
+
+type StockDocumentLine = {
+  id: string;
+  itemId: string;
+  itemCode: string;
+  itemName: string;
+  spec?: string | null;
+  unitName?: string | null;
+  quantity: number;
+  unitPrice: number;
+  amount: number;
+  remark?: string | null;
 };
 
 type StockDocumentQuery = {
@@ -787,6 +807,7 @@ type EditorKind =
   | "secondBackupDir"
   | "restoreBackup"
   | "stockDocument"
+  | "stockDocumentDetail"
   | "adjustment"
   | "stocktakeCreate"
   | "stocktakeCounts";
@@ -1526,10 +1547,16 @@ function editorTitle(
   mode: EditorMode,
   documentType?: "inbound" | "outbound",
 ) {
+  if (editor === "stockDocumentDetail") {
+    return documentType === "outbound" ? "出库/领用单详情" : "入库单详情";
+  }
   if (editor === "stockDocument") {
     return documentType === "outbound" ? "新建出库/领用单" : "新建入库单";
   }
-  const labels: Record<Exclude<EditorKind, "stockDocument">, string> = {
+  const labels: Record<
+    Exclude<EditorKind, "stockDocument" | "stockDocumentDetail">,
+    string
+  > = {
     adjustment: "库存调整",
     budget: "预算规则",
     businessSettings: "业务与目录设置",
@@ -1589,6 +1616,9 @@ function editorWindowSize(editor: EditorKind) {
   }
   if (editor === "item" || editor === "user" || editor === "businessSettings") {
     return { width: 760, height: 560, minWidth: 640, minHeight: 420 };
+  }
+  if (editor === "stockDocumentDetail") {
+    return { width: 980, height: 680, minWidth: 760, minHeight: 520 };
   }
   if (editor === "clientConnection" || editor === "restoreBackup") {
     return { width: 720, height: 560, minWidth: 620, minHeight: 420 };
@@ -3493,6 +3523,8 @@ function EditorWindowApp({
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [stockBalances, setStockBalances] = useState<StockBalanceRow[]>([]);
+  const [stockDocumentDetail, setStockDocumentDetail] =
+    useState<StockDocumentDetail | null>(null);
   const [users, setUsers] = useState<UserAccount[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
   const [budgetRules, setBudgetRules] = useState<BudgetRule[]>([]);
@@ -3570,6 +3602,13 @@ function EditorWindowApp({
         setStockBalances(
           await invoke<StockBalanceRow[]>("list_stock_balances", {
             query: {},
+          }),
+        );
+      }
+      if (editor === "stockDocumentDetail" && id) {
+        setStockDocumentDetail(
+          await invoke<StockDocumentDetail>("get_stock_document_detail", {
+            documentId: id,
           }),
         );
       }
@@ -3965,6 +4004,13 @@ function EditorWindowApp({
           )
         }
         suppliers={enabledSuppliers}
+      />
+    );
+  } else if (editor === "stockDocumentDetail") {
+    content = (
+      <StockDocumentDetailViewer
+        detail={stockDocumentDetail}
+        isLoading={isLoading}
       />
     );
   } else if (editor === "adjustment") {
@@ -6129,13 +6175,17 @@ function StockDocumentEditor({
 }
 
 function ItemSearchSelect({
+  allowEmpty = false,
   disabled,
+  emptyLabel = "全部",
   items,
   onChange,
   placeholder = "搜索编码、条码或物品名称",
   value,
 }: {
+  allowEmpty?: boolean;
   disabled: boolean;
+  emptyLabel?: string;
   items: Item[];
   onChange: (itemId: string) => void;
   placeholder?: string;
@@ -6187,10 +6237,19 @@ function ItemSearchSelect({
       const rect = inputRef.current?.getBoundingClientRect();
       if (!rect) return;
       const viewportWidth = window.innerWidth;
+      const horizontalPadding = 8;
+      const width = Math.min(
+        Math.max(rect.width, 260),
+        viewportWidth - horizontalPadding * 2,
+      );
+      const left = Math.min(
+        Math.max(horizontalPadding, rect.left),
+        Math.max(horizontalPadding, viewportWidth - width - horizontalPadding),
+      );
       setMenuStyle({
-        left: Math.min(rect.left, Math.max(8, viewportWidth - 428)),
+        left,
         top: rect.bottom + 4,
-        width: Math.min(420, Math.max(260, viewportWidth - 16)),
+        width,
       });
     }
     updateMenuPosition();
@@ -6213,6 +6272,51 @@ function ItemSearchSelect({
     setQuery("");
     setOpen(true);
   }
+
+  const menu =
+    open && !disabled ? (
+      <div className="item-search-menu" style={menuStyle}>
+        {allowEmpty ? (
+          <button
+            className={!value ? "selected" : ""}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              onChange("");
+              setQuery("");
+              setOpen(false);
+            }}
+            type="button"
+          >
+            <strong>{emptyLabel}</strong>
+            <span>不限制物品</span>
+          </button>
+        ) : null}
+        {options.length ? (
+          options.map((item) => (
+            <button
+              className={item.id === value ? "selected" : ""}
+              key={item.id}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => selectItem(item)}
+              type="button"
+            >
+              <strong>{itemDisplayName(item)}</strong>
+              <span>
+                {[
+                  item.barcode ? `条码 ${item.barcode}` : null,
+                  item.spec,
+                  item.unitName,
+                ]
+                  .filter(Boolean)
+                  .join(" · ") || "未设置规格"}
+              </span>
+            </button>
+          ))
+        ) : (
+          <div className="item-search-empty">没有匹配的物品</div>
+        )}
+      </div>
+    ) : null;
 
   return (
     <div className="item-search-select">
@@ -6249,34 +6353,7 @@ function ItemSearchSelect({
           </button>
         ) : null}
       </div>
-      {open && !disabled ? (
-        <div className="item-search-menu" style={menuStyle}>
-          {options.length ? (
-            options.map((item) => (
-              <button
-                className={item.id === value ? "selected" : ""}
-                key={item.id}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => selectItem(item)}
-                type="button"
-              >
-                <strong>{itemDisplayName(item)}</strong>
-                <span>
-                  {[
-                    item.barcode ? `条码 ${item.barcode}` : null,
-                    item.spec,
-                    item.unitName,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ") || "未设置规格"}
-                </span>
-              </button>
-            ))
-          ) : (
-            <div className="item-search-empty">没有匹配的物品</div>
-          )}
-        </div>
-      ) : null}
+      {menu ? createPortal(menu, document.body) : null}
     </div>
   );
 }
@@ -7893,21 +7970,18 @@ function DocumentList({
             </Field>
           ) : null}
           <Field label="物品">
-            <select
+            <ItemSearchSelect
+              allowEmpty
+              disabled={false}
+              emptyLabel="全部物品"
+              items={items}
               value={filterDraft.itemId ?? ""}
-              onChange={(e) => updateFilter({ itemId: e.target.value })}
-            >
-              <option value="">全部</option>
-              {items.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.code} · {item.name}
-                </option>
-              ))}
-            </select>
+              onChange={(itemId) => updateFilter({ itemId })}
+            />
           </Field>
           <Field label="关键字">
             <input
-              placeholder="单号/经办人/备注"
+              placeholder="单号/物品/经办人/备注"
               value={filterDraft.search ?? ""}
               onChange={(e) => updateFilter({ search: e.target.value })}
             />
@@ -7929,6 +8003,7 @@ function DocumentList({
             <th>日期</th>
             {isOutbound ? <th>类型</th> : null}
             <th>对象</th>
+            <th>物品</th>
             <th>审批单</th>
             <th>数量</th>
             <th>金额</th>
@@ -7937,7 +8012,7 @@ function DocumentList({
           </tr>
         </thead>
         <PaginatedTable
-          colSpan={isOutbound ? 9 : 8}
+          colSpan={isOutbound ? 10 : 9}
           getRowKey={(doc) => doc.id}
           rows={documents}
         >
@@ -7954,6 +8029,9 @@ function DocumentList({
                     ? "酒店客人"
                     : (doc.departmentName ?? "-")
                   : (doc.supplierName ?? "-")}
+              </td>
+              <td className="item-summary-cell" title={doc.itemSummary ?? ""}>
+                {doc.itemSummary ?? "-"}
               </td>
               <td>{doc.approvalRequestId ?? "-"}</td>
               <td>{doc.totalQuantity}</td>
@@ -7976,6 +8054,19 @@ function DocumentList({
                 </span>
               </td>
               <td className="row-actions">
+                <button
+                  onClick={() =>
+                    openEditorWindow("stockDocumentDetail", {
+                      documentType: doc.documentType as "inbound" | "outbound",
+                      id: doc.id,
+                      mode: "edit",
+                      width: 980,
+                      height: 680,
+                    })
+                  }
+                >
+                  详情
+                </button>
                 {doc.status === "draft" && onConfirmDraft ? (
                   <button
                     disabled={!canVoid}
@@ -8002,6 +8093,104 @@ function DocumentList({
           )}
         </PaginatedTable>
       </table>
+    </div>
+  );
+}
+
+function StockDocumentDetailViewer({
+  detail,
+  isLoading,
+}: {
+  detail: StockDocumentDetail | null;
+  isLoading: boolean;
+}) {
+  if (isLoading) {
+    return <div className="placeholder-panel">正在加载单据明细...</div>;
+  }
+  if (!detail) {
+    return <div className="placeholder-panel">未找到单据明细</div>;
+  }
+
+  const { document, lines } = detail;
+  const isOutbound = document.documentType === "outbound";
+  const partyLabel = isOutbound ? "对象" : "供应商";
+  const partyValue = isOutbound
+    ? document.outboundKind === "guest_sale"
+      ? "酒店客人"
+      : (document.departmentName ?? "-")
+    : (document.supplierName ?? "-");
+
+  return (
+    <div className="document-detail-viewer">
+      <div className="detail-summary-grid">
+        <InfoTile label="单号" value={document.documentNo} />
+        <InfoTile label="日期" value={document.businessDate} />
+        <InfoTile
+          label="类型"
+          value={
+            isOutbound
+              ? outboundKindLabel(document.outboundKind)
+              : document.documentType === "inbound"
+                ? "入库"
+                : document.documentType
+          }
+        />
+        <InfoTile label={partyLabel} value={partyValue} />
+        <InfoTile label="数量" value={String(document.totalQuantity)} />
+        <InfoTile label="金额" value={formatMoney(document.totalAmount)} />
+        <InfoTile label="经办人" value={document.handler ?? "-"} />
+        <InfoTile label="用途" value={document.purpose ?? "-"} />
+      </div>
+
+      <div className="subtable document-detail-lines">
+        <div className="subtable-heading">
+          <h3>商品明细</h3>
+          <span>{lines.length} 项</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>商品</th>
+              <th>规格</th>
+              <th>单位</th>
+              <th>数量</th>
+              <th>单价</th>
+              <th>金额</th>
+              <th>备注</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lines.map((line) => (
+              <tr key={line.id}>
+                <td>
+                  <strong>{line.itemName}</strong>
+                  <span className="muted-inline">{line.itemCode}</span>
+                </td>
+                <td>{line.spec ?? "-"}</td>
+                <td>{line.unitName ?? "-"}</td>
+                <td>{line.quantity}</td>
+                <td>{formatMoney(line.unitPrice)}</td>
+                <td>{formatMoney(line.amount)}</td>
+                <td>{line.remark ?? "-"}</td>
+              </tr>
+            ))}
+            {lines.length === 0 ? (
+              <tr>
+                <td colSpan={7}>暂无商品明细</td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function InfoTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="info-tile">
+      <span>{label}</span>
+      <strong>{value}</strong>
     </div>
   );
 }
@@ -8062,17 +8251,14 @@ function StockBalancePage({
           </select>
         </Field>
         <Field label="物品">
-          <select
+          <ItemSearchSelect
+            allowEmpty
+            disabled={false}
+            emptyLabel="全部物品"
+            items={items}
             value={filterDraft.itemId ?? ""}
-            onChange={(e) => updateFilter({ itemId: e.target.value })}
-          >
-            <option value="">全部</option>
-            {items.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.code} · {item.name}
-              </option>
-            ))}
-          </select>
+            onChange={(itemId) => updateFilter({ itemId })}
+          />
         </Field>
         <Field label="库存状态">
           <select
@@ -8191,17 +8377,14 @@ function StockMovementPage({
           />
         </Field>
         <Field label="物品">
-          <select
+          <ItemSearchSelect
+            allowEmpty
+            disabled={false}
+            emptyLabel="全部物品"
+            items={items}
             value={filterDraft.itemId ?? ""}
-            onChange={(e) => updateFilter({ itemId: e.target.value })}
-          >
-            <option value="">全部</option>
-            {items.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.code} · {item.name}
-              </option>
-            ))}
-          </select>
+            onChange={(itemId) => updateFilter({ itemId })}
+          />
         </Field>
         <Field label="方向">
           <select
@@ -8695,18 +8878,14 @@ function ReportsPage({
             </select>
           </Field>
           <Field label="物品">
-            <select
+            <ItemSearchSelect
+              allowEmpty
               disabled={!canViewReports}
+              emptyLabel="全部物品"
+              items={items}
               value={filterDraft.itemId ?? ""}
-              onChange={(e) => updateFilter({ itemId: e.target.value })}
-            >
-              <option value="">全部</option>
-              {items.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.code} · {item.name}
-                </option>
-              ))}
-            </select>
+              onChange={(itemId) => updateFilter({ itemId })}
+            />
           </Field>
           <Field label="供应商">
             <select

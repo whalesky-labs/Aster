@@ -64,6 +64,14 @@ pub fn list_stock_documents(
 }
 
 #[tauri::command]
+pub fn get_stock_document_detail(
+    document_id: String,
+    state: State<'_, AppState>,
+) -> AppResult<StockDocumentDetail> {
+    stock_service::get_stock_document_detail(&state, document_id)
+}
+
+#[tauri::command]
 pub fn list_stock_balances(
     search: Option<String>,
     query: Option<StockBalanceQuery>,
