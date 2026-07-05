@@ -5,9 +5,10 @@ use uuid::Uuid;
 
 use crate::domain::stock::{
     ConfirmStockDocumentDraftRequest, SaveStockDocumentDraftRequest, StockBalanceQuery,
-    StockBalanceRow, StockDocument, StockDocumentDetail, StockDocumentLine, StockDocumentQuery,
-    StockMovementQuery, StockMovementRow, SubmitAdjustmentRequest, SubmitStockDocumentLine,
-    SubmitStockDocumentRequest, VoidStockDocumentRequest,
+    StockBalanceRow, StockBatchRow, StockDocument, StockDocumentBatchLine, StockDocumentDetail,
+    StockDocumentLine, StockDocumentQuery, StockMovementQuery, StockMovementRow,
+    SubmitAdjustmentRequest, SubmitStockDocumentLine, SubmitStockDocumentRequest,
+    VoidStockDocumentRequest,
 };
 use crate::error::{AppError, AppResult};
 
@@ -119,17 +120,27 @@ pub fn save_stock_document_draft(
     };
 
     for line in request.lines {
-        let amount = line_amount(&line);
+        let pricing = line_pricing(&request.document_type, outbound_kind.as_deref(), &line);
         tx.execute(
-            "INSERT INTO stock_document_lines (id, document_id, item_id, quantity, unit_price, amount, remark)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO stock_document_lines (
+               id, document_id, item_id, quantity, unit_price, amount,
+               purchase_unit_price, purchase_amount, sale_unit_price, sale_amount,
+               cost_unit_price, cost_amount, remark
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 new_id(),
                 document_id,
                 line.item_id,
                 line.quantity,
-                line.unit_price,
-                amount,
+                pricing.unit_price,
+                pricing.amount,
+                pricing.purchase_unit_price,
+                pricing.purchase_amount,
+                pricing.sale_unit_price,
+                pricing.sale_amount,
+                pricing.cost_unit_price,
+                pricing.cost_amount,
                 blank_to_none(line.remark)
             ],
         )?;
@@ -265,7 +276,6 @@ pub fn submit_adjustment(
     )?;
 
     for line in request.lines {
-        let item = get_item_for_stock(&tx, &line.item_id)?;
         let amount = adjustment_line_amount(&line);
         let line_id = new_id();
         tx.execute(
@@ -281,38 +291,58 @@ pub fn submit_adjustment(
                 blank_to_none(line.remark.clone())
             ],
         )?;
-        apply_balance(
-            &tx,
-            &line.item_id,
-            &line.direction,
-            line.quantity,
-            line.unit_price,
-            amount,
-            item.default_price,
-            true,
-        )?;
-        tx.execute(
-            "INSERT INTO stock_movements (
-               id, movement_date, item_id, direction, quantity, unit_price, amount,
-               document_id, document_line_id, movement_type, operator, remark
-             )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'adjustment', ?10, ?11)",
-            params![
-                new_id(),
-                request.business_date,
-                line.item_id,
-                line.direction,
-                line.quantity,
-                line.unit_price,
-                amount,
-                document_id,
-                line_id,
-                blank_to_none(request.handler.clone()).unwrap_or_else(|| "system".to_string()),
-                line.remark
-                    .clone()
-                    .or_else(|| Some(format!("{}：{}", request.adjustment_type, request.reason)))
-            ],
-        )?;
+        let remark = line
+            .remark
+            .clone()
+            .or_else(|| Some(format!("{}：{}", request.adjustment_type, request.reason)));
+        if line.direction == "in" {
+            create_batch_in_movement(
+                &tx,
+                BatchInMovementInput {
+                    document_id: &document_id,
+                    document_line_id: &line_id,
+                    document_no: &document_no,
+                    item_id: &line.item_id,
+                    business_date: &request.business_date,
+                    quantity: line.quantity,
+                    unit_price: line.unit_price,
+                    amount,
+                    supplier_id: None,
+                    supplier_name: None,
+                    movement_type: "adjustment",
+                    operator: blank_to_none(request.handler.clone())
+                        .unwrap_or_else(|| "system".to_string()),
+                    remark,
+                },
+            )?;
+        } else {
+            let (actual_unit_price, actual_amount) = create_batch_out_movements(
+                &tx,
+                BatchOutMovementInput {
+                    document_id: &document_id,
+                    document_line_id: &line_id,
+                    item_id: &line.item_id,
+                    business_date: &request.business_date,
+                    quantity: line.quantity,
+                    department_id: None,
+                    department_name: None,
+                    supplier_id: None,
+                    supplier_name: None,
+                    movement_type: "adjustment",
+                    operator: blank_to_none(request.handler.clone())
+                        .unwrap_or_else(|| "system".to_string()),
+                    remark,
+                    allow_negative_stock: false,
+                    fallback_unit_price: line.unit_price,
+                },
+            )?;
+            tx.execute(
+                "UPDATE stock_document_lines
+                 SET unit_price = ?1, amount = ?2
+                 WHERE id = ?3",
+                params![actual_unit_price, actual_amount, line_id],
+            )?;
+        }
     }
 
     tx.execute(
@@ -365,48 +395,59 @@ pub fn void_stock_document(
         ));
     }
 
-    let movements = load_document_movements(&tx, &document_id)?;
-    for movement in movements {
-        let reverse_direction = if movement.direction == "in" {
-            "out"
-        } else {
-            "in"
-        };
-        apply_balance(
+    if document_has_batch_movements(&tx, &document_id)? {
+        reverse_batch_document(
             &tx,
-            &movement.item_id,
-            reverse_direction,
-            movement.quantity,
-            movement.unit_price,
-            movement.amount,
-            movement.unit_price,
-            true,
+            &document_id,
+            &document_no,
+            &business_date,
+            &request.reason,
+            request.handler.clone(),
         )?;
-        tx.execute(
-            "INSERT INTO stock_movements (
-               id, movement_date, item_id, direction, quantity, unit_price, amount,
-               document_id, document_line_id, department_id, department_name,
-               supplier_id, supplier_name, movement_type,
-               operator, remark
-             )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, 'reversal', ?13, ?14)",
-            params![
-                new_id(),
-                business_date,
-                movement.item_id,
+    } else {
+        let movements = load_document_movements(&tx, &document_id)?;
+        for movement in movements {
+            let reverse_direction = if movement.direction == "in" {
+                "out"
+            } else {
+                "in"
+            };
+            apply_balance(
+                &tx,
+                &movement.item_id,
                 reverse_direction,
                 movement.quantity,
                 movement.unit_price,
                 movement.amount,
-                document_id,
-                movement.department_id,
-                movement.department_name,
-                movement.supplier_id,
-                movement.supplier_name,
-                blank_to_none(request.handler.clone()).unwrap_or_else(|| "system".to_string()),
-                format!("作废冲正 {}：{}", document_no, request.reason)
-            ],
-        )?;
+                movement.unit_price,
+                true,
+            )?;
+            tx.execute(
+                "INSERT INTO stock_movements (
+                   id, movement_date, item_id, direction, quantity, unit_price, amount,
+                   document_id, document_line_id, department_id, department_name,
+                   supplier_id, supplier_name, movement_type,
+                   operator, remark
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, 'reversal', ?13, ?14)",
+                params![
+                    new_id(),
+                    business_date,
+                    movement.item_id,
+                    reverse_direction,
+                    movement.quantity,
+                    movement.unit_price,
+                    movement.amount,
+                    document_id,
+                    movement.department_id,
+                    movement.department_name,
+                    movement.supplier_id,
+                    movement.supplier_name,
+                    blank_to_none(request.handler.clone()).unwrap_or_else(|| "system".to_string()),
+                    format!("作废冲正 {}：{}", document_no, request.reason)
+                ],
+            )?;
+        }
     }
 
     tx.execute(
@@ -485,7 +526,16 @@ pub fn list_stock_documents(
                 d.department_id, COALESCE(d.department_name, dep.name),
                 d.supplier_id, COALESCE(d.supplier_name, sup.name),
                 d.handler, d.purpose, d.approval_request_id, d.status, d.remark,
-                COALESCE(SUM(l.quantity), 0), COALESCE(SUM(l.amount), 0),
+                COALESCE(SUM(l.quantity), 0),
+                COALESCE(SUM(CASE
+                  WHEN d.document_type = 'inbound' THEN COALESCE(l.purchase_amount, l.amount)
+                  WHEN d.document_type = 'outbound' AND d.outbound_kind = 'guest_sale' THEN COALESCE(l.sale_amount, l.amount)
+                  ELSE COALESCE(l.cost_amount, l.amount)
+                END), 0),
+                COALESCE(SUM(COALESCE(l.purchase_amount, 0)), 0),
+                COALESCE(SUM(COALESCE(l.sale_amount, 0)), 0),
+                COALESCE(SUM(COALESCE(l.cost_amount, CASE WHEN d.document_type != 'inbound' THEN l.amount ELSE 0 END)), 0),
+                COALESCE(SUM(COALESCE(l.sale_amount, 0) - COALESCE(l.cost_amount, 0)), 0),
                 di.item_summary, d.created_at, d.confirmed_at
          FROM stock_documents d
          LEFT JOIN departments dep ON dep.id = d.department_id
@@ -601,6 +651,46 @@ pub fn list_stock_balances(
     collect_rows(rows)
 }
 
+pub fn list_stock_batches(conn: &Connection, item_id: &str) -> AppResult<Vec<StockBatchRow>> {
+    let item_id = item_id.trim();
+    if item_id.is_empty() {
+        return Err(AppError::Validation("物品 ID 不能为空".to_string()));
+    }
+    ensure_opening_batch_from_balance(conn, item_id)?;
+    let mut stmt = conn.prepare(
+        "SELECT b.id, b.item_id, i.code, i.name, b.batch_no, b.inbound_date,
+                b.supplier_name, b.original_quantity, b.remaining_quantity,
+                b.unit_price, b.original_amount, b.remaining_amount, b.status,
+                d.document_no, b.created_at, b.updated_at
+         FROM stock_batches b
+         JOIN master_items i ON i.id = b.item_id
+         LEFT JOIN stock_documents d ON d.id = b.source_document_id
+         WHERE b.item_id = ?1
+         ORDER BY b.inbound_date ASC, b.created_at ASC, b.batch_no ASC",
+    )?;
+    let rows = stmt.query_map(params![item_id], |row| {
+        Ok(StockBatchRow {
+            id: row.get(0)?,
+            item_id: row.get(1)?,
+            item_code: row.get(2)?,
+            item_name: row.get(3)?,
+            batch_no: row.get(4)?,
+            inbound_date: row.get(5)?,
+            supplier_name: row.get(6)?,
+            original_quantity: row.get(7)?,
+            remaining_quantity: row.get(8)?,
+            unit_price: row.get(9)?,
+            original_amount: row.get(10)?,
+            remaining_amount: row.get(11)?,
+            status: row.get(12)?,
+            source_document_no: row.get(13)?,
+            created_at: row.get(14)?,
+            updated_at: row.get(15)?,
+        })
+    })?;
+    collect_rows(rows)
+}
+
 pub fn list_stock_movements(
     conn: &Connection,
     query: StockMovementQuery,
@@ -668,7 +758,16 @@ pub fn get_stock_document_detail(conn: &Connection, id: &str) -> AppResult<Stock
                 d.department_id, COALESCE(d.department_name, dep.name),
                 d.supplier_id, COALESCE(d.supplier_name, sup.name),
                 d.handler, d.purpose, d.approval_request_id, d.status, d.remark,
-                COALESCE(SUM(l.quantity), 0), COALESCE(SUM(l.amount), 0),
+                COALESCE(SUM(l.quantity), 0),
+                COALESCE(SUM(CASE
+                  WHEN d.document_type = 'inbound' THEN COALESCE(l.purchase_amount, l.amount)
+                  WHEN d.document_type = 'outbound' AND d.outbound_kind = 'guest_sale' THEN COALESCE(l.sale_amount, l.amount)
+                  ELSE COALESCE(l.cost_amount, l.amount)
+                END), 0),
+                COALESCE(SUM(COALESCE(l.purchase_amount, 0)), 0),
+                COALESCE(SUM(COALESCE(l.sale_amount, 0)), 0),
+                COALESCE(SUM(COALESCE(l.cost_amount, CASE WHEN d.document_type != 'inbound' THEN l.amount ELSE 0 END)), 0),
+                COALESCE(SUM(COALESCE(l.sale_amount, 0) - COALESCE(l.cost_amount, 0)), 0),
                 NULL, d.created_at, d.confirmed_at
          FROM stock_documents d
          LEFT JOIN departments dep ON dep.id = d.department_id
@@ -682,7 +781,15 @@ pub fn get_stock_document_detail(conn: &Connection, id: &str) -> AppResult<Stock
 
     let mut stmt = conn.prepare(
         "SELECT l.id, l.item_id, i.code, i.name, i.spec, u.name,
-                l.quantity, l.unit_price, l.amount, l.remark
+                l.quantity, l.unit_price, l.amount,
+                l.purchase_unit_price, l.purchase_amount,
+                l.sale_unit_price, l.sale_amount,
+                l.cost_unit_price, l.cost_amount,
+                CASE
+                  WHEN l.sale_amount IS NULL THEN NULL
+                  ELSE COALESCE(l.sale_amount, 0) - COALESCE(l.cost_amount, 0)
+                END,
+                l.remark
          FROM stock_document_lines l
          JOIN master_items i ON i.id = l.item_id
          LEFT JOIN units u ON u.id = i.unit_id
@@ -700,13 +807,52 @@ pub fn get_stock_document_detail(conn: &Connection, id: &str) -> AppResult<Stock
             quantity: row.get(6)?,
             unit_price: row.get(7)?,
             amount: row.get(8)?,
-            remark: row.get(9)?,
+            purchase_unit_price: row.get(9)?,
+            purchase_amount: row.get(10)?,
+            sale_unit_price: row.get(11)?,
+            sale_amount: row.get(12)?,
+            cost_unit_price: row.get(13)?,
+            cost_amount: row.get(14)?,
+            gross_profit: row.get(15)?,
+            remark: row.get(16)?,
+        })
+    })?;
+
+    let lines = collect_rows(rows)?;
+    let mut batch_stmt = conn.prepare(
+        "SELECT bm.id, bm.document_line_id, i.id, i.code, i.name,
+                b.id, b.batch_no, b.inbound_date, b.supplier_name,
+                bm.direction, bm.quantity, bm.unit_price, bm.amount,
+                bm.movement_type, bm.created_at
+         FROM stock_batch_movements bm
+         JOIN stock_batches b ON b.id = bm.batch_id
+         JOIN master_items i ON i.id = b.item_id
+         WHERE bm.document_id = ?1
+         ORDER BY bm.created_at ASC, i.code ASC, b.inbound_date ASC",
+    )?;
+    let batch_rows = batch_stmt.query_map(params![id], |row| {
+        Ok(StockDocumentBatchLine {
+            id: row.get(0)?,
+            item_id: row.get(2)?,
+            item_code: row.get(3)?,
+            item_name: row.get(4)?,
+            batch_id: row.get(5)?,
+            batch_no: row.get(6)?,
+            inbound_date: row.get(7)?,
+            supplier_name: row.get(8)?,
+            direction: row.get(9)?,
+            quantity: row.get(10)?,
+            unit_price: row.get(11)?,
+            amount: row.get(12)?,
+            movement_type: row.get(13)?,
+            created_at: row.get(14)?,
         })
     })?;
 
     Ok(StockDocumentDetail {
         document,
-        lines: collect_rows(rows)?,
+        lines,
+        batch_lines: collect_rows(batch_rows)?,
     })
 }
 
@@ -747,17 +893,27 @@ fn insert_confirmed_document(
         ],
     )?;
     for line in &request.lines {
-        let amount = line_amount(line);
+        let pricing = line_pricing(&request.document_type, outbound_kind.as_deref(), line);
         tx.execute(
-            "INSERT INTO stock_document_lines (id, document_id, item_id, quantity, unit_price, amount, remark)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO stock_document_lines (
+               id, document_id, item_id, quantity, unit_price, amount,
+               purchase_unit_price, purchase_amount, sale_unit_price, sale_amount,
+               cost_unit_price, cost_amount, remark
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 new_id(),
                 document_id,
                 line.item_id,
                 line.quantity,
-                line.unit_price,
-                amount,
+                pricing.unit_price,
+                pricing.amount,
+                pricing.purchase_unit_price,
+                pricing.purchase_amount,
+                pricing.sale_unit_price,
+                pricing.sale_amount,
+                pricing.cost_unit_price,
+                pricing.cost_amount,
                 blank_to_none(line.remark.clone())
             ],
         )?;
@@ -784,54 +940,41 @@ fn apply_confirmed_document_effects(
     allow_negative_stock: bool,
 ) -> AppResult<()> {
     validate_enabled_parties_for_document(tx, &request)?;
-    enforce_budget_limits(tx, &request)?;
     let lines = load_document_lines_for_confirm(tx, document_id)?;
+    let outbound_costs = if request.document_type == "outbound" {
+        planned_outbound_costs(tx, &lines, allow_negative_stock)?
+    } else {
+        HashMap::new()
+    };
+    enforce_budget_limits(tx, &request, &lines, &outbound_costs)?;
     let department_id = blank_to_none(request.department_id.clone());
     let supplier_id = blank_to_none(request.supplier_id.clone());
     for line in lines {
         let item = get_item_for_stock(tx, &line.item_id)?;
-        let (direction, movement_type) = if request.document_type == "inbound" {
-            ("in", "inbound")
-        } else {
-            ("out", "outbound")
-        };
-        apply_balance(
-            tx,
-            &line.item_id,
-            direction,
-            line.quantity,
-            line.unit_price,
-            line.amount,
-            item.default_price,
-            allow_negative_stock,
-        )?;
-        tx.execute(
-            "INSERT INTO stock_movements (
-               id, movement_date, item_id, direction, quantity, unit_price, amount,
-               document_id, document_line_id, department_id, department_name,
-               supplier_id, supplier_name, movement_type,
-               operator, remark
-             )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
-            params![
-                new_id(),
-                request.business_date,
-                line.item_id,
-                direction,
-                line.quantity,
-                line.unit_price,
-                line.amount,
+        if request.document_type == "inbound" {
+            apply_inbound_line(
+                tx,
                 document_id,
-                line.line_id,
-                department_id,
-                snapshot_names.department_name.clone(),
-                supplier_id,
+                document_no,
+                &request,
+                &line,
+                supplier_id.clone(),
                 snapshot_names.supplier_name.clone(),
-                movement_type,
-                blank_to_none(request.handler.clone()).unwrap_or_else(|| "system".to_string()),
-                blank_to_none(line.remark)
-            ],
-        )?;
+            )?;
+        } else {
+            apply_outbound_line(
+                tx,
+                document_id,
+                &request,
+                &line,
+                department_id.clone(),
+                snapshot_names.department_name.clone(),
+                supplier_id.clone(),
+                snapshot_names.supplier_name.clone(),
+                allow_negative_stock,
+                item.default_price,
+            )?;
+        }
     }
     tx.execute(
         "INSERT INTO audit_logs (id, action, entity_type, entity_id, summary, operator)
@@ -874,7 +1017,10 @@ fn load_document_lines_for_confirm(
     document_id: &str,
 ) -> AppResult<Vec<DocumentLineForConfirm>> {
     let mut stmt = conn.prepare(
-        "SELECT id, item_id, quantity, unit_price, amount, remark
+        "SELECT id, item_id, quantity, unit_price, amount,
+                purchase_unit_price, purchase_amount,
+                cost_amount,
+                remark
          FROM stock_document_lines
          WHERE document_id = ?1
          ORDER BY created_at ASC",
@@ -886,10 +1032,335 @@ fn load_document_lines_for_confirm(
             quantity: row.get(2)?,
             unit_price: row.get(3)?,
             amount: row.get(4)?,
-            remark: row.get(5)?,
+            purchase_unit_price: row.get(5)?,
+            purchase_amount: row.get(6)?,
+            cost_amount: row.get(7)?,
+            remark: row.get(8)?,
         })
     })?;
     collect_rows(rows)
+}
+
+fn apply_inbound_line(
+    conn: &Connection,
+    document_id: &str,
+    document_no: &str,
+    request: &SubmitStockDocumentRequest,
+    line: &DocumentLineForConfirm,
+    supplier_id: Option<String>,
+    supplier_name: Option<String>,
+) -> AppResult<()> {
+    create_batch_in_movement(
+        conn,
+        BatchInMovementInput {
+            document_id,
+            document_line_id: &line.line_id,
+            document_no,
+            item_id: &line.item_id,
+            business_date: &request.business_date,
+            quantity: line.quantity,
+            unit_price: line.purchase_unit_price.unwrap_or(line.unit_price),
+            amount: line.purchase_amount.unwrap_or(line.amount),
+            supplier_id,
+            supplier_name,
+            movement_type: "inbound",
+            operator: blank_to_none(request.handler.clone())
+                .unwrap_or_else(|| "system".to_string()),
+            remark: blank_to_none(line.remark.clone()),
+        },
+    )
+}
+
+fn apply_outbound_line(
+    conn: &Connection,
+    document_id: &str,
+    request: &SubmitStockDocumentRequest,
+    line: &DocumentLineForConfirm,
+    department_id: Option<String>,
+    department_name: Option<String>,
+    supplier_id: Option<String>,
+    supplier_name: Option<String>,
+    allow_negative_stock: bool,
+    default_price: f64,
+) -> AppResult<()> {
+    let (actual_unit_price, actual_amount) = create_batch_out_movements(
+        conn,
+        BatchOutMovementInput {
+            document_id,
+            document_line_id: &line.line_id,
+            item_id: &line.item_id,
+            business_date: &request.business_date,
+            quantity: line.quantity,
+            department_id,
+            department_name,
+            supplier_id,
+            supplier_name,
+            movement_type: "outbound",
+            operator: blank_to_none(request.handler.clone())
+                .unwrap_or_else(|| "system".to_string()),
+            remark: blank_to_none(line.remark.clone()),
+            allow_negative_stock,
+            fallback_unit_price: line.unit_price.max(default_price),
+        },
+    )?;
+    conn.execute(
+        "UPDATE stock_document_lines
+         SET unit_price = ?1, amount = ?2,
+             cost_unit_price = ?1, cost_amount = ?2
+         WHERE id = ?3",
+        params![actual_unit_price, actual_amount, line.line_id],
+    )?;
+    Ok(())
+}
+
+pub(crate) struct BatchInMovementInput<'a> {
+    pub(crate) document_id: &'a str,
+    pub(crate) document_line_id: &'a str,
+    pub(crate) document_no: &'a str,
+    pub(crate) item_id: &'a str,
+    pub(crate) business_date: &'a str,
+    pub(crate) quantity: f64,
+    pub(crate) unit_price: f64,
+    pub(crate) amount: f64,
+    pub(crate) supplier_id: Option<String>,
+    pub(crate) supplier_name: Option<String>,
+    pub(crate) movement_type: &'a str,
+    pub(crate) operator: String,
+    pub(crate) remark: Option<String>,
+}
+
+pub(crate) fn create_batch_in_movement(
+    conn: &Connection,
+    input: BatchInMovementInput<'_>,
+) -> AppResult<()> {
+    ensure_opening_batch_from_balance(conn, input.item_id)?;
+    let batch_id = new_id();
+    let batch_no = next_batch_no(conn, input.document_no)?;
+    let unit_price = if input.quantity.abs() < f64::EPSILON || input.amount <= 0.0 {
+        input.unit_price
+    } else {
+        round_price(input.amount / input.quantity)
+    };
+    conn.execute(
+        "INSERT INTO stock_batches (
+           id, item_id, source_document_id, source_document_line_id,
+           batch_no, inbound_date, supplier_id, supplier_name,
+           original_quantity, remaining_quantity, unit_price,
+           original_amount, remaining_amount, status
+         )
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11, ?11, 'available')",
+        params![
+            batch_id,
+            input.item_id,
+            input.document_id,
+            input.document_line_id,
+            batch_no,
+            input.business_date,
+            input.supplier_id.clone(),
+            input.supplier_name.clone(),
+            input.quantity,
+            unit_price,
+            input.amount
+        ],
+    )?;
+    let movement_id = new_id();
+    conn.execute(
+        "INSERT INTO stock_movements (
+           id, movement_date, item_id, batch_id, direction, quantity, unit_price, amount,
+           document_id, document_line_id, supplier_id, supplier_name, movement_type,
+           operator, remark
+         )
+         VALUES (?1, ?2, ?3, ?4, 'in', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        params![
+            movement_id,
+            input.business_date,
+            input.item_id,
+            batch_id,
+            input.quantity,
+            unit_price,
+            input.amount,
+            input.document_id,
+            input.document_line_id,
+            input.supplier_id,
+            input.supplier_name,
+            input.movement_type,
+            input.operator,
+            input.remark
+        ],
+    )?;
+    conn.execute(
+        "INSERT INTO stock_batch_movements (
+           id, batch_id, stock_movement_id, document_id, document_line_id,
+           direction, quantity, unit_price, amount, movement_type
+         )
+         VALUES (?1, ?2, ?3, ?4, ?5, 'in', ?6, ?7, ?8, ?9)",
+        params![
+            new_id(),
+            batch_id,
+            movement_id,
+            input.document_id,
+            input.document_line_id,
+            input.quantity,
+            unit_price,
+            input.amount,
+            input.movement_type
+        ],
+    )?;
+    sync_balance_from_batches(conn, input.item_id)
+}
+
+pub(crate) struct BatchOutMovementInput<'a> {
+    pub(crate) document_id: &'a str,
+    pub(crate) document_line_id: &'a str,
+    pub(crate) item_id: &'a str,
+    pub(crate) business_date: &'a str,
+    pub(crate) quantity: f64,
+    pub(crate) department_id: Option<String>,
+    pub(crate) department_name: Option<String>,
+    pub(crate) supplier_id: Option<String>,
+    pub(crate) supplier_name: Option<String>,
+    pub(crate) movement_type: &'a str,
+    pub(crate) operator: String,
+    pub(crate) remark: Option<String>,
+    pub(crate) allow_negative_stock: bool,
+    pub(crate) fallback_unit_price: f64,
+}
+
+pub(crate) fn create_batch_out_movements(
+    conn: &Connection,
+    input: BatchOutMovementInput<'_>,
+) -> AppResult<(f64, f64)> {
+    let allocations = allocate_fifo_batches(
+        conn,
+        input.item_id,
+        input.quantity,
+        input.allow_negative_stock,
+    )?;
+    let allocated_quantity = round_quantity(allocations.iter().map(|item| item.quantity).sum());
+    let mut actual_amount = round_money(allocations.iter().map(|item| item.amount).sum());
+
+    for allocation in allocations {
+        let remaining_quantity =
+            round_quantity(allocation.remaining_quantity - allocation.quantity);
+        let remaining_amount = round_money(allocation.remaining_amount - allocation.amount);
+        let status = if remaining_quantity.abs() < 0.000001 {
+            "depleted"
+        } else {
+            "available"
+        };
+        conn.execute(
+            "UPDATE stock_batches
+             SET remaining_quantity = ?1,
+                 remaining_amount = ?2,
+                 status = ?3,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?4",
+            params![
+                remaining_quantity.max(0.0),
+                remaining_amount.max(0.0),
+                status,
+                allocation.batch_id
+            ],
+        )?;
+        let movement_id = new_id();
+        conn.execute(
+            "INSERT INTO stock_movements (
+               id, movement_date, item_id, batch_id, direction, quantity, unit_price, amount,
+               document_id, document_line_id, department_id, department_name,
+               supplier_id, supplier_name, movement_type,
+               operator, remark
+             )
+             VALUES (?1, ?2, ?3, ?4, 'out', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            params![
+                movement_id,
+                input.business_date,
+                input.item_id,
+                allocation.batch_id,
+                allocation.quantity,
+                allocation.unit_price,
+                allocation.amount,
+                input.document_id,
+                input.document_line_id,
+                input.department_id.clone(),
+                input.department_name.clone(),
+                input.supplier_id.clone(),
+                input.supplier_name.clone(),
+                input.movement_type,
+                input.operator.clone(),
+                input.remark.clone()
+            ],
+        )?;
+        conn.execute(
+            "INSERT INTO stock_batch_movements (
+               id, batch_id, stock_movement_id, document_id, document_line_id,
+               direction, quantity, unit_price, amount, movement_type
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, 'out', ?6, ?7, ?8, ?9)",
+            params![
+                new_id(),
+                allocation.batch_id,
+                movement_id,
+                input.document_id,
+                input.document_line_id,
+                allocation.quantity,
+                allocation.unit_price,
+                allocation.amount,
+                input.movement_type
+            ],
+        )?;
+    }
+
+    let short_quantity = round_quantity(input.quantity - allocated_quantity);
+    if short_quantity > 0.000001 && input.allow_negative_stock {
+        sync_balance_from_batches(conn, input.item_id)?;
+        let short_amount = round_money(short_quantity * input.fallback_unit_price);
+        actual_amount = round_money(actual_amount + short_amount);
+        conn.execute(
+            "INSERT INTO stock_movements (
+               id, movement_date, item_id, direction, quantity, unit_price, amount,
+               document_id, document_line_id, department_id, department_name,
+               supplier_id, supplier_name, movement_type,
+               operator, remark
+             )
+             VALUES (?1, ?2, ?3, 'out', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![
+                new_id(),
+                input.business_date,
+                input.item_id,
+                short_quantity,
+                input.fallback_unit_price,
+                short_amount,
+                input.document_id,
+                input.document_line_id,
+                input.department_id,
+                input.department_name,
+                input.supplier_id,
+                input.supplier_name,
+                input.movement_type,
+                input.operator,
+                input.remark
+            ],
+        )?;
+        apply_balance(
+            conn,
+            input.item_id,
+            "out",
+            short_quantity,
+            input.fallback_unit_price,
+            short_amount,
+            input.fallback_unit_price,
+            true,
+        )?;
+    } else {
+        sync_balance_from_batches(conn, input.item_id)?;
+    }
+
+    let actual_unit_price = if input.quantity.abs() < f64::EPSILON {
+        0.0
+    } else {
+        round_price(actual_amount / input.quantity)
+    };
+    Ok((actual_unit_price, actual_amount))
 }
 
 fn apply_balance(
@@ -983,6 +1454,350 @@ fn apply_balance(
     Ok(())
 }
 
+fn planned_outbound_costs(
+    conn: &Connection,
+    lines: &[DocumentLineForConfirm],
+    allow_negative_stock: bool,
+) -> AppResult<HashMap<String, f64>> {
+    let mut costs = HashMap::new();
+    let mut reserved_quantities: HashMap<String, f64> = HashMap::new();
+    for line in lines {
+        let allocations = allocate_fifo_batches_with_reservations(
+            conn,
+            &line.item_id,
+            line.quantity,
+            allow_negative_stock,
+            &reserved_quantities,
+        )?;
+        let amount = if allocations.is_empty() {
+            line.cost_amount.unwrap_or(line.amount)
+        } else {
+            round_money(allocations.iter().map(|item| item.amount).sum())
+        };
+        for allocation in &allocations {
+            reserved_quantities
+                .entry(allocation.batch_id.clone())
+                .and_modify(|quantity| {
+                    *quantity = round_quantity(*quantity + allocation.quantity);
+                })
+                .or_insert(allocation.quantity);
+        }
+        costs
+            .entry(line.line_id.clone())
+            .and_modify(|current| *current = round_money(*current + amount))
+            .or_insert(amount);
+    }
+    Ok(costs)
+}
+
+fn allocate_fifo_batches(
+    conn: &Connection,
+    item_id: &str,
+    quantity: f64,
+    allow_negative_stock: bool,
+) -> AppResult<Vec<BatchAllocation>> {
+    allocate_fifo_batches_with_reservations(
+        conn,
+        item_id,
+        quantity,
+        allow_negative_stock,
+        &HashMap::new(),
+    )
+}
+
+fn allocate_fifo_batches_with_reservations(
+    conn: &Connection,
+    item_id: &str,
+    quantity: f64,
+    allow_negative_stock: bool,
+    reserved_quantities: &HashMap<String, f64>,
+) -> AppResult<Vec<BatchAllocation>> {
+    ensure_opening_batch_from_balance(conn, item_id)?;
+    let mut remaining = quantity;
+    let mut allocations = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT id, remaining_quantity, remaining_amount, unit_price
+         FROM stock_batches
+         WHERE item_id = ?1
+           AND status = 'available'
+           AND remaining_quantity > 0
+         ORDER BY inbound_date ASC, created_at ASC, batch_no ASC",
+    )?;
+    let rows = stmt.query_map(params![item_id], |row| {
+        Ok(AvailableBatch {
+            id: row.get(0)?,
+            remaining_quantity: row.get(1)?,
+            remaining_amount: row.get(2)?,
+            unit_price: row.get(3)?,
+        })
+    })?;
+    for batch in collect_rows(rows)? {
+        if remaining <= 0.000001 {
+            break;
+        }
+        let reserved_quantity = reserved_quantities.get(&batch.id).copied().unwrap_or(0.0);
+        let available_quantity = round_quantity(batch.remaining_quantity - reserved_quantity);
+        if available_quantity <= 0.000001 {
+            continue;
+        }
+        let used_quantity = remaining.min(available_quantity);
+        let available_amount = if available_quantity + 0.000001 >= batch.remaining_quantity {
+            batch.remaining_amount
+        } else {
+            round_money(available_quantity * batch.unit_price)
+        };
+        let amount = if used_quantity + 0.000001 >= available_quantity {
+            available_amount
+        } else {
+            round_money(used_quantity * batch.unit_price)
+        };
+        allocations.push(BatchAllocation {
+            batch_id: batch.id,
+            quantity: round_quantity(used_quantity),
+            unit_price: batch.unit_price,
+            amount,
+            remaining_quantity: batch.remaining_quantity,
+            remaining_amount: batch.remaining_amount,
+        });
+        remaining = round_quantity(remaining - used_quantity);
+    }
+    if remaining > 0.000001 && !allow_negative_stock {
+        return Err(AppError::Validation(format!(
+            "库存不足：当前可用批次数量 {:.2}，出库数量 {:.2}",
+            quantity - remaining,
+            quantity
+        )));
+    }
+    Ok(allocations)
+}
+
+fn ensure_opening_batch_from_balance(conn: &Connection, item_id: &str) -> AppResult<()> {
+    let existing_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM stock_batches WHERE item_id = ?1",
+        params![item_id],
+        |row| row.get(0),
+    )?;
+    if existing_count > 0 {
+        return Ok(());
+    }
+    let Some((item_code, quantity, amount, average_price, default_price)) = conn
+        .query_row(
+            "SELECT i.code, b.quantity, b.amount, b.average_price, i.default_price
+             FROM stock_balances b
+             JOIN master_items i ON i.id = b.item_id
+             WHERE b.item_id = ?1
+               AND b.quantity > 0",
+            params![item_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, f64>(2)?,
+                    row.get::<_, f64>(3)?,
+                    row.get::<_, f64>(4)?,
+                ))
+            },
+        )
+        .optional()?
+    else {
+        return Ok(());
+    };
+    let unit_price = if average_price > 0.0 {
+        average_price
+    } else if quantity > 0.0 {
+        round_price(amount / quantity)
+    } else {
+        default_price
+    };
+    let opening_amount = if amount > 0.0 {
+        amount
+    } else {
+        round_money(quantity * unit_price)
+    };
+    conn.execute(
+        "INSERT INTO stock_batches (
+           id, item_id, source_document_id, source_document_line_id,
+           batch_no, inbound_date, supplier_id, supplier_name,
+           original_quantity, remaining_quantity, unit_price,
+           original_amount, remaining_amount, status
+         )
+         VALUES (?1, ?2, NULL, NULL, ?3, '1970-01-01', NULL, '期初库存',
+                 ?4, ?4, ?5, ?6, ?6, 'available')",
+        params![
+            new_id(),
+            item_id,
+            format!("OPEN-{item_code}"),
+            quantity,
+            unit_price,
+            opening_amount
+        ],
+    )?;
+    Ok(())
+}
+
+fn sync_balance_from_batches(conn: &Connection, item_id: &str) -> AppResult<()> {
+    let (quantity, amount, last_inbound_price): (f64, f64, f64) = conn.query_row(
+        "SELECT
+           COALESCE(SUM(CASE WHEN status != 'voided' THEN remaining_quantity ELSE 0 END), 0),
+           COALESCE(SUM(CASE WHEN status != 'voided' THEN remaining_amount ELSE 0 END), 0),
+           COALESCE((
+             SELECT unit_price
+             FROM stock_batches latest
+             WHERE latest.item_id = ?1
+               AND latest.original_quantity > 0
+             ORDER BY latest.inbound_date DESC, latest.created_at DESC
+             LIMIT 1
+           ), 0)
+         FROM stock_batches
+         WHERE item_id = ?1",
+        params![item_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    let average_price = if quantity.abs() < f64::EPSILON {
+        0.0
+    } else {
+        round_price(amount / quantity)
+    };
+    conn.execute(
+        "INSERT INTO stock_balances (
+           id, item_id, quantity, amount, average_price, last_inbound_price, updated_at
+         )
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP)
+         ON CONFLICT(item_id) DO UPDATE SET
+           quantity = excluded.quantity,
+           amount = excluded.amount,
+           average_price = excluded.average_price,
+           last_inbound_price = excluded.last_inbound_price,
+           updated_at = CURRENT_TIMESTAMP",
+        params![
+            new_id(),
+            item_id,
+            round_quantity(quantity),
+            round_money(amount),
+            average_price,
+            last_inbound_price
+        ],
+    )?;
+    Ok(())
+}
+
+fn document_has_batch_movements(conn: &Connection, document_id: &str) -> AppResult<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM stock_batch_movements WHERE document_id = ?1",
+        params![document_id],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn reverse_batch_document(
+    conn: &Connection,
+    document_id: &str,
+    document_no: &str,
+    business_date: &str,
+    reason: &str,
+    handler: Option<String>,
+) -> AppResult<()> {
+    let batch_movements = load_batch_movements_for_document(conn, document_id)?;
+    let operator = blank_to_none(handler).unwrap_or_else(|| "system".to_string());
+    let mut touched_items: Vec<String> = Vec::new();
+    for movement in batch_movements {
+        let reverse_direction = if movement.direction == "in" {
+            "out"
+        } else {
+            "in"
+        };
+        if movement.direction == "in" {
+            let (original_quantity, remaining_quantity): (f64, f64) = conn.query_row(
+                "SELECT original_quantity, remaining_quantity FROM stock_batches WHERE id = ?1",
+                params![movement.batch_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            if remaining_quantity + 0.000001 < original_quantity {
+                return Err(AppError::Validation(format!(
+                    "入库批次已被后续出库消耗，不能直接作废：{}",
+                    movement.batch_no
+                )));
+            }
+            conn.execute(
+                "UPDATE stock_batches
+                 SET remaining_quantity = 0,
+                     remaining_amount = 0,
+                     status = 'voided',
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?1",
+                params![movement.batch_id],
+            )?;
+        } else {
+            let next_quantity =
+                round_quantity(movement.batch_remaining_quantity + movement.quantity);
+            let next_amount = round_money(movement.batch_remaining_amount + movement.amount);
+            conn.execute(
+                "UPDATE stock_batches
+                 SET remaining_quantity = ?1,
+                     remaining_amount = ?2,
+                     status = 'available',
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?3",
+                params![next_quantity, next_amount, movement.batch_id],
+            )?;
+        }
+        let reversal_movement_id = new_id();
+        conn.execute(
+            "INSERT INTO stock_movements (
+               id, movement_date, item_id, batch_id, direction, quantity, unit_price, amount,
+               document_id, document_line_id, department_id, department_name,
+               supplier_id, supplier_name, movement_type,
+               operator, remark
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 'reversal', ?15, ?16)",
+            params![
+                reversal_movement_id,
+                business_date,
+                movement.item_id,
+                movement.batch_id,
+                reverse_direction,
+                movement.quantity,
+                movement.unit_price,
+                movement.amount,
+                document_id,
+                movement.document_line_id,
+                movement.department_id,
+                movement.department_name,
+                movement.supplier_id,
+                movement.supplier_name,
+                operator,
+                format!("作废冲正 {}：{}", document_no, reason)
+            ],
+        )?;
+        conn.execute(
+            "INSERT INTO stock_batch_movements (
+               id, batch_id, stock_movement_id, document_id, document_line_id,
+               direction, quantity, unit_price, amount, movement_type
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'reversal')",
+            params![
+                new_id(),
+                movement.batch_id,
+                reversal_movement_id,
+                document_id,
+                movement.document_line_id,
+                reverse_direction,
+                movement.quantity,
+                movement.unit_price,
+                movement.amount
+            ],
+        )?;
+        if !touched_items.iter().any(|item| item == &movement.item_id) {
+            touched_items.push(movement.item_id);
+        }
+    }
+    for item_id in touched_items {
+        sync_balance_from_batches(conn, &item_id)?;
+    }
+    Ok(())
+}
+
 fn load_document_movements(
     conn: &Connection,
     document_id: &str,
@@ -1005,6 +1820,44 @@ fn load_document_movements(
             department_name: row.get(6)?,
             supplier_id: row.get(7)?,
             supplier_name: row.get(8)?,
+        })
+    })?;
+    collect_rows(rows)
+}
+
+fn load_batch_movements_for_document(
+    conn: &Connection,
+    document_id: &str,
+) -> AppResult<Vec<DocumentBatchMovement>> {
+    let mut stmt = conn.prepare(
+        "SELECT bm.batch_id, b.batch_no, b.item_id,
+                bm.document_line_id, bm.direction, bm.quantity, bm.unit_price, bm.amount,
+                COALESCE(m.department_id, NULL), m.department_name,
+                COALESCE(m.supplier_id, NULL), m.supplier_name,
+                b.remaining_quantity, b.remaining_amount
+         FROM stock_batch_movements bm
+         JOIN stock_batches b ON b.id = bm.batch_id
+         LEFT JOIN stock_movements m ON m.id = bm.stock_movement_id
+         WHERE bm.document_id = ?1
+           AND bm.movement_type != 'reversal'
+         ORDER BY bm.created_at DESC",
+    )?;
+    let rows = stmt.query_map(params![document_id], |row| {
+        Ok(DocumentBatchMovement {
+            batch_id: row.get(0)?,
+            batch_no: row.get(1)?,
+            item_id: row.get(2)?,
+            document_line_id: row.get(3)?,
+            direction: row.get(4)?,
+            quantity: row.get(5)?,
+            unit_price: row.get(6)?,
+            amount: row.get(7)?,
+            department_id: row.get(8)?,
+            department_name: row.get(9)?,
+            supplier_id: row.get(10)?,
+            supplier_name: row.get(11)?,
+            batch_remaining_quantity: row.get(12)?,
+            batch_remaining_amount: row.get(13)?,
         })
     })?;
     collect_rows(rows)
@@ -1095,7 +1948,12 @@ fn validate_enabled_parties_for_document(
     Ok(())
 }
 
-fn enforce_budget_limits(conn: &Connection, request: &SubmitStockDocumentRequest) -> AppResult<()> {
+fn enforce_budget_limits(
+    conn: &Connection,
+    request: &SubmitStockDocumentRequest,
+    lines: &[DocumentLineForConfirm],
+    outbound_costs: &HashMap<String, f64>,
+) -> AppResult<()> {
     if request.document_type != "outbound" {
         return Ok(());
     }
@@ -1113,7 +1971,7 @@ fn enforce_budget_limits(conn: &Connection, request: &SubmitStockDocumentRequest
         return Ok(());
     };
     let period_month = request.business_date.chars().take(7).collect::<String>();
-    let document_amount = round_money(request.lines.iter().map(line_amount).sum());
+    let document_amount = round_money(outbound_costs.values().sum());
     if let Some((rule_id, amount_limit, used_amount)) =
         active_department_budget(conn, department_id, &period_month)?
     {
@@ -1133,12 +1991,15 @@ fn enforce_budget_limits(conn: &Connection, request: &SubmitStockDocumentRequest
     }
 
     let mut category_amounts: HashMap<String, (String, f64)> = HashMap::new();
-    for line in &request.lines {
+    for line in lines {
         let item = get_item_for_stock(conn, &line.item_id)?;
         let Some(category_id) = item.category_id else {
             continue;
         };
-        let amount = line_amount(line);
+        let amount = outbound_costs
+            .get(&line.line_id)
+            .copied()
+            .unwrap_or(line.amount);
         let entry = category_amounts.entry(category_id).or_insert((
             item.category_name.unwrap_or_else(|| "未分类".to_string()),
             0.0,
@@ -1266,7 +2127,11 @@ fn next_document_no(
         "adjustment" => "ADJ",
         other => return Err(AppError::Validation(format!("不支持的单据类型：{other}"))),
     };
-    let date_part = business_date.replace('-', "");
+    let date_part = business_date
+        .chars()
+        .take(10)
+        .collect::<String>()
+        .replace('-', "");
     let like = format!("{prefix}-{date_part}-%");
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM stock_documents WHERE document_no LIKE ?1",
@@ -1274,6 +2139,16 @@ fn next_document_no(
         |row| row.get(0),
     )?;
     Ok(format!("{prefix}-{date_part}-{:04}", count + 1))
+}
+
+fn next_batch_no(conn: &Connection, document_no: &str) -> AppResult<String> {
+    let like = format!("{document_no}-B%");
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM stock_batches WHERE batch_no LIKE ?1",
+        params![like],
+        |row| row.get(0),
+    )?;
+    Ok(format!("{document_no}-B{:03}", count + 1))
 }
 
 fn map_document(row: &rusqlite::Row<'_>) -> rusqlite::Result<StockDocument> {
@@ -1294,9 +2169,13 @@ fn map_document(row: &rusqlite::Row<'_>) -> rusqlite::Result<StockDocument> {
         remark: row.get(13)?,
         total_quantity: row.get(14)?,
         total_amount: row.get(15)?,
-        item_summary: row.get(16)?,
-        created_at: row.get(17)?,
-        confirmed_at: row.get(18)?,
+        total_purchase_amount: row.get(16)?,
+        total_sale_amount: row.get(17)?,
+        total_cost_amount: row.get(18)?,
+        total_gross_profit: row.get(19)?,
+        item_summary: row.get(20)?,
+        created_at: row.get(21)?,
+        confirmed_at: row.get(22)?,
     })
 }
 
@@ -1337,13 +2216,49 @@ struct DocumentMovement {
     supplier_name: Option<String>,
 }
 
+struct DocumentBatchMovement {
+    batch_id: String,
+    batch_no: String,
+    item_id: String,
+    document_line_id: Option<String>,
+    direction: String,
+    quantity: f64,
+    unit_price: f64,
+    amount: f64,
+    department_id: Option<String>,
+    department_name: Option<String>,
+    supplier_id: Option<String>,
+    supplier_name: Option<String>,
+    batch_remaining_quantity: f64,
+    batch_remaining_amount: f64,
+}
+
 struct DocumentLineForConfirm {
     line_id: String,
     item_id: String,
     quantity: f64,
     unit_price: f64,
     amount: f64,
+    purchase_unit_price: Option<f64>,
+    purchase_amount: Option<f64>,
+    cost_amount: Option<f64>,
     remark: Option<String>,
+}
+
+struct AvailableBatch {
+    id: String,
+    remaining_quantity: f64,
+    remaining_amount: f64,
+    unit_price: f64,
+}
+
+struct BatchAllocation {
+    batch_id: String,
+    quantity: f64,
+    unit_price: f64,
+    amount: f64,
+    remaining_quantity: f64,
+    remaining_amount: f64,
 }
 
 struct SnapshotNames {
@@ -1412,8 +2327,81 @@ fn round_money(value: f64) -> f64 {
     (value * 100.0).round() / 100.0
 }
 
+fn round_quantity(value: f64) -> f64 {
+    (value * 1_000_000.0).round() / 1_000_000.0
+}
+
 fn round_price(value: f64) -> f64 {
     (value * 10000.0).round() / 10000.0
+}
+
+struct LinePricing {
+    unit_price: f64,
+    amount: f64,
+    purchase_unit_price: Option<f64>,
+    purchase_amount: Option<f64>,
+    sale_unit_price: Option<f64>,
+    sale_amount: Option<f64>,
+    cost_unit_price: Option<f64>,
+    cost_amount: Option<f64>,
+}
+
+fn line_pricing(
+    document_type: &str,
+    outbound_kind: Option<&str>,
+    line: &SubmitStockDocumentLine,
+) -> LinePricing {
+    let base_amount = line_amount(line);
+    match document_type {
+        "inbound" => {
+            let purchase_unit_price = line.unit_price;
+            let purchase_amount = effective_amount(line.quantity, purchase_unit_price, line.amount);
+            LinePricing {
+                unit_price: purchase_unit_price,
+                amount: purchase_amount,
+                purchase_unit_price: Some(purchase_unit_price),
+                purchase_amount: Some(purchase_amount),
+                sale_unit_price: None,
+                sale_amount: None,
+                cost_unit_price: Some(purchase_unit_price),
+                cost_amount: Some(purchase_amount),
+            }
+        }
+        "outbound" if outbound_kind == Some("guest_sale") => {
+            let sale_unit_price = line.unit_price;
+            let sale_amount = effective_amount(line.quantity, sale_unit_price, line.amount);
+            LinePricing {
+                unit_price: sale_unit_price,
+                amount: sale_amount,
+                purchase_unit_price: None,
+                purchase_amount: None,
+                sale_unit_price: Some(sale_unit_price),
+                sale_amount: Some(sale_amount),
+                cost_unit_price: None,
+                cost_amount: None,
+            }
+        }
+        "outbound" => LinePricing {
+            unit_price: line.unit_price,
+            amount: base_amount,
+            purchase_unit_price: None,
+            purchase_amount: None,
+            sale_unit_price: None,
+            sale_amount: None,
+            cost_unit_price: Some(line.unit_price),
+            cost_amount: Some(base_amount),
+        },
+        _ => LinePricing {
+            unit_price: line.unit_price,
+            amount: base_amount,
+            purchase_unit_price: None,
+            purchase_amount: None,
+            sale_unit_price: None,
+            sale_amount: None,
+            cost_unit_price: Some(line.unit_price),
+            cost_amount: Some(base_amount),
+        },
+    }
 }
 
 fn line_amount(line: &SubmitStockDocumentLine) -> f64 {
@@ -1611,8 +2599,8 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(outbound.document.total_amount, 11.0);
-        assert_eq!(outbound.lines[0].amount, 11.0);
+        assert_eq!(outbound.document.total_amount, 11.67);
+        assert_eq!(outbound.lines[0].amount, 11.67);
 
         let balance: (f64, f64) = conn
             .query_row(
@@ -1621,7 +2609,7 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(balance, (2.0, 24.0));
+        assert_eq!(balance, (2.0, 23.33));
 
         let movement_amounts: Vec<f64> = {
             let mut stmt = conn
@@ -1636,7 +2624,7 @@ mod tests {
                 .collect::<Result<Vec<f64>, _>>()
                 .unwrap()
         };
-        assert_eq!(movement_amounts, vec![35.0, 11.0]);
+        assert_eq!(movement_amounts, vec![35.0, 11.67]);
     }
 
     #[test]
@@ -2767,6 +3755,387 @@ mod tests {
             )
             .unwrap();
         assert_eq!(voided_count, 1);
+    }
+
+    #[test]
+    fn outbound_consumes_fifo_batches_and_records_actual_costs() {
+        let mut conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrations::run(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO suppliers (id, name) VALUES ('supplier-batch', '批次供应商')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO master_items (id, code, name, unit_id, default_price)
+             VALUES ('item-batch', 'BAT-001', '批次物品', 'unit-piece', 1)",
+            [],
+        )
+        .unwrap();
+
+        submit_stock_document(
+            &mut conn,
+            SubmitStockDocumentRequest {
+                document_type: "inbound".to_string(),
+                outbound_kind: None,
+                business_date: "2026-06-01".to_string(),
+                department_id: None,
+                supplier_id: Some("supplier-batch".to_string()),
+                handler: Some("tester".to_string()),
+                purpose: None,
+                remark: None,
+                approval_request_id: None,
+                lines: vec![SubmitStockDocumentLine {
+                    item_id: "item-batch".to_string(),
+                    quantity: 100.0,
+                    unit_price: 1.2,
+                    amount: None,
+                    remark: None,
+                }],
+            },
+            false,
+        )
+        .unwrap();
+        submit_stock_document(
+            &mut conn,
+            SubmitStockDocumentRequest {
+                document_type: "inbound".to_string(),
+                outbound_kind: None,
+                business_date: "2026-06-02".to_string(),
+                department_id: None,
+                supplier_id: Some("supplier-batch".to_string()),
+                handler: Some("tester".to_string()),
+                purpose: None,
+                remark: None,
+                approval_request_id: None,
+                lines: vec![SubmitStockDocumentLine {
+                    item_id: "item-batch".to_string(),
+                    quantity: 50.0,
+                    unit_price: 1.5,
+                    amount: None,
+                    remark: None,
+                }],
+            },
+            false,
+        )
+        .unwrap();
+
+        let outbound = submit_stock_document(
+            &mut conn,
+            SubmitStockDocumentRequest {
+                document_type: "outbound".to_string(),
+                outbound_kind: Some("internal".to_string()),
+                business_date: "2026-06-03".to_string(),
+                department_id: Some("dept-admin-office".to_string()),
+                supplier_id: None,
+                handler: Some("tester".to_string()),
+                purpose: Some("跨批次领用".to_string()),
+                remark: None,
+                approval_request_id: None,
+                lines: vec![SubmitStockDocumentLine {
+                    item_id: "item-batch".to_string(),
+                    quantity: 120.0,
+                    unit_price: 9.99,
+                    amount: None,
+                    remark: None,
+                }],
+            },
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(outbound.document.total_amount, 150.0);
+        assert_eq!(outbound.lines[0].unit_price, 1.25);
+        assert_eq!(outbound.lines[0].amount, 150.0);
+        assert_eq!(outbound.batch_lines.len(), 2);
+        assert_eq!(outbound.batch_lines[0].quantity, 100.0);
+        assert_eq!(outbound.batch_lines[0].unit_price, 1.2);
+        assert_eq!(outbound.batch_lines[1].quantity, 20.0);
+        assert_eq!(outbound.batch_lines[1].unit_price, 1.5);
+
+        let balance: (f64, f64, f64) = conn
+            .query_row(
+                "SELECT quantity, amount, average_price
+                 FROM stock_balances
+                 WHERE item_id = 'item-batch'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(balance, (30.0, 45.0, 1.5));
+
+        let batch_remaining: Vec<(f64, f64, String)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT remaining_quantity, remaining_amount, status
+                     FROM stock_batches
+                     WHERE item_id = 'item-batch'
+                     ORDER BY inbound_date ASC",
+                )
+                .unwrap();
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert_eq!(
+            batch_remaining,
+            vec![
+                (0.0, 0.0, "depleted".to_string()),
+                (30.0, 45.0, "available".to_string())
+            ]
+        );
+
+        let batches = list_stock_batches(&conn, "item-batch").unwrap();
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].batch_no, "IN-20260601-0001-B001");
+        assert_eq!(batches[0].status, "depleted");
+        assert_eq!(batches[1].remaining_quantity, 30.0);
+        assert_eq!(batches[1].remaining_amount, 45.0);
+        assert_eq!(
+            batches[1].source_document_no.as_deref(),
+            Some("IN-20260602-0001")
+        );
+    }
+
+    #[test]
+    fn guest_sale_records_sale_revenue_separately_from_fifo_cost() {
+        let mut conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrations::run(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO master_items (id, code, name, unit_id, default_price, sale_price)
+             VALUES ('item-sale-cost', 'SALE-COST', '客销成本物品', 'unit-piece', 12, 8)",
+            [],
+        )
+        .unwrap();
+
+        submit_stock_document(
+            &mut conn,
+            SubmitStockDocumentRequest {
+                document_type: "inbound".to_string(),
+                outbound_kind: None,
+                business_date: "2026-06-01".to_string(),
+                department_id: None,
+                supplier_id: None,
+                handler: Some("tester".to_string()),
+                purpose: None,
+                remark: None,
+                approval_request_id: None,
+                lines: vec![SubmitStockDocumentLine {
+                    item_id: "item-sale-cost".to_string(),
+                    quantity: 10.0,
+                    unit_price: 12.0,
+                    amount: None,
+                    remark: None,
+                }],
+            },
+            false,
+        )
+        .unwrap();
+
+        let sale = submit_stock_document(
+            &mut conn,
+            SubmitStockDocumentRequest {
+                document_type: "outbound".to_string(),
+                outbound_kind: Some("guest_sale".to_string()),
+                business_date: "2026-06-02".to_string(),
+                department_id: None,
+                supplier_id: None,
+                handler: Some("tester".to_string()),
+                purpose: Some("客人购买".to_string()),
+                remark: None,
+                approval_request_id: None,
+                lines: vec![SubmitStockDocumentLine {
+                    item_id: "item-sale-cost".to_string(),
+                    quantity: 2.0,
+                    unit_price: 8.0,
+                    amount: None,
+                    remark: None,
+                }],
+            },
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(sale.document.total_sale_amount, 16.0);
+        assert_eq!(sale.document.total_cost_amount, 24.0);
+        assert_eq!(sale.document.total_gross_profit, -8.0);
+        assert_eq!(sale.lines[0].sale_amount, Some(16.0));
+        assert_eq!(sale.lines[0].cost_amount, Some(24.0));
+        assert_eq!(sale.lines[0].gross_profit, Some(-8.0));
+
+        let movement_amount: f64 = conn
+            .query_row(
+                "SELECT amount FROM stock_movements
+                 WHERE item_id = 'item-sale-cost'
+                   AND direction = 'out'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(movement_amount, 24.0);
+    }
+
+    #[test]
+    fn void_outbound_restores_fifo_batch_quantities() {
+        let mut conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrations::run(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO master_items (id, code, name, unit_id, default_price)
+             VALUES ('item-void-batch', 'VB-001', '批次作废物品', 'unit-piece', 10)",
+            [],
+        )
+        .unwrap();
+        submit_stock_document(
+            &mut conn,
+            SubmitStockDocumentRequest {
+                document_type: "inbound".to_string(),
+                outbound_kind: None,
+                business_date: "2026-06-01".to_string(),
+                department_id: None,
+                supplier_id: None,
+                handler: Some("tester".to_string()),
+                purpose: None,
+                remark: None,
+                approval_request_id: None,
+                lines: vec![SubmitStockDocumentLine {
+                    item_id: "item-void-batch".to_string(),
+                    quantity: 10.0,
+                    unit_price: 10.0,
+                    amount: None,
+                    remark: None,
+                }],
+            },
+            false,
+        )
+        .unwrap();
+        let outbound = submit_stock_document(
+            &mut conn,
+            SubmitStockDocumentRequest {
+                document_type: "outbound".to_string(),
+                outbound_kind: None,
+                business_date: "2026-06-02".to_string(),
+                department_id: Some("dept-admin-office".to_string()),
+                supplier_id: None,
+                handler: Some("tester".to_string()),
+                purpose: Some("领用后作废".to_string()),
+                remark: None,
+                approval_request_id: None,
+                lines: vec![SubmitStockDocumentLine {
+                    item_id: "item-void-batch".to_string(),
+                    quantity: 4.0,
+                    unit_price: 10.0,
+                    amount: None,
+                    remark: None,
+                }],
+            },
+            false,
+        )
+        .unwrap();
+
+        void_stock_document(
+            &mut conn,
+            VoidStockDocumentRequest {
+                document_id: outbound.document.id,
+                reason: "出库错误".to_string(),
+                handler: Some("tester".to_string()),
+            },
+        )
+        .unwrap();
+
+        let batch: (f64, f64, String) = conn
+            .query_row(
+                "SELECT remaining_quantity, remaining_amount, status
+                 FROM stock_batches
+                 WHERE item_id = 'item-void-batch'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(batch, (10.0, 100.0, "available".to_string()));
+        let balance: (f64, f64) = conn
+            .query_row(
+                "SELECT quantity, amount
+                 FROM stock_balances
+                 WHERE item_id = 'item-void-batch'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(balance, (10.0, 100.0));
+    }
+
+    #[test]
+    fn void_inbound_after_batch_was_consumed_is_rejected() {
+        let mut conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrations::run(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO master_items (id, code, name, unit_id, default_price)
+             VALUES ('item-consumed-inbound', 'CIN-001', '已消耗入库', 'unit-piece', 10)",
+            [],
+        )
+        .unwrap();
+        let inbound = submit_stock_document(
+            &mut conn,
+            SubmitStockDocumentRequest {
+                document_type: "inbound".to_string(),
+                outbound_kind: None,
+                business_date: "2026-06-01".to_string(),
+                department_id: None,
+                supplier_id: None,
+                handler: Some("tester".to_string()),
+                purpose: None,
+                remark: None,
+                approval_request_id: None,
+                lines: vec![SubmitStockDocumentLine {
+                    item_id: "item-consumed-inbound".to_string(),
+                    quantity: 10.0,
+                    unit_price: 10.0,
+                    amount: None,
+                    remark: None,
+                }],
+            },
+            false,
+        )
+        .unwrap();
+        submit_stock_document(
+            &mut conn,
+            SubmitStockDocumentRequest {
+                document_type: "outbound".to_string(),
+                outbound_kind: None,
+                business_date: "2026-06-02".to_string(),
+                department_id: Some("dept-admin-office".to_string()),
+                supplier_id: None,
+                handler: Some("tester".to_string()),
+                purpose: Some("消耗入库批次".to_string()),
+                remark: None,
+                approval_request_id: None,
+                lines: vec![SubmitStockDocumentLine {
+                    item_id: "item-consumed-inbound".to_string(),
+                    quantity: 1.0,
+                    unit_price: 10.0,
+                    amount: None,
+                    remark: None,
+                }],
+            },
+            false,
+        )
+        .unwrap();
+
+        let error = void_stock_document(
+            &mut conn,
+            VoidStockDocumentRequest {
+                document_id: inbound.document.id,
+                reason: "采购错误".to_string(),
+                handler: Some("tester".to_string()),
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("入库批次已被后续出库消耗"));
     }
 
     #[test]

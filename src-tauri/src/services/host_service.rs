@@ -31,8 +31,9 @@ use crate::domain::runtime::{
 use crate::domain::status::{AppStatus, AuditLogRow, SystemSettings};
 use crate::domain::stock::{
     ConfirmStockDocumentDraftRequest, SaveStockDocumentDraftRequest, StockBalanceQuery,
-    StockBalanceRow, StockDocument, StockDocumentQuery, StockMovementQuery, StockMovementRow,
-    SubmitAdjustmentRequest, SubmitStockDocumentRequest, VoidStockDocumentRequest,
+    StockBalanceRow, StockBatchRow, StockDocument, StockDocumentQuery, StockMovementQuery,
+    StockMovementRow, SubmitAdjustmentRequest, SubmitStockDocumentRequest,
+    VoidStockDocumentRequest,
 };
 use crate::domain::stocktake::{
     ConfirmStocktakeRequest, CreateStocktakeRequest, StocktakeDetail, StocktakeDocument,
@@ -384,6 +385,17 @@ pub fn remote_list_stock_balances(
         format!("/api/stock/balances?{}", params.join("&"))
     };
     http_get_json(&config, &path)
+}
+
+pub fn remote_list_stock_batches(
+    state: &AppState,
+    item_id: String,
+) -> AppResult<Vec<StockBatchRow>> {
+    let config = client_runtime_config(state)?;
+    http_get_json(
+        &config,
+        &format!("/api/stock/batches?itemId={}", url_encode(&item_id)),
+    )
 }
 
 pub fn remote_list_stock_movements(
@@ -1086,6 +1098,16 @@ fn handle_connection_inner(
             })?;
             write_json(stream, 200, &response)?;
         }
+        ("GET", path) if path.starts_with("/api/stock/batches") => {
+            authenticate_request_and_touch_client(&request, &runtime, &db)?;
+            let item_id = query_param(path, "itemId")
+                .ok_or_else(|| AppError::Validation("缺少物品 ID".to_string()))?;
+            let response = db.with_conn(|conn| {
+                require_remote_permission(&auth_request, conn, "view_reports")?;
+                stock_repository::list_stock_batches(conn, &item_id)
+            })?;
+            write_json(stream, 200, &response)?;
+        }
         ("GET", path) if path.starts_with("/api/stock/movements") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
             let query = StockMovementQuery {
@@ -1105,8 +1127,12 @@ fn handle_connection_inner(
         }
         ("POST", "/api/stock/document") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
-            let request: SubmitStockDocumentRequest = serde_json::from_str(body)
+            let mut request: SubmitStockDocumentRequest = serde_json::from_str(body)
                 .map_err(|error| AppError::Validation(format!("单据请求解析失败：{error}")))?;
+            crate::services::stock_service::normalize_business_datetime(
+                &mut request.business_date,
+                "业务日期",
+            )?;
             crate::services::stock_service::validate_document(&request)?;
             let response = db.with_conn_mut(|conn| {
                 require_remote_permission(&auth_request, conn, "write_stock")?;
@@ -1120,8 +1146,12 @@ fn handle_connection_inner(
         }
         ("POST", "/api/stock/document/draft") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
-            let request: SaveStockDocumentDraftRequest = serde_json::from_str(body)
+            let mut request: SaveStockDocumentDraftRequest = serde_json::from_str(body)
                 .map_err(|error| AppError::Validation(format!("草稿请求解析失败：{error}")))?;
+            crate::services::stock_service::normalize_business_datetime(
+                &mut request.business_date,
+                "业务日期",
+            )?;
             crate::services::stock_service::validate_draft_document(&request)?;
             let response = db.with_conn_mut(|conn| {
                 require_remote_permission(&auth_request, conn, "write_stock")?;
@@ -1146,8 +1176,12 @@ fn handle_connection_inner(
         }
         ("POST", "/api/stock/adjustment") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
-            let request: SubmitAdjustmentRequest = serde_json::from_str(body)
+            let mut request: SubmitAdjustmentRequest = serde_json::from_str(body)
                 .map_err(|error| AppError::Validation(format!("调整请求解析失败：{error}")))?;
+            crate::services::stock_service::normalize_business_datetime(
+                &mut request.business_date,
+                "调整日期",
+            )?;
             crate::services::stock_service::validate_adjustment(&request)?;
             let response = db.with_conn_mut(|conn| {
                 require_remote_permission(&auth_request, conn, "write_stock")?;
@@ -1465,8 +1499,20 @@ fn handle_connection_inner(
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
             let month = query_param(path, "month")
                 .ok_or_else(|| AppError::Validation("报表月份不能为空".to_string()))?;
-            let start_date = query_param(path, "startDate");
-            let end_date = query_param(path, "endDate");
+            let start_date = query_param(path, "startDate").map(|date| {
+                if date.len() == 10 {
+                    format!("{date} 00:00:00")
+                } else {
+                    date
+                }
+            });
+            let end_date = query_param(path, "endDate").map(|date| {
+                if date.len() == 10 {
+                    format!("{date} 23:59:59")
+                } else {
+                    date
+                }
+            });
             let department_id = query_param(path, "departmentId");
             let category_id = query_param(path, "categoryId");
             let item_id = query_param(path, "itemId");
@@ -1499,8 +1545,12 @@ fn handle_connection_inner(
         }
         ("POST", "/api/stocktakes") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
-            let request: CreateStocktakeRequest = serde_json::from_str(body)
+            let mut request: CreateStocktakeRequest = serde_json::from_str(body)
                 .map_err(|error| AppError::Validation(format!("盘点创建请求解析失败：{error}")))?;
+            crate::services::stock_service::normalize_business_datetime(
+                &mut request.business_date,
+                "盘点日期",
+            )?;
             crate::services::stocktake_service::validate_create_request(&request)?;
             let response = db.with_conn_mut(|conn| {
                 require_remote_permission(&auth_request, conn, "write_stock")?;

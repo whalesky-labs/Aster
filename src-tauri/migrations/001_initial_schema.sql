@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS master_items (
   spec TEXT,
   unit_id TEXT REFERENCES units(id) ON DELETE SET NULL,
   default_price REAL NOT NULL DEFAULT 0,
+  sale_price REAL NOT NULL DEFAULT 0,
   supplier_id TEXT REFERENCES suppliers(id) ON DELETE SET NULL,
   warning_quantity REAL NOT NULL DEFAULT 0,
   enabled INTEGER NOT NULL DEFAULT 1,
@@ -136,6 +137,12 @@ CREATE TABLE IF NOT EXISTS stock_document_lines (
   quantity REAL NOT NULL,
   unit_price REAL NOT NULL DEFAULT 0,
   amount REAL NOT NULL DEFAULT 0,
+  purchase_unit_price REAL,
+  purchase_amount REAL,
+  sale_unit_price REAL,
+  sale_amount REAL,
+  cost_unit_price REAL,
+  cost_amount REAL,
   remark TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -144,6 +151,7 @@ CREATE TABLE IF NOT EXISTS stock_movements (
   id TEXT PRIMARY KEY,
   movement_date TEXT NOT NULL,
   item_id TEXT NOT NULL REFERENCES master_items(id) ON DELETE RESTRICT,
+  batch_id TEXT,
   direction TEXT NOT NULL CHECK(direction IN ('in', 'out')),
   quantity REAL NOT NULL,
   unit_price REAL NOT NULL DEFAULT 0,
@@ -157,6 +165,39 @@ CREATE TABLE IF NOT EXISTS stock_movements (
   movement_type TEXT NOT NULL CHECK(movement_type IN ('opening', 'inbound', 'outbound', 'stocktake_gain', 'stocktake_loss', 'adjustment', 'reversal')),
   operator TEXT,
   remark TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS stock_batches (
+  id TEXT PRIMARY KEY,
+  item_id TEXT NOT NULL REFERENCES master_items(id) ON DELETE RESTRICT,
+  source_document_id TEXT REFERENCES stock_documents(id) ON DELETE SET NULL,
+  source_document_line_id TEXT REFERENCES stock_document_lines(id) ON DELETE SET NULL,
+  batch_no TEXT NOT NULL UNIQUE,
+  inbound_date TEXT NOT NULL,
+  supplier_id TEXT REFERENCES suppliers(id) ON DELETE SET NULL,
+  supplier_name TEXT,
+  original_quantity REAL NOT NULL,
+  remaining_quantity REAL NOT NULL,
+  unit_price REAL NOT NULL DEFAULT 0,
+  original_amount REAL NOT NULL DEFAULT 0,
+  remaining_amount REAL NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'available' CHECK(status IN ('available', 'depleted', 'voided', 'adjustment')),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS stock_batch_movements (
+  id TEXT PRIMARY KEY,
+  batch_id TEXT NOT NULL REFERENCES stock_batches(id) ON DELETE RESTRICT,
+  stock_movement_id TEXT REFERENCES stock_movements(id) ON DELETE SET NULL,
+  document_id TEXT REFERENCES stock_documents(id) ON DELETE SET NULL,
+  document_line_id TEXT REFERENCES stock_document_lines(id) ON DELETE SET NULL,
+  direction TEXT NOT NULL CHECK(direction IN ('in', 'out')),
+  quantity REAL NOT NULL,
+  unit_price REAL NOT NULL DEFAULT 0,
+  amount REAL NOT NULL DEFAULT 0,
+  movement_type TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

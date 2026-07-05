@@ -16,10 +16,18 @@ pub fn get_report_bundle(state: &AppState, query: ReportQuery) -> AppResult<Repo
             return Err(AppError::Validation("开始日期不能晚于结束日期".to_string()));
         }
     }
+    let start_date = query
+        .start_date
+        .as_deref()
+        .map(|date| format!("{date} 00:00:00"));
+    let end_date = query
+        .end_date
+        .as_deref()
+        .map(|date| format!("{date} 23:59:59"));
     let scoped_query = ReportQuery {
         month: query.month,
-        start_date: query.start_date,
-        end_date: query.end_date,
+        start_date,
+        end_date,
         department_id: crate::services::user_service::current_department_scope(state)?
             .or(query.department_id),
         category_id: query.category_id,
@@ -130,7 +138,17 @@ fn write_report_workbook(bundle: &ReportBundle, path: &std::path::Path) -> AppRe
         sheet,
         &header,
         &[
-            "日期", "部门", "编码", "物品", "规格", "单位", "数量", "单价", "金额", "单号", "用途",
+            "日期",
+            "部门",
+            "编码",
+            "物品",
+            "规格",
+            "单位",
+            "数量",
+            "成本单价",
+            "成本金额",
+            "单号",
+            "用途",
             "备注",
         ],
     )?;
@@ -167,6 +185,81 @@ fn write_report_workbook(bundle: &ReportBundle, path: &std::path::Path) -> AppRe
             .map_err(map_xlsx)?;
         sheet
             .write_string(r, 11, row.remark.as_deref().unwrap_or(""))
+            .map_err(map_xlsx)?;
+    }
+    sheet.autofit();
+
+    let sheet = workbook.add_worksheet();
+    sheet.set_name("销售毛利").map_err(map_xlsx)?;
+    write_headers(
+        sheet,
+        &header,
+        &[
+            "日期",
+            "编码",
+            "物品",
+            "规格",
+            "单位",
+            "数量",
+            "销售单价",
+            "销售金额",
+            "成本单价",
+            "成本金额",
+            "毛利",
+            "毛利率",
+            "是否亏损",
+            "单号",
+            "用途",
+            "备注",
+        ],
+    )?;
+    for (idx, row) in bundle.sales_profit.iter().enumerate() {
+        let r = (idx + 1) as u32;
+        sheet
+            .write_string(r, 0, &row.movement_date)
+            .map_err(map_xlsx)?;
+        sheet.write_string(r, 1, &row.item_code).map_err(map_xlsx)?;
+        sheet.write_string(r, 2, &row.item_name).map_err(map_xlsx)?;
+        sheet
+            .write_string(r, 3, row.spec.as_deref().unwrap_or(""))
+            .map_err(map_xlsx)?;
+        sheet
+            .write_string(r, 4, row.unit_name.as_deref().unwrap_or(""))
+            .map_err(map_xlsx)?;
+        sheet
+            .write_number_with_format(r, 5, row.quantity, &number)
+            .map_err(map_xlsx)?;
+        sheet
+            .write_number_with_format(r, 6, row.sale_unit_price, &money)
+            .map_err(map_xlsx)?;
+        sheet
+            .write_number_with_format(r, 7, row.sale_amount, &money)
+            .map_err(map_xlsx)?;
+        sheet
+            .write_number_with_format(r, 8, row.cost_unit_price, &money)
+            .map_err(map_xlsx)?;
+        sheet
+            .write_number_with_format(r, 9, row.cost_amount, &money)
+            .map_err(map_xlsx)?;
+        sheet
+            .write_number_with_format(r, 10, row.gross_profit, &money)
+            .map_err(map_xlsx)?;
+        if let Some(gross_margin) = row.gross_margin {
+            sheet
+                .write_number_with_format(r, 11, gross_margin, &number)
+                .map_err(map_xlsx)?;
+        }
+        sheet
+            .write_string(r, 12, if row.negative_profit { "是" } else { "否" })
+            .map_err(map_xlsx)?;
+        sheet
+            .write_string(r, 13, row.document_no.as_deref().unwrap_or(""))
+            .map_err(map_xlsx)?;
+        sheet
+            .write_string(r, 14, row.purpose.as_deref().unwrap_or(""))
+            .map_err(map_xlsx)?;
+        sheet
+            .write_string(r, 15, row.remark.as_deref().unwrap_or(""))
             .map_err(map_xlsx)?;
     }
     sheet.autofit();
@@ -550,8 +643,8 @@ mod tests {
     use crate::db::repository;
     use crate::domain::reports::{
         CategoryConsumptionRow, DepartmentIssueDetailRow, DepartmentIssueSummaryRow,
-        InboundDetailRow, ItemConsumptionRow, MonthlyInventoryRow, StockBalanceReportRow,
-        StockWarningRow, StocktakeDifferenceReportRow,
+        InboundDetailRow, ItemConsumptionRow, MonthlyInventoryRow, SalesProfitRow,
+        StockBalanceReportRow, StockWarningRow, StocktakeDifferenceReportRow,
     };
     use crate::domain::users::{CurrentUser, Role};
 
@@ -618,6 +711,7 @@ mod tests {
             department_details: vec![DepartmentIssueDetailRow {
                 movement_date: "2026-06-30".to_string(),
                 department_name: "行政办".to_string(),
+                outbound_kind: Some("internal".to_string()),
                 item_code: "IT-001".to_string(),
                 item_name: "测试物品".to_string(),
                 spec: Some("标准".to_string()),
@@ -625,6 +719,12 @@ mod tests {
                 quantity: 4.0,
                 unit_price: 12.0,
                 amount: 48.0,
+                sale_unit_price: None,
+                sale_amount: None,
+                cost_unit_price: 12.0,
+                cost_amount: 48.0,
+                gross_profit: None,
+                gross_margin: None,
                 document_no: Some("OUT-20260630-0001".to_string()),
                 purpose: Some("测试".to_string()),
                 remark: None,
@@ -660,6 +760,7 @@ mod tests {
             outbound_details: vec![DepartmentIssueDetailRow {
                 movement_date: "2026-06-30".to_string(),
                 department_name: "行政办".to_string(),
+                outbound_kind: Some("internal".to_string()),
                 item_code: "IT-001".to_string(),
                 item_name: "测试物品".to_string(),
                 spec: Some("标准".to_string()),
@@ -667,8 +768,32 @@ mod tests {
                 quantity: 4.0,
                 unit_price: 12.0,
                 amount: 48.0,
+                sale_unit_price: None,
+                sale_amount: None,
+                cost_unit_price: 12.0,
+                cost_amount: 48.0,
+                gross_profit: None,
+                gross_margin: None,
                 document_no: Some("OUT-20260630-0001".to_string()),
                 purpose: Some("测试".to_string()),
+                remark: None,
+            }],
+            sales_profit: vec![SalesProfitRow {
+                movement_date: "2026-06-30".to_string(),
+                item_code: "IT-001".to_string(),
+                item_name: "测试物品".to_string(),
+                spec: Some("标准".to_string()),
+                unit_name: Some("件".to_string()),
+                quantity: 2.0,
+                sale_unit_price: 20.0,
+                sale_amount: 40.0,
+                cost_unit_price: 12.0,
+                cost_amount: 24.0,
+                gross_profit: 16.0,
+                gross_margin: Some(0.4),
+                negative_profit: false,
+                document_no: Some("OUT-20260630-0002".to_string()),
+                purpose: Some("客销".to_string()),
                 remark: None,
             }],
             stock_balances: vec![StockBalanceReportRow {

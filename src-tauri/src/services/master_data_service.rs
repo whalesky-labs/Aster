@@ -307,7 +307,10 @@ pub(crate) fn validate_item(request: &SaveItemRequest) -> AppResult<()> {
     }
     require_text("物品名称", &request.name)?;
     if request.default_price < 0.0 {
-        return Err(AppError::Validation("默认单价不能小于 0".to_string()));
+        return Err(AppError::Validation("参考进价不能小于 0".to_string()));
+    }
+    if request.sale_price < 0.0 {
+        return Err(AppError::Validation("参考售价不能小于 0".to_string()));
     }
     if request.warning_quantity < 0.0 {
         return Err(AppError::Validation("库存预警线不能小于 0".to_string()));

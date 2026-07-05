@@ -370,7 +370,7 @@ pub fn list_items(conn: &Connection, search: Option<String>) -> AppResult<Vec<It
     let like = format!("%{}%", search.trim());
     let mut stmt = conn.prepare(
         "SELECT i.id, i.code, i.barcode, i.name, i.category_id, c.name, i.spec, i.unit_id, u.name,
-                i.default_price, i.supplier_id, s.name, i.warning_quantity,
+                i.default_price, i.sale_price, i.supplier_id, s.name, i.warning_quantity,
                 i.enabled, i.remark, i.created_at, i.updated_at
          FROM master_items i
          LEFT JOIN categories c ON c.id = i.category_id
@@ -396,13 +396,14 @@ pub fn list_items(conn: &Connection, search: Option<String>) -> AppResult<Vec<It
             unit_id: row.get(7)?,
             unit_name: row.get(8)?,
             default_price: row.get(9)?,
-            supplier_id: row.get(10)?,
-            supplier_name: row.get(11)?,
-            warning_quantity: row.get(12)?,
-            enabled: row.get::<_, i64>(13)? == 1,
-            remark: row.get(14)?,
-            created_at: row.get(15)?,
-            updated_at: row.get(16)?,
+            sale_price: row.get(10)?,
+            supplier_id: row.get(11)?,
+            supplier_name: row.get(12)?,
+            warning_quantity: row.get(13)?,
+            enabled: row.get::<_, i64>(14)? == 1,
+            remark: row.get(15)?,
+            created_at: row.get(16)?,
+            updated_at: row.get(17)?,
         })
     })?;
     collect_rows(rows)
@@ -439,10 +440,10 @@ pub fn save_item(conn: &Connection, request: SaveItemRequest) -> AppResult<Item>
         conn.execute(
             "UPDATE master_items
              SET code = ?1, barcode = ?2, name = ?3, category_id = ?4, spec = ?5,
-                 unit_id = ?6, default_price = ?7, supplier_id = ?8,
-                 warning_quantity = ?9, enabled = ?10, remark = ?11,
-                 updated_at = ?12
-             WHERE id = ?13",
+                 unit_id = ?6, default_price = ?7, sale_price = ?8, supplier_id = ?9,
+                 warning_quantity = ?10, enabled = ?11, remark = ?12,
+                 updated_at = ?13
+             WHERE id = ?14",
             params![
                 code,
                 blank_to_none(request.barcode),
@@ -451,6 +452,7 @@ pub fn save_item(conn: &Connection, request: SaveItemRequest) -> AppResult<Item>
                 blank_to_none(request.spec),
                 unit_id,
                 request.default_price,
+                request.sale_price,
                 supplier_id,
                 request.warning_quantity,
                 bool_to_i64(request.enabled),
@@ -463,9 +465,9 @@ pub fn save_item(conn: &Connection, request: SaveItemRequest) -> AppResult<Item>
         conn.execute(
             "INSERT INTO master_items (
                id, code, barcode, name, category_id, spec, unit_id, default_price,
-               supplier_id, warning_quantity, enabled, remark
+               sale_price, supplier_id, warning_quantity, enabled, remark
              )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 id,
                 code,
@@ -475,6 +477,7 @@ pub fn save_item(conn: &Connection, request: SaveItemRequest) -> AppResult<Item>
                 blank_to_none(request.spec),
                 unit_id,
                 request.default_price,
+                request.sale_price,
                 supplier_id,
                 request.warning_quantity,
                 bool_to_i64(request.enabled),
@@ -713,7 +716,7 @@ fn get_supplier(conn: &Connection, id: &str) -> AppResult<Supplier> {
 fn get_item(conn: &Connection, id: &str) -> AppResult<Item> {
     Ok(conn.query_row(
         "SELECT i.id, i.code, i.barcode, i.name, i.category_id, c.name, i.spec, i.unit_id, u.name,
-                i.default_price, i.supplier_id, s.name, i.warning_quantity,
+                i.default_price, i.sale_price, i.supplier_id, s.name, i.warning_quantity,
                 i.enabled, i.remark, i.created_at, i.updated_at
          FROM master_items i
          LEFT JOIN categories c ON c.id = i.category_id
@@ -733,13 +736,14 @@ fn get_item(conn: &Connection, id: &str) -> AppResult<Item> {
                 unit_id: row.get(7)?,
                 unit_name: row.get(8)?,
                 default_price: row.get(9)?,
-                supplier_id: row.get(10)?,
-                supplier_name: row.get(11)?,
-                warning_quantity: row.get(12)?,
-                enabled: row.get::<_, i64>(13)? == 1,
-                remark: row.get(14)?,
-                created_at: row.get(15)?,
-                updated_at: row.get(16)?,
+                sale_price: row.get(10)?,
+                supplier_id: row.get(11)?,
+                supplier_name: row.get(12)?,
+                warning_quantity: row.get(13)?,
+                enabled: row.get::<_, i64>(14)? == 1,
+                remark: row.get(15)?,
+                created_at: row.get(16)?,
+                updated_at: row.get(17)?,
             })
         },
     )?)
@@ -1064,6 +1068,7 @@ mod tests {
                 spec: None,
                 unit_id: Some("unit-piece".to_string()),
                 default_price: 1.0,
+                sale_price: 0.0,
                 supplier_id: None,
                 warning_quantity: 0.0,
                 enabled: true,
@@ -1085,6 +1090,7 @@ mod tests {
                 spec: None,
                 unit_id: Some("unit-disabled".to_string()),
                 default_price: 1.0,
+                sale_price: 0.0,
                 supplier_id: None,
                 warning_quantity: 0.0,
                 enabled: true,
@@ -1106,6 +1112,7 @@ mod tests {
                 spec: None,
                 unit_id: Some("unit-piece".to_string()),
                 default_price: 1.0,
+                sale_price: 0.0,
                 supplier_id: Some("supplier-disabled".to_string()),
                 warning_quantity: 0.0,
                 enabled: true,
@@ -1140,6 +1147,7 @@ mod tests {
                 spec: None,
                 unit_id: Some("unit-piece".to_string()),
                 default_price: 1.0,
+                sale_price: 0.0,
                 supplier_id: None,
                 warning_quantity: 0.0,
                 enabled: true,
@@ -1278,6 +1286,7 @@ mod tests {
                 spec: None,
                 unit_id: Some("unit-piece".to_string()),
                 default_price: 1.0,
+                sale_price: 0.0,
                 supplier_id: None,
                 warning_quantity: 0.0,
                 enabled: true,
@@ -1298,6 +1307,7 @@ mod tests {
                 spec: None,
                 unit_id: Some("unit-piece".to_string()),
                 default_price: 1.0,
+                sale_price: 0.0,
                 supplier_id: None,
                 warning_quantity: 0.0,
                 enabled: true,
@@ -1319,6 +1329,7 @@ mod tests {
                 spec: None,
                 unit_id: Some("unit-piece".to_string()),
                 default_price: 2.0,
+                sale_price: 0.0,
                 supplier_id: None,
                 warning_quantity: 0.0,
                 enabled: true,
@@ -1340,6 +1351,7 @@ mod tests {
                 spec: None,
                 unit_id: Some("unit-piece".to_string()),
                 default_price: 3.0,
+                sale_price: 0.0,
                 supplier_id: None,
                 warning_quantity: 0.0,
                 enabled: true,

@@ -1232,7 +1232,11 @@ fn next_document_no(
         "outbound" => "OUT",
         other => return Err(AppError::Validation(format!("不支持的单据类型：{other}"))),
     };
-    let date_part = business_date.replace('-', "");
+    let date_part = business_date
+        .chars()
+        .take(10)
+        .collect::<String>()
+        .replace('-', "");
     let like = format!("{prefix}-{date_part}-%");
     let count: i64 = tx.query_row(
         "SELECT COUNT(*) FROM stock_documents WHERE document_no LIKE ?1",

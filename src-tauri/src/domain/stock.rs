@@ -38,7 +38,7 @@ pub struct ConfirmStockDocumentDraftRequest {
     pub approval_request_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubmitStockDocumentLine {
     pub item_id: String,
@@ -110,6 +110,27 @@ pub struct StockMovementQuery {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct StockBatchRow {
+    pub id: String,
+    pub item_id: String,
+    pub item_code: String,
+    pub item_name: String,
+    pub batch_no: String,
+    pub inbound_date: String,
+    pub supplier_name: Option<String>,
+    pub original_quantity: f64,
+    pub remaining_quantity: f64,
+    pub unit_price: f64,
+    pub original_amount: f64,
+    pub remaining_amount: f64,
+    pub status: String,
+    pub source_document_no: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StockDocument {
     pub id: String,
     pub document_no: String,
@@ -127,6 +148,10 @@ pub struct StockDocument {
     pub remark: Option<String>,
     pub total_quantity: f64,
     pub total_amount: f64,
+    pub total_purchase_amount: f64,
+    pub total_sale_amount: f64,
+    pub total_cost_amount: f64,
+    pub total_gross_profit: f64,
     pub item_summary: Option<String>,
     pub created_at: String,
     pub confirmed_at: Option<String>,
@@ -137,6 +162,7 @@ pub struct StockDocument {
 pub struct StockDocumentDetail {
     pub document: StockDocument,
     pub lines: Vec<StockDocumentLine>,
+    pub batch_lines: Vec<StockDocumentBatchLine>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,7 +177,33 @@ pub struct StockDocumentLine {
     pub quantity: f64,
     pub unit_price: f64,
     pub amount: f64,
+    pub purchase_unit_price: Option<f64>,
+    pub purchase_amount: Option<f64>,
+    pub sale_unit_price: Option<f64>,
+    pub sale_amount: Option<f64>,
+    pub cost_unit_price: Option<f64>,
+    pub cost_amount: Option<f64>,
+    pub gross_profit: Option<f64>,
     pub remark: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StockDocumentBatchLine {
+    pub id: String,
+    pub item_id: String,
+    pub item_code: String,
+    pub item_name: String,
+    pub batch_id: String,
+    pub batch_no: String,
+    pub inbound_date: String,
+    pub supplier_name: Option<String>,
+    pub direction: String,
+    pub quantity: f64,
+    pub unit_price: f64,
+    pub amount: f64,
+    pub movement_type: String,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

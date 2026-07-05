@@ -893,7 +893,6 @@ select:focus-visible {
 
 .content-body > section,
 .content-body > .data-layout,
-.content-body > .stocktake-layout,
 .content-body > .report-layout,
 .content-body > .import-layout {
   margin: 0 0 10px;
@@ -960,7 +959,6 @@ select:focus-visible {
 .row-actions button,
 .quick-action-grid button,
 .selected-tags button,
-.stocktake-record,
 .discovery-item {
   appearance: none;
   display: inline-flex;
@@ -984,7 +982,6 @@ select:focus-visible {
 .row-actions button:hover,
 .quick-action-grid button:hover,
 .selected-tags button:hover,
-.stocktake-record:hover,
 .discovery-item:hover {
   border-color: color-mix(
     in srgb,
@@ -1111,7 +1108,6 @@ select:focus,
 .metrics-grid,
 .workspace-grid,
 .data-layout,
-.stocktake-layout,
 .runtime-grid,
 .report-layout,
 .import-layout,
@@ -1142,11 +1138,6 @@ select:focus,
   grid-template-columns: 300px minmax(0, 1fr);
 }
 
-.stocktake-layout {
-  grid-template-columns: 312px minmax(0, 1fr);
-  align-items: start;
-}
-
 .status-panel,
 .metric-card,
 .module-panel,
@@ -1168,8 +1159,6 @@ select:focus,
 .metric-card span,
 .metric-card em,
 .field span,
-.stocktake-record span,
-.stocktake-record em,
 .muted-text,
 .table-note {
   color: var(--text-muted);
@@ -1462,12 +1451,6 @@ select:focus,
 
 .table-toolbar.actions-only .toolbar-actions {
   flex: 1 1 auto;
-}
-
-.supplier-tabs {
-  width: 220px;
-  margin-top: 0;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .supplier-toolbar {
@@ -2969,50 +2952,13 @@ tbody tr:hover {
   line-height: 22px;
 }
 
-.stocktake-list {
-  display: grid;
-  gap: 7px;
-  margin-top: 16px;
-  border-top: 1px solid var(--native-panel-border);
-  padding-top: 12px;
-}
-
-.stocktake-list h3 {
-  margin: 0 0 3px;
-  color: var(--text-main);
-  font-size: 13px;
-}
-
-.stocktake-record {
-  display: grid;
-  gap: 3px;
-  width: 100%;
-  min-height: 50px;
-  padding: 8px 9px;
-  text-align: left;
-}
-
-.stocktake-record.active {
-  border-color: color-mix(
-    in srgb,
-    var(--accent) 46%,
-    var(--native-panel-border)
-  );
-  color: var(--accent);
-  background: var(--accent-active-bg);
-}
-
-.stocktake-record:hover span,
-.stocktake-record.active span {
-  color: var(--accent);
-}
-
-.stocktake-record strong {
-  font-size: 12px;
-}
-
 .stocktake-metrics {
   margin: 10px;
+}
+
+.stocktake-detail-panel .document-detail-header .report-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .compact-input {
@@ -3042,7 +2988,6 @@ tbody tr:hover {
     .row-actions button,
     .quick-action-grid button,
     .selected-tags button,
-    .stocktake-record,
     .discovery-item,
     input,
     select,
@@ -3083,7 +3028,6 @@ tbody tr:hover {
     .document-filters,
     .report-filters,
     .export-path,
-    .stocktake-list,
     th,
     td
   ),
@@ -3281,8 +3225,7 @@ tbody tr:hover {
 
   .workspace-grid,
   .status-grid,
-  .data-layout,
-  .stocktake-layout {
+  .data-layout {
     grid-template-columns: 1fr;
   }
 

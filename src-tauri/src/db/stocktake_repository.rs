@@ -1,6 +1,10 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use uuid::Uuid;
 
+use crate::db::stock_repository::{
+    create_batch_in_movement, create_batch_out_movements, BatchInMovementInput,
+    BatchOutMovementInput,
+};
 use crate::domain::stocktake::{
     ConfirmStocktakeRequest, CreateStocktakeRequest, StocktakeDetail, StocktakeDocument,
     StocktakeLine, UpdateStocktakeCountsRequest,
@@ -255,28 +259,55 @@ pub fn confirm_stocktake(
                 request.remark.clone().or(line.remark.clone())
             ],
         )?;
-        apply_stocktake_balance(&tx, &line.item_id, direction, quantity, unit_price, amount)?;
-        tx.execute(
-            "INSERT INTO stock_movements (
-               id, movement_date, item_id, direction, quantity, unit_price, amount,
-               document_id, document_line_id, movement_type, operator, remark
-             )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            params![
-                new_id(),
-                business_date,
-                line.item_id,
-                direction,
-                quantity,
-                unit_price,
-                amount,
-                document_id,
-                line_id,
-                movement_type,
-                blank_to_none(request.handler.clone()).unwrap_or_else(|| "system".to_string()),
-                request.remark.clone().or(line.remark)
-            ],
-        )?;
+        let remark = request.remark.clone().or(line.remark);
+        let operator =
+            blank_to_none(request.handler.clone()).unwrap_or_else(|| "system".to_string());
+        if direction == "in" {
+            create_batch_in_movement(
+                &tx,
+                BatchInMovementInput {
+                    document_id: &document_id,
+                    document_line_id: &line_id,
+                    document_no: &document_no,
+                    item_id: &line.item_id,
+                    business_date: &business_date,
+                    quantity,
+                    unit_price,
+                    amount,
+                    supplier_id: None,
+                    supplier_name: None,
+                    movement_type,
+                    operator,
+                    remark,
+                },
+            )?;
+        } else {
+            let (actual_unit_price, actual_amount) = create_batch_out_movements(
+                &tx,
+                BatchOutMovementInput {
+                    document_id: &document_id,
+                    document_line_id: &line_id,
+                    item_id: &line.item_id,
+                    business_date: &business_date,
+                    quantity,
+                    department_id: None,
+                    department_name: None,
+                    supplier_id: None,
+                    supplier_name: None,
+                    movement_type,
+                    operator,
+                    remark,
+                    allow_negative_stock: false,
+                    fallback_unit_price: unit_price,
+                },
+            )?;
+            tx.execute(
+                "UPDATE stock_document_lines
+                 SET unit_price = ?1, amount = ?2
+                 WHERE id = ?3",
+                params![actual_unit_price, actual_amount, line_id],
+            )?;
+        }
     }
 
     tx.execute(
@@ -455,81 +486,6 @@ fn load_stocktake_adjustment_lines(
     collect_rows(rows)
 }
 
-fn apply_stocktake_balance(
-    conn: &Connection,
-    item_id: &str,
-    direction: &str,
-    quantity: f64,
-    unit_price: f64,
-    amount: f64,
-) -> AppResult<()> {
-    let existing = conn
-        .query_row(
-            "SELECT quantity, amount, average_price, last_inbound_price
-             FROM stock_balances WHERE item_id = ?1",
-            params![item_id],
-            |row| {
-                Ok((
-                    row.get::<_, f64>(0)?,
-                    row.get::<_, f64>(1)?,
-                    row.get::<_, f64>(2)?,
-                    row.get::<_, f64>(3)?,
-                ))
-            },
-        )
-        .optional()?
-        .unwrap_or((0.0, 0.0, unit_price, 0.0));
-
-    let (old_qty, old_amount, old_avg_price, old_last_price) = existing;
-    let (new_qty, new_amount, new_avg_price, new_last_price) = if direction == "in" {
-        let next_qty = old_qty + quantity;
-        let next_amount = old_amount + amount;
-        let next_avg = if next_qty.abs() < f64::EPSILON {
-            0.0
-        } else {
-            round_price(next_amount / next_qty)
-        };
-        (next_qty, round_money(next_amount), next_avg, old_last_price)
-    } else {
-        let price = if old_avg_price > 0.0 {
-            old_avg_price
-        } else {
-            unit_price
-        };
-        let out_amount = round_money(quantity * price);
-        let next_qty = old_qty - quantity;
-        let next_amount = (old_amount - out_amount).max(0.0);
-        let next_avg = if next_qty.abs() < f64::EPSILON {
-            0.0
-        } else {
-            round_price(next_amount / next_qty)
-        };
-        (next_qty, round_money(next_amount), next_avg, old_last_price)
-    };
-
-    conn.execute(
-        "INSERT INTO stock_balances (
-           id, item_id, quantity, amount, average_price, last_inbound_price, updated_at
-         )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP)
-         ON CONFLICT(item_id) DO UPDATE SET
-           quantity = excluded.quantity,
-           amount = excluded.amount,
-           average_price = excluded.average_price,
-           last_inbound_price = excluded.last_inbound_price,
-           updated_at = CURRENT_TIMESTAMP",
-        params![
-            new_id(),
-            item_id,
-            new_qty,
-            new_amount,
-            new_avg_price,
-            new_last_price
-        ],
-    )?;
-    Ok(())
-}
-
 fn stocktake_status(conn: &Connection, stocktake_id: &str) -> AppResult<String> {
     conn.query_row(
         "SELECT status FROM stocktake_documents WHERE id = ?1",
@@ -541,7 +497,11 @@ fn stocktake_status(conn: &Connection, stocktake_id: &str) -> AppResult<String> 
 }
 
 fn next_stocktake_no(conn: &Connection, business_date: &str) -> AppResult<String> {
-    let date_part = business_date.replace('-', "");
+    let date_part = business_date
+        .chars()
+        .take(10)
+        .collect::<String>()
+        .replace('-', "");
     let like = format!("ST-{date_part}-%");
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM stock_documents WHERE document_no LIKE ?1",
@@ -594,10 +554,6 @@ fn blank_to_none(value: Option<String>) -> Option<String> {
 
 fn round_money(value: f64) -> f64 {
     (value * 100.0).round() / 100.0
-}
-
-fn round_price(value: f64) -> f64 {
-    (value * 10000.0).round() / 10000.0
 }
 
 fn new_id() -> String {

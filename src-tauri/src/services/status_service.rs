@@ -79,7 +79,20 @@ fn stable_client_device_id(conn: &rusqlite::Connection) -> AppResult<String> {
 pub fn get_system_settings(state: &AppState) -> AppResult<SystemSettings> {
     crate::services::user_service::require_admin(state)?;
     if get_runtime_config(state)?.mode == RuntimeMode::Client {
-        return crate::services::host_service::remote_get_system_settings(state);
+        let remote_settings = crate::services::host_service::remote_get_system_settings(state).ok();
+        return state.db.with_conn(|conn| {
+            let settings = match remote_settings {
+                Some(settings) => settings,
+                None => system_settings_from_conn(
+                    conn,
+                    Some((
+                        state.paths.export_dir.display().to_string(),
+                        state.paths.backup_dir.display().to_string(),
+                    )),
+                )?,
+            };
+            with_local_directory_settings(conn, state, settings)
+        });
     }
     state.db.with_conn(|conn| {
         system_settings_from_conn(
@@ -143,7 +156,11 @@ pub fn save_system_settings(
     state: &AppState,
     request: SaveSystemSettingsRequest,
 ) -> AppResult<SystemSettings> {
-    crate::services::safety_service::require_dangerous_local_operation(state, "保存系统设置")?;
+    crate::services::user_service::require_admin(state)?;
+    if get_runtime_config(state)?.mode == RuntimeMode::Client {
+        return save_client_local_directory_settings(state, request);
+    }
+    crate::services::safety_service::require_local_primary_database(state, "保存系统设置")?;
     validate_settings(&request)?;
     fs::create_dir_all(request.default_export_dir.trim())?;
     fs::create_dir_all(request.default_backup_dir.trim())?;
@@ -216,6 +233,45 @@ pub fn save_system_settings(
                     request.hotel_name.trim(),
                     request.current_period.trim(),
                     request.allow_negative_stock
+                ),
+                crate::services::user_service::current_operator(state)
+            ],
+        )?;
+        Ok(())
+    })?;
+    get_system_settings(state)
+}
+
+fn save_client_local_directory_settings(
+    state: &AppState,
+    request: SaveSystemSettingsRequest,
+) -> AppResult<SystemSettings> {
+    validate_local_directory_settings(&request)?;
+    fs::create_dir_all(request.default_export_dir.trim())?;
+    fs::create_dir_all(request.default_backup_dir.trim())?;
+    ensure_writable_dir(Path::new(request.default_export_dir.trim()), "默认导出目录")?;
+    ensure_writable_dir(Path::new(request.default_backup_dir.trim()), "默认备份目录")?;
+
+    state.db.with_conn(|conn| {
+        repository::set_setting(
+            conn,
+            "default_export_dir",
+            request.default_export_dir.trim(),
+        )?;
+        repository::set_setting(
+            conn,
+            "default_backup_dir",
+            request.default_backup_dir.trim(),
+        )?;
+        conn.execute(
+            "INSERT INTO audit_logs (id, action, entity_type, entity_id, summary, operator)
+             VALUES (?1, 'save_local_directory_settings', 'setting', 'local_directories', ?2, ?3)",
+            rusqlite::params![
+                uuid::Uuid::new_v4().to_string(),
+                format!(
+                    "保存本机目录设置：导出目录={}，备份目录={}",
+                    request.default_export_dir.trim(),
+                    request.default_backup_dir.trim()
                 ),
                 crate::services::user_service::current_operator(state)
             ],
@@ -454,6 +510,16 @@ fn validate_settings(request: &SaveSystemSettingsRequest) -> AppResult<()> {
     Ok(())
 }
 
+fn validate_local_directory_settings(request: &SaveSystemSettingsRequest) -> AppResult<()> {
+    if request.default_export_dir.trim().is_empty() {
+        return Err(AppError::Validation("默认导出目录不能为空".to_string()));
+    }
+    if request.default_backup_dir.trim().is_empty() {
+        return Err(AppError::Validation("默认备份目录不能为空".to_string()));
+    }
+    Ok(())
+}
+
 fn validate_email_field(label: &str, value: &str) -> AppResult<()> {
     let trimmed = value.trim();
     if trimmed.contains('@') && trimmed.split('@').all(|part| !part.is_empty()) {
@@ -531,6 +597,16 @@ fn effective_backup_dir_from_conn(conn: &rusqlite::Connection, state: &AppState)
         .flatten()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| state.paths.backup_dir.display().to_string())
+}
+
+fn with_local_directory_settings(
+    conn: &rusqlite::Connection,
+    state: &AppState,
+    mut settings: SystemSettings,
+) -> AppResult<SystemSettings> {
+    settings.default_export_dir = effective_export_dir_from_conn(conn, state);
+    settings.default_backup_dir = effective_backup_dir_from_conn(conn, state);
+    Ok(settings)
 }
 
 #[cfg(test)]
@@ -644,15 +720,17 @@ mod tests {
     }
 
     #[test]
-    fn save_system_settings_rejects_client_mode_even_for_admin() {
+    fn save_system_settings_in_client_mode_only_persists_local_directories() {
         let state = test_state();
         set_admin_user(&state);
+        let export_dir = state.paths.data_dir.join("client-exports");
+        let backup_dir = state.paths.data_dir.join("client-backups");
         state
             .db
             .with_conn(|conn| repository::set_setting(conn, "runtime_mode", "client"))
             .unwrap();
 
-        let error = save_system_settings(
+        let settings = save_system_settings(
             &state,
             SaveSystemSettingsRequest {
                 hotel_name: "客户端酒店".to_string(),
@@ -661,8 +739,8 @@ mod tests {
                 allow_negative_stock: false,
                 quantity_decimals: 2,
                 amount_decimals: 2,
-                default_export_dir: state.paths.export_dir.display().to_string(),
-                default_backup_dir: state.paths.backup_dir.display().to_string(),
+                default_export_dir: export_dir.display().to_string(),
+                default_backup_dir: backup_dir.display().to_string(),
                 auto_backup_enabled: true,
                 interval_backup_enabled: true,
                 interval_backup_hours: 6,
@@ -675,9 +753,31 @@ mod tests {
                 smtp_from_name: "Aster".to_string(),
             },
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(error.to_string().contains("客户端模式不能操作正式数据库"));
+        assert_eq!(settings.hotel_name, "Aster Hotel");
+        assert_eq!(
+            settings.default_export_dir,
+            export_dir.display().to_string()
+        );
+        assert_eq!(
+            settings.default_backup_dir,
+            backup_dir.display().to_string()
+        );
+        state
+            .db
+            .with_conn(|conn| {
+                let hotel_name = repository::get_setting(conn, "hotel_name")?;
+                let audit_count: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM audit_logs WHERE action = 'save_local_directory_settings'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                assert_ne!(hotel_name.as_deref(), Some("客户端酒店"));
+                assert_eq!(audit_count, 1);
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[test]

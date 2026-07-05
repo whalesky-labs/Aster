@@ -2,15 +2,15 @@ use rusqlite::{params, Connection};
 
 use crate::domain::reports::{
     CategoryConsumptionRow, DepartmentIssueDetailRow, DepartmentIssueSummaryRow, InboundDetailRow,
-    ItemConsumptionRow, MonthlyInventoryRow, ReportBundle, ReportQuery, StockBalanceReportRow,
-    StockWarningRow, StocktakeDifferenceReportRow,
+    ItemConsumptionRow, MonthlyInventoryRow, ReportBundle, ReportQuery, SalesProfitRow,
+    StockBalanceReportRow, StockWarningRow, StocktakeDifferenceReportRow,
 };
 use crate::error::AppResult;
 
 struct ReportFilters<'a> {
     month: &'a str,
-    start_date: Option<&'a str>,
-    end_date: Option<&'a str>,
+    start_date: Option<String>,
+    end_date: Option<String>,
     department_id: Option<&'a str>,
     category_id: Option<&'a str>,
     item_id: Option<&'a str>,
@@ -21,13 +21,29 @@ impl<'a> From<&'a ReportQuery> for ReportFilters<'a> {
     fn from(query: &'a ReportQuery) -> Self {
         Self {
             month: &query.month,
-            start_date: query.start_date.as_deref(),
-            end_date: query.end_date.as_deref(),
+            start_date: query.start_date.as_deref().map(start_datetime_bound),
+            end_date: query.end_date.as_deref().map(end_datetime_bound),
             department_id: query.department_id.as_deref(),
             category_id: query.category_id.as_deref(),
             item_id: query.item_id.as_deref(),
             supplier_id: query.supplier_id.as_deref(),
         }
+    }
+}
+
+fn start_datetime_bound(value: &str) -> String {
+    if value.len() == 10 {
+        format!("{value} 00:00:00")
+    } else {
+        value.to_string()
+    }
+}
+
+fn end_datetime_bound(value: &str) -> String {
+    if value.len() == 10 {
+        format!("{value} 23:59:59")
+    } else {
+        value.to_string()
     }
 }
 
@@ -42,6 +58,7 @@ pub fn get_report_bundle(conn: &Connection, query: &ReportQuery) -> AppResult<Re
         item_consumption_ranking: item_consumption_ranking(conn, &filters)?,
         inbound_details: inbound_details(conn, &filters)?,
         outbound_details: department_details(conn, &filters)?,
+        sales_profit: sales_profit(conn, &filters)?,
         stock_balances: stock_balances(conn, &filters)?,
         stock_warnings: stock_warnings(conn, &filters)?,
         stocktake_differences: stocktake_differences(conn, &filters)?,
@@ -77,8 +94,8 @@ fn monthly_inventory(
     let rows = stmt.query_map(
         params![
             filters.month,
-            filters.start_date,
-            filters.end_date,
+            filters.start_date.as_deref(),
+            filters.end_date.as_deref(),
             filters.category_id,
             filters.item_id,
             filters.supplier_id
@@ -127,8 +144,8 @@ fn department_summary(
     let rows = stmt.query_map(
         params![
             filters.month,
-            filters.start_date,
-            filters.end_date,
+            filters.start_date.as_deref(),
+            filters.end_date.as_deref(),
             filters.department_id,
             filters.category_id,
             filters.item_id
@@ -155,14 +172,27 @@ fn department_details(
                   WHEN doc.outbound_kind = 'guest_sale' THEN '酒店客人'
                   ELSE COALESCE(m.department_name, d.name)
                 END,
-                i.code, i.name, i.spec, u.name,
-                m.quantity, m.unit_price, m.amount, doc.document_no,
+                doc.outbound_kind, i.code, i.name, i.spec, u.name,
+                m.quantity, m.unit_price, m.amount,
+                l.sale_unit_price, l.sale_amount,
+                COALESCE(l.cost_unit_price, m.unit_price),
+                COALESCE(l.cost_amount, m.amount),
+                CASE
+                  WHEN l.sale_amount IS NULL THEN NULL
+                  ELSE COALESCE(l.sale_amount, 0) - COALESCE(l.cost_amount, m.amount, 0)
+                END,
+                CASE
+                  WHEN COALESCE(l.sale_amount, 0) <= 0 THEN NULL
+                  ELSE (COALESCE(l.sale_amount, 0) - COALESCE(l.cost_amount, m.amount, 0)) / l.sale_amount
+                END,
+                doc.document_no,
                 doc.purpose, m.remark
          FROM stock_movements m
          JOIN master_items i ON i.id = m.item_id
          LEFT JOIN units u ON u.id = i.unit_id
          LEFT JOIN departments d ON d.id = m.department_id
          LEFT JOIN stock_documents doc ON doc.id = m.document_id
+         LEFT JOIN stock_document_lines l ON l.id = m.document_line_id
          WHERE m.direction = 'out'
            AND strftime('%Y-%m', m.movement_date) = ?1
            AND (?2 IS NULL OR m.movement_date >= ?2)
@@ -175,8 +205,8 @@ fn department_details(
     let rows = stmt.query_map(
         params![
             filters.month,
-            filters.start_date,
-            filters.end_date,
+            filters.start_date.as_deref(),
+            filters.end_date.as_deref(),
             filters.department_id,
             filters.category_id,
             filters.item_id
@@ -187,16 +217,87 @@ fn department_details(
                 department_name: row
                     .get::<_, Option<String>>(1)?
                     .unwrap_or_else(|| "未指定".to_string()),
-                item_code: row.get(2)?,
-                item_name: row.get(3)?,
-                spec: row.get(4)?,
-                unit_name: row.get(5)?,
-                quantity: row.get(6)?,
-                unit_price: row.get(7)?,
-                amount: row.get(8)?,
-                document_no: row.get(9)?,
-                purpose: row.get(10)?,
-                remark: row.get(11)?,
+                outbound_kind: row.get(2)?,
+                item_code: row.get(3)?,
+                item_name: row.get(4)?,
+                spec: row.get(5)?,
+                unit_name: row.get(6)?,
+                quantity: row.get(7)?,
+                unit_price: row.get(8)?,
+                amount: row.get(9)?,
+                sale_unit_price: row.get(10)?,
+                sale_amount: row.get(11)?,
+                cost_unit_price: row.get(12)?,
+                cost_amount: row.get(13)?,
+                gross_profit: row.get(14)?,
+                gross_margin: row.get(15)?,
+                document_no: row.get(16)?,
+                purpose: row.get(17)?,
+                remark: row.get(18)?,
+            })
+        },
+    )?;
+    collect_rows(rows)
+}
+
+fn sales_profit(conn: &Connection, filters: &ReportFilters<'_>) -> AppResult<Vec<SalesProfitRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT d.business_date, i.code, i.name, i.spec, u.name,
+                l.quantity,
+                COALESCE(l.sale_unit_price, l.unit_price, 0),
+                COALESCE(l.sale_amount, l.amount, 0),
+                COALESCE(l.cost_unit_price, 0),
+                COALESCE(l.cost_amount, 0),
+                COALESCE(l.sale_amount, l.amount, 0) - COALESCE(l.cost_amount, 0),
+                CASE
+                  WHEN COALESCE(l.sale_amount, l.amount, 0) <= 0 THEN NULL
+                  ELSE (COALESCE(l.sale_amount, l.amount, 0) - COALESCE(l.cost_amount, 0))
+                       / COALESCE(l.sale_amount, l.amount, 0)
+                END,
+                d.document_no, d.purpose, l.remark
+         FROM stock_document_lines l
+         JOIN stock_documents d ON d.id = l.document_id
+         JOIN master_items i ON i.id = l.item_id
+         LEFT JOIN units u ON u.id = i.unit_id
+         WHERE d.document_type = 'outbound'
+           AND d.outbound_kind = 'guest_sale'
+           AND d.status = 'confirmed'
+           AND strftime('%Y-%m', d.business_date) = ?1
+           AND (?2 IS NULL OR d.business_date >= ?2)
+           AND (?3 IS NULL OR d.business_date <= ?3)
+           AND (?4 IS NULL OR i.category_id = ?4)
+           AND (?5 IS NULL OR i.id = ?5)
+         ORDER BY d.business_date ASC, d.document_no ASC, i.code ASC",
+    )?;
+    let rows = stmt.query_map(
+        params![
+            filters.month,
+            filters.start_date.as_deref(),
+            filters.end_date.as_deref(),
+            filters.category_id,
+            filters.item_id
+        ],
+        |row| {
+            let sale_amount: f64 = row.get(7)?;
+            let cost_amount: f64 = row.get(9)?;
+            let gross_profit: f64 = row.get(10)?;
+            Ok(SalesProfitRow {
+                movement_date: row.get(0)?,
+                item_code: row.get(1)?,
+                item_name: row.get(2)?,
+                spec: row.get(3)?,
+                unit_name: row.get(4)?,
+                quantity: row.get(5)?,
+                sale_unit_price: row.get(6)?,
+                sale_amount,
+                cost_unit_price: row.get(8)?,
+                cost_amount,
+                gross_profit,
+                gross_margin: row.get(11)?,
+                negative_profit: gross_profit < 0.0,
+                document_no: row.get(12)?,
+                purpose: row.get(13)?,
+                remark: row.get(14)?,
             })
         },
     )?;
@@ -227,8 +328,8 @@ fn category_consumption(
     let rows = stmt.query_map(
         params![
             filters.month,
-            filters.start_date,
-            filters.end_date,
+            filters.start_date.as_deref(),
+            filters.end_date.as_deref(),
             filters.department_id,
             filters.category_id,
             filters.item_id
@@ -269,8 +370,8 @@ fn item_consumption_ranking(
     let rows = stmt.query_map(
         params![
             filters.month,
-            filters.start_date,
-            filters.end_date,
+            filters.start_date.as_deref(),
+            filters.end_date.as_deref(),
             filters.department_id,
             filters.category_id,
             filters.item_id
@@ -314,8 +415,8 @@ fn inbound_details(
     let rows = stmt.query_map(
         params![
             filters.month,
-            filters.start_date,
-            filters.end_date,
+            filters.start_date.as_deref(),
+            filters.end_date.as_deref(),
             filters.category_id,
             filters.item_id,
             filters.supplier_id
@@ -463,8 +564,8 @@ fn stocktake_differences(
     let rows = stmt.query_map(
         params![
             filters.month,
-            filters.start_date,
-            filters.end_date,
+            filters.start_date.as_deref(),
+            filters.end_date.as_deref(),
             filters.category_id,
             filters.item_id
         ],
@@ -948,5 +1049,59 @@ mod tests {
             date_bundle.stocktake_differences[0].document_no,
             "ST-20260630-0001"
         );
+    }
+
+    #[test]
+    fn get_report_bundle_includes_guest_sale_profit_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrations::run(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO master_items (id, code, name, unit_id, default_price, sale_price, enabled)
+             VALUES ('item-sale-report', 'SALE-RPT', '销售报表物品', 'unit-piece', 12, 8, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO stock_documents (
+               id, document_no, document_type, outbound_kind, business_date, status
+             )
+             VALUES (
+               'doc-sale-report', 'OUT-20260610-0001', 'outbound', 'guest_sale', '2026-06-10', 'confirmed'
+             )",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO stock_document_lines (
+               id, document_id, item_id, quantity, unit_price, amount,
+               sale_unit_price, sale_amount, cost_unit_price, cost_amount
+             )
+             VALUES (
+               'line-sale-report', 'doc-sale-report', 'item-sale-report', 2, 8, 16,
+               8, 16, 12, 24
+             )",
+            [],
+        )
+        .unwrap();
+
+        let bundle = get_report_bundle(
+            &conn,
+            &ReportQuery {
+                month: "2026-06".to_string(),
+                start_date: None,
+                end_date: None,
+                department_id: None,
+                category_id: None,
+                item_id: None,
+                supplier_id: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(bundle.sales_profit.len(), 1);
+        assert_eq!(bundle.sales_profit[0].sale_amount, 16.0);
+        assert_eq!(bundle.sales_profit[0].cost_amount, 24.0);
+        assert_eq!(bundle.sales_profit[0].gross_profit, -8.0);
+        assert!(bundle.sales_profit[0].negative_profit);
     }
 }

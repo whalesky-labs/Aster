@@ -11,9 +11,13 @@ use crate::error::{AppError, AppResult};
 
 pub fn create_stocktake(
     state: &AppState,
-    request: CreateStocktakeRequest,
+    mut request: CreateStocktakeRequest,
 ) -> AppResult<StocktakeDetail> {
     crate::services::user_service::require_permission(state, "write_stock")?;
+    crate::services::stock_service::normalize_business_datetime(
+        &mut request.business_date,
+        "盘点日期",
+    )?;
     validate_create_request(&request)?;
     if runtime_mode(state)? == RuntimeMode::Client {
         return crate::services::host_service::remote_create_stocktake(state, request);
@@ -92,9 +96,7 @@ pub fn export_stocktake_sheet(
 }
 
 pub(crate) fn validate_create_request(request: &CreateStocktakeRequest) -> AppResult<()> {
-    if request.business_date.trim().is_empty() {
-        return Err(AppError::Validation("盘点日期不能为空".to_string()));
-    }
+    crate::services::stock_service::validate_business_datetime(&request.business_date, "盘点日期")?;
     match request.scope_type.as_str() {
         "all" => Ok(()),
         "category" => {
@@ -319,5 +321,22 @@ mod tests {
 
         assert!(std::path::Path::new(&result.path).starts_with(&custom_export_dir));
         assert!(std::path::Path::new(&result.path).exists());
+    }
+
+    #[test]
+    fn validate_create_request_requires_real_business_datetime_not_future() {
+        let request = CreateStocktakeRequest {
+            business_date: (chrono::Local::now().naive_local() + chrono::Duration::minutes(1))
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string(),
+            scope_type: "all".to_string(),
+            category_id: None,
+            item_ids: vec![],
+            handler: Some("tester".to_string()),
+            remark: None,
+        };
+
+        let error = validate_create_request(&request).unwrap_err();
+        assert!(error.to_string().contains("盘点日期不能晚于当前时间"));
     }
 }

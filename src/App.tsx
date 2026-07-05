@@ -270,6 +270,7 @@ type Item = {
   unitId?: string | null;
   unitName?: string | null;
   defaultPrice: number;
+  salePrice: number;
   supplierId?: string | null;
   supplierName?: string | null;
   warningQuantity: number;
@@ -292,6 +293,10 @@ type StockDocument = {
   status: string;
   totalQuantity: number;
   totalAmount: number;
+  totalPurchaseAmount: number;
+  totalSaleAmount: number;
+  totalCostAmount: number;
+  totalGrossProfit: number;
   itemSummary?: string | null;
   createdAt: string;
 };
@@ -299,6 +304,7 @@ type StockDocument = {
 type StockDocumentDetail = {
   document: StockDocument;
   lines: StockDocumentLine[];
+  batchLines: StockDocumentBatchLine[];
 };
 
 type StockDocumentLine = {
@@ -311,7 +317,31 @@ type StockDocumentLine = {
   quantity: number;
   unitPrice: number;
   amount: number;
+  purchaseUnitPrice?: number | null;
+  purchaseAmount?: number | null;
+  saleUnitPrice?: number | null;
+  saleAmount?: number | null;
+  costUnitPrice?: number | null;
+  costAmount?: number | null;
+  grossProfit?: number | null;
   remark?: string | null;
+};
+
+type StockDocumentBatchLine = {
+  id: string;
+  itemId: string;
+  itemCode: string;
+  itemName: string;
+  batchId: string;
+  batchNo: string;
+  inboundDate: string;
+  supplierName?: string | null;
+  direction: "in" | "out";
+  quantity: number;
+  unitPrice: number;
+  amount: number;
+  movementType: string;
+  createdAt: string;
 };
 
 type StockDocumentQuery = {
@@ -351,6 +381,25 @@ type StockBalanceRow = {
   lastInboundPrice: number;
   warningQuantity: number;
   stockStatus: "normal" | "low" | "negative";
+};
+
+type StockBatchRow = {
+  id: string;
+  itemId: string;
+  itemCode: string;
+  itemName: string;
+  batchNo: string;
+  inboundDate: string;
+  supplierName?: string | null;
+  originalQuantity: number;
+  remainingQuantity: number;
+  unitPrice: number;
+  originalAmount: number;
+  remainingAmount: number;
+  status: string;
+  sourceDocumentNo?: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 type StockMovementRow = {
@@ -434,6 +483,7 @@ type DepartmentIssueSummaryRow = {
 type DepartmentIssueDetailRow = {
   movementDate: string;
   departmentName: string;
+  outboundKind?: "internal" | "guest_sale" | null;
   itemCode: string;
   itemName: string;
   spec?: string | null;
@@ -441,6 +491,31 @@ type DepartmentIssueDetailRow = {
   quantity: number;
   unitPrice: number;
   amount: number;
+  saleUnitPrice?: number | null;
+  saleAmount?: number | null;
+  costUnitPrice: number;
+  costAmount: number;
+  grossProfit?: number | null;
+  grossMargin?: number | null;
+  documentNo?: string | null;
+  purpose?: string | null;
+  remark?: string | null;
+};
+
+type SalesProfitRow = {
+  movementDate: string;
+  itemCode: string;
+  itemName: string;
+  spec?: string | null;
+  unitName?: string | null;
+  quantity: number;
+  saleUnitPrice: number;
+  saleAmount: number;
+  costUnitPrice: number;
+  costAmount: number;
+  grossProfit: number;
+  grossMargin?: number | null;
+  negativeProfit: boolean;
   documentNo?: string | null;
   purpose?: string | null;
   remark?: string | null;
@@ -529,6 +604,7 @@ type ReportBundle = {
   itemConsumptionRanking: ItemConsumptionRow[];
   inboundDetails: InboundDetailRow[];
   outboundDetails: DepartmentIssueDetailRow[];
+  salesProfit: SalesProfitRow[];
   stockBalances: StockBalanceReportRow[];
   stockWarnings: StockWarningRow[];
   stocktakeDifferences: StocktakeDifferenceReportRow[];
@@ -683,6 +759,12 @@ type StockDocumentLineDraft = {
   quantity: number;
   unitPrice: number;
   amount?: number | null;
+  purchaseUnitPrice?: number | null;
+  purchaseAmount?: number | null;
+  saleUnitPrice?: number | null;
+  saleAmount?: number | null;
+  costUnitPrice?: number | null;
+  costAmount?: number | null;
   remark: string;
 };
 
@@ -808,8 +890,10 @@ type EditorKind =
   | "restoreBackup"
   | "stockDocument"
   | "stockDocumentDetail"
+  | "stockBatchDetail"
   | "adjustment"
   | "stocktakeCreate"
+  | "stocktakeDetail"
   | "stocktakeCounts";
 
 type EditorMode = "create" | "edit";
@@ -1215,14 +1299,17 @@ const emptyItem = {
   spec: "",
   unitId: "",
   defaultPrice: 0,
+  salePrice: 0,
   supplierId: "",
   warningQuantity: 0,
   enabled: true,
   remark: "",
 };
 
-function todayString() {
-  return new Date().toISOString().slice(0, 10);
+function currentDateTimeString() {
+  const now = new Date();
+  const offsetMs = now.getTimezoneOffset() * 60 * 1000;
+  return new Date(now.getTime() - offsetMs).toISOString().slice(0, 19);
 }
 
 function currentMonthString() {
@@ -1231,6 +1318,22 @@ function currentMonthString() {
 
 function formatMoney(value: number) {
   return defaultI18n.formatMoney(value);
+}
+
+function formatDateTime(value?: string | null) {
+  const rawValue = String(value ?? "").trim();
+  if (!rawValue) return "-";
+  const normalized = rawValue.replace("T", " ").replace(/Z$/, "");
+  const [datePart, timePart] = normalized.split(/\s+/, 2);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+    return rawValue;
+  }
+  if (!timePart) {
+    return datePart;
+  }
+  const cleanTime = timePart.split(/[.+-]/)[0];
+  const [hour = "00", minute = "00", second = "00"] = cleanTime.split(":");
+  return `${datePart} ${hour.padStart(2, "0")}:${minute.padStart(2, "0")}:${second.padStart(2, "0")}`;
 }
 
 function accentColorLabel(color: string, i18n = defaultI18n) {
@@ -1370,6 +1473,34 @@ function effectiveLineAmount(line: {
   return line.amount && line.amount > 0
     ? line.amount
     : line.quantity * line.unitPrice;
+}
+
+function effectiveDraftAmount(
+  line: StockDocumentLineDraft,
+  documentType: "inbound" | "outbound",
+  outboundKind?: "internal" | "guest_sale",
+) {
+  if (documentType === "inbound") {
+    const unitPrice = line.purchaseUnitPrice ?? line.unitPrice;
+    return line.purchaseAmount && line.purchaseAmount > 0
+      ? line.purchaseAmount
+      : line.amount && line.amount > 0
+        ? line.amount
+        : line.quantity * unitPrice;
+  }
+  if (outboundKind === "guest_sale") {
+    const unitPrice = line.saleUnitPrice ?? line.unitPrice;
+    return line.saleAmount && line.saleAmount > 0
+      ? line.saleAmount
+      : line.amount && line.amount > 0
+        ? line.amount
+        : line.quantity * unitPrice;
+  }
+  return line.costAmount && line.costAmount > 0
+    ? line.costAmount
+    : line.amount && line.amount > 0
+      ? line.amount
+      : 0;
 }
 
 function normalizeSearchText(value?: string | number | null) {
@@ -1550,11 +1681,23 @@ function editorTitle(
   if (editor === "stockDocumentDetail") {
     return documentType === "outbound" ? "出库/领用单详情" : "入库单详情";
   }
+  if (editor === "stockBatchDetail") {
+    return "批次库存";
+  }
+  if (editor === "stocktakeDetail") {
+    return "盘点详情";
+  }
   if (editor === "stockDocument") {
     return documentType === "outbound" ? "新建出库/领用单" : "新建入库单";
   }
   const labels: Record<
-    Exclude<EditorKind, "stockDocument" | "stockDocumentDetail">,
+    Exclude<
+      EditorKind,
+      | "stockDocument"
+      | "stockDocumentDetail"
+      | "stockBatchDetail"
+      | "stocktakeDetail"
+    >,
     string
   > = {
     adjustment: "库存调整",
@@ -1617,7 +1760,11 @@ function editorWindowSize(editor: EditorKind) {
   if (editor === "item" || editor === "user" || editor === "businessSettings") {
     return { width: 760, height: 560, minWidth: 640, minHeight: 420 };
   }
-  if (editor === "stockDocumentDetail") {
+  if (
+    editor === "stockDocumentDetail" ||
+    editor === "stockBatchDetail" ||
+    editor === "stocktakeDetail"
+  ) {
     return { width: 980, height: 680, minWidth: 760, minHeight: 520 };
   }
   if (editor === "clientConnection" || editor === "restoreBackup") {
@@ -1817,10 +1964,12 @@ function MainApp() {
   const [inboundDocumentQuery, setInboundDocumentQuery] =
     useState<StockDocumentQuery>({
       documentType: "inbound",
+      month: currentMonthString(),
     });
   const [outboundDocumentQuery, setOutboundDocumentQuery] =
     useState<StockDocumentQuery>({
       documentType: "outbound",
+      month: currentMonthString(),
     });
   const [stockBalances, setStockBalances] = useState<StockBalanceRow[]>([]);
   const [stockMovements, setStockMovements] = useState<StockMovementRow[]>([]);
@@ -1830,11 +1979,6 @@ function MainApp() {
   const [stockMovementQuery, setStockMovementQuery] =
     useState<StockMovementQuery>({});
   const [stocktakes, setStocktakes] = useState<StocktakeDocument[]>([]);
-  const [activeStocktake, setActiveStocktake] =
-    useState<StocktakeDetail | null>(null);
-  const [lastStocktakeExportPath, setLastStocktakeExportPath] = useState<
-    string | null
-  >(null);
   const [reportMonth, setReportMonth] = useState(currentMonthString());
   const [reportQuery, setReportQuery] = useState<ReportQuery>({
     month: currentMonthString(),
@@ -1877,15 +2021,19 @@ function MainApp() {
     setInboundDocuments([]);
     setOutboundDocuments([]);
     setAdjustmentDocuments([]);
-    setInboundDocumentQuery({ documentType: "inbound" });
-    setOutboundDocumentQuery({ documentType: "outbound" });
+    setInboundDocumentQuery({
+      documentType: "inbound",
+      month: currentMonthString(),
+    });
+    setOutboundDocumentQuery({
+      documentType: "outbound",
+      month: currentMonthString(),
+    });
     setStockBalances([]);
     setStockMovements([]);
     setStockBalanceQuery({});
     setStockMovementQuery({});
     setStocktakes([]);
-    setActiveStocktake(null);
-    setLastStocktakeExportPath(null);
     setReportQuery({ month: reportMonth });
     setReportBundle(null);
     setLastExportPath(null);
@@ -2384,62 +2532,6 @@ function MainApp() {
     }
   }
 
-  async function loadStocktakeDetail(stocktakeId: string) {
-    try {
-      setError(null);
-      const detail = await invoke<StocktakeDetail>("get_stocktake_detail", {
-        stocktakeId,
-      });
-      setActiveStocktake(detail);
-    } catch (err) {
-      setError(formatError(err));
-    }
-  }
-
-  async function confirmActiveStocktake(handler: string, remark: string) {
-    if (!activeStocktake) return;
-    await runAction("盘点单已确认，差异流水已生成", async () => {
-      const detail = await invoke<StocktakeDetail>("confirm_stocktake", {
-        request: {
-          stocktakeId: activeStocktake.document.id,
-          handler,
-          remark,
-        },
-      });
-      setActiveStocktake(detail);
-    });
-  }
-
-  async function voidActiveStocktake(reason: string, handler: string) {
-    if (!activeStocktake) return;
-    const stocktakeId = activeStocktake.document.id;
-    await runAction("盘点单已作废，冲正流水已生成", async () => {
-      await invoke("void_stock_document", {
-        request: {
-          documentId: activeStocktake.document.documentId,
-          reason,
-          handler,
-        },
-      });
-      const [nextStocktakes, detail] = await Promise.all([
-        invoke<StocktakeDocument[]>("list_stocktakes"),
-        invoke<StocktakeDetail>("get_stocktake_detail", { stocktakeId }),
-      ]);
-      setStocktakes(nextStocktakes);
-      setActiveStocktake(detail);
-    });
-  }
-
-  async function exportActiveStocktake() {
-    if (!activeStocktake) return;
-    await runAction("盘点表已导出", async () => {
-      const result = await invoke<{ path: string }>("export_stocktake_sheet", {
-        request: { stocktakeId: activeStocktake.document.id },
-      });
-      setLastStocktakeExportPath(result.path);
-    });
-  }
-
   async function loginUser(username: string, password: string) {
     try {
       setIsLoginPending(true);
@@ -2574,9 +2666,6 @@ function MainApp() {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     void listen<EditorSavedPayload>("editor:saved", (event) => {
-      if (event.payload.stocktakeId) {
-        void loadStocktakeDetail(event.payload.stocktakeId);
-      }
       if (event.payload.editor === "connectionWizard") {
         clearSessionScopedState();
         setHostTestResult(null);
@@ -3030,6 +3119,12 @@ function MainApp() {
                 setError(formatError(err));
               }
             }}
+            onViewBatches={(itemId) =>
+              openEditorWindow("stockBatchDetail", {
+                id: itemId,
+                mode: "edit",
+              })
+            }
             query={stockBalanceQuery}
           />
         ) : null}
@@ -3052,14 +3147,7 @@ function MainApp() {
 
         {activeNav === "stocktake" ? (
           <StocktakePage
-            canViewReports={canViewReports}
             canWrite={canWriteStock}
-            detail={activeStocktake}
-            exportPath={lastStocktakeExportPath}
-            onConfirm={confirmActiveStocktake}
-            onExport={exportActiveStocktake}
-            onSelect={loadStocktakeDetail}
-            onVoid={voidActiveStocktake}
             stocktakes={stocktakes}
           />
         ) : null}
@@ -3523,6 +3611,7 @@ function EditorWindowApp({
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [stockBalances, setStockBalances] = useState<StockBalanceRow[]>([]);
+  const [stockBatches, setStockBatches] = useState<StockBatchRow[]>([]);
   const [stockDocumentDetail, setStockDocumentDetail] =
     useState<StockDocumentDetail | null>(null);
   const [users, setUsers] = useState<UserAccount[]>([]);
@@ -3609,6 +3698,20 @@ function EditorWindowApp({
         setStockDocumentDetail(
           await invoke<StockDocumentDetail>("get_stock_document_detail", {
             documentId: id,
+          }),
+        );
+      }
+      if (editor === "stockBatchDetail" && id) {
+        setStockBatches(
+          await invoke<StockBatchRow[]>("list_stock_batches", {
+            itemId: id,
+          }),
+        );
+      }
+      if (editor === "stocktakeDetail" && id) {
+        setStocktakeDetail(
+          await invoke<StocktakeDetail>("get_stocktake_detail", {
+            stocktakeId: id,
           }),
         );
       }
@@ -3820,6 +3923,7 @@ function EditorWindowApp({
     content = (
       <BusinessSettingsEditor
         disabled={isSaving || isLoading || !systemSettings}
+        localDirectoriesOnly={status?.runtime.mode === "client"}
         settings={systemSettings}
         onSave={(request) =>
           runSettingsEditorAction("系统设置已保存", () =>
@@ -4013,6 +4117,54 @@ function EditorWindowApp({
         isLoading={isLoading}
       />
     );
+  } else if (editor === "stockBatchDetail") {
+    content = (
+      <StockBatchDetailViewer batches={stockBatches} isLoading={isLoading} />
+    );
+  } else if (editor === "stocktakeDetail") {
+    content = (
+      <StocktakeDetailViewer
+        detail={stocktakeDetail}
+        disabled={isSaving || isLoading}
+        isLoading={isLoading}
+        onConfirm={(stocktakeId, handler, remark) =>
+          runEditorAction(
+            { editor, message: "盘点单已确认，差异流水已生成", stocktakeId },
+            () =>
+              invoke("confirm_stocktake", {
+                request: { stocktakeId, handler, remark },
+              }),
+          )
+        }
+        onExport={async (stocktakeId) => {
+          try {
+            setIsSaving(true);
+            setError(null);
+            setNotice(null);
+            const result = await invoke<{ path: string }>(
+              "export_stocktake_sheet",
+              {
+                request: { stocktakeId },
+              },
+            );
+            setNotice(`盘点表已导出：${result.path}`);
+          } catch (err) {
+            setError(formatError(err));
+          } finally {
+            setIsSaving(false);
+          }
+        }}
+        onVoid={(documentId, stocktakeId, reason, handler) =>
+          runEditorAction(
+            { editor, message: "盘点单已作废，冲正流水已生成", stocktakeId },
+            () =>
+              invoke("void_stock_document", {
+                request: { documentId, reason, handler },
+              }),
+          )
+        }
+      />
+    );
   } else if (editor === "adjustment") {
     content = (
       <AdjustmentEditor
@@ -4117,6 +4269,7 @@ function ItemEditor({
         spec: item.spec ?? "",
         unitId: item.unitId ?? "",
         defaultPrice: item.defaultPrice,
+        salePrice: item.salePrice,
         supplierId: item.supplierId ?? "",
         warningQuantity: item.warningQuantity,
         enabled: item.enabled,
@@ -4179,13 +4332,23 @@ function ItemEditor({
           ))}
         </select>
       </Field>
-      <Field label="默认单价">
+      <Field label="参考进价">
         <input
           min="0"
           type="number"
           value={draft.defaultPrice}
           onChange={(e) =>
             setDraft({ ...draft, defaultPrice: Number(e.target.value) })
+          }
+        />
+      </Field>
+      <Field label="参考售价">
+        <input
+          min="0"
+          type="number"
+          value={draft.salePrice}
+          onChange={(e) =>
+            setDraft({ ...draft, salePrice: Number(e.target.value) })
           }
         />
       </Field>
@@ -4824,10 +4987,12 @@ function ChangePasswordEditor({
 
 function BusinessSettingsEditor({
   disabled,
+  localDirectoriesOnly = false,
   onSave,
   settings,
 }: {
   disabled: boolean;
+  localDirectoriesOnly?: boolean;
   onSave: (request: SystemSettings) => Promise<void>;
   settings: SystemSettings | null;
 }) {
@@ -4874,25 +5039,33 @@ function BusinessSettingsEditor({
 
   return (
     <EditorForm
-      disabled={disabled || !draft.hotelName.trim()}
-      saveLabel="保存系统设置"
+      disabled={disabled || (!localDirectoriesOnly && !draft.hotelName.trim())}
+      saveLabel={localDirectoriesOnly ? "保存本机目录" : "保存系统设置"}
       onSave={() => onSave(draft)}
     >
+      {localDirectoriesOnly ? (
+        <div className="notice-banner">
+          客户端模式下业务参数由主机统一控制，这里只保存当前电脑的导出和备份目录。
+        </div>
+      ) : null}
       <Field label="酒店名称">
         <input
           autoFocus
+          disabled={localDirectoriesOnly}
           value={draft.hotelName}
           onChange={(event) => setDraft({ ...draft, hotelName: event.target.value })}
         />
       </Field>
       <Field label="当前账期">
         <MonthSelect
+          disabled={localDirectoriesOnly}
           value={draft.currentPeriod}
           onChange={(currentPeriod) => setDraft({ ...draft, currentPeriod })}
         />
       </Field>
       <Field label="默认月份">
         <MonthSelect
+          disabled={localDirectoriesOnly}
           value={draft.defaultMonth}
           onChange={(defaultMonth) => setDraft({ ...draft, defaultMonth })}
         />
@@ -4901,6 +5074,7 @@ function BusinessSettingsEditor({
         <input
           max="6"
           min="0"
+          disabled={localDirectoriesOnly}
           type="number"
           value={draft.quantityDecimals}
           onChange={(event) =>
@@ -4912,6 +5086,7 @@ function BusinessSettingsEditor({
         <input
           max="6"
           min="0"
+          disabled={localDirectoriesOnly}
           type="number"
           value={draft.amountDecimals}
           onChange={(event) =>
@@ -4923,6 +5098,7 @@ function BusinessSettingsEditor({
         <input
           max="168"
           min="1"
+          disabled={localDirectoriesOnly}
           type="number"
           value={draft.intervalBackupHours}
           onChange={(event) =>
@@ -4949,6 +5125,7 @@ function BusinessSettingsEditor({
       <label className="checkbox-field">
         <input
           checked={draft.allowNegativeStock}
+          disabled={localDirectoriesOnly}
           onChange={(event) =>
             setDraft({ ...draft, allowNegativeStock: event.target.checked })
           }
@@ -4959,6 +5136,7 @@ function BusinessSettingsEditor({
       <label className="checkbox-field">
         <input
           checked={draft.autoBackupEnabled}
+          disabled={localDirectoriesOnly}
           onChange={(event) =>
             setDraft({ ...draft, autoBackupEnabled: event.target.checked })
           }
@@ -4969,6 +5147,7 @@ function BusinessSettingsEditor({
       <label className="checkbox-field">
         <input
           checked={draft.intervalBackupEnabled}
+          disabled={localDirectoriesOnly}
           onChange={(event) =>
             setDraft({ ...draft, intervalBackupEnabled: event.target.checked })
           }
@@ -4979,6 +5158,7 @@ function BusinessSettingsEditor({
       <label className="checkbox-field">
         <input
           checked={draft.smtpEnabled}
+          disabled={localDirectoriesOnly}
           onChange={(event) =>
             setDraft({ ...draft, smtpEnabled: event.target.checked })
           }
@@ -4988,6 +5168,7 @@ function BusinessSettingsEditor({
       </label>
       <Field label="SMTP 主机">
         <input
+          disabled={localDirectoriesOnly}
           placeholder="smtp.example.com"
           value={draft.smtpHost}
           onChange={(event) => setDraft({ ...draft, smtpHost: event.target.value })}
@@ -4997,6 +5178,7 @@ function BusinessSettingsEditor({
         <input
           max="65535"
           min="1"
+          disabled={localDirectoriesOnly}
           type="number"
           value={draft.smtpPort}
           onChange={(event) =>
@@ -5007,6 +5189,7 @@ function BusinessSettingsEditor({
       <Field label="SMTP 账号">
         <input
           autoComplete="username"
+          disabled={localDirectoriesOnly}
           value={draft.smtpUsername}
           onChange={(event) =>
             setDraft({ ...draft, smtpUsername: event.target.value })
@@ -5016,6 +5199,7 @@ function BusinessSettingsEditor({
       <Field label="SMTP 授权码">
         <input
           autoComplete="new-password"
+          disabled={localDirectoriesOnly}
           placeholder={draft.smtpPasswordConfigured ? "已配置，留空不修改" : ""}
           type="password"
           value={draft.smtpPassword ?? ""}
@@ -5027,6 +5211,7 @@ function BusinessSettingsEditor({
       <Field label="发件邮箱">
         <input
           autoComplete="email"
+          disabled={localDirectoriesOnly}
           value={draft.smtpFromEmail}
           onChange={(event) =>
             setDraft({ ...draft, smtpFromEmail: event.target.value })
@@ -5035,6 +5220,7 @@ function BusinessSettingsEditor({
       </Field>
       <Field label="发件名称">
         <input
+          disabled={localDirectoriesOnly}
           value={draft.smtpFromName}
           onChange={(event) =>
             setDraft({ ...draft, smtpFromName: event.target.value })
@@ -5785,7 +5971,7 @@ function RestoreBackupEditor({
       {preview ? (
         <div className="settings-result">
           <strong>{preview.message}</strong>
-          <span>创建时间：{preview.metadata.createdAt}</span>
+          <span>创建时间：{formatDateTime(preview.metadata.createdAt)}</span>
           <span>Schema：v{preview.metadata.schemaVersion}</span>
           <span>来源主机：{preview.metadata.sourceHostName ?? "-"}</span>
           <span>校验：{preview.metadata.databaseSha256}</span>
@@ -5821,13 +6007,19 @@ function StockDocumentEditor({
     quantity: 1,
     unitPrice: 0,
     amount: null,
+    purchaseUnitPrice: null,
+    purchaseAmount: null,
+    saleUnitPrice: null,
+    saleAmount: null,
+    costUnitPrice: null,
+    costAmount: null,
     remark: "",
   };
   const [draft, setDraft] = useState<StockDocumentDraft>({
     documentId: undefined,
     documentType,
     outboundKind: documentType === "outbound" ? "internal" : undefined,
-    businessDate: todayString(),
+    businessDate: currentDateTimeString(),
     departmentId: "",
     supplierId: "",
     handler: "",
@@ -5840,8 +6032,10 @@ function StockDocumentEditor({
   const isOutbound = documentType === "outbound";
   const isInternalOutbound =
     isOutbound && (draft.outboundKind ?? "internal") === "internal";
+  const currentOutboundKind = draft.outboundKind ?? "internal";
   const totalAmount = draft.lines.reduce(
-    (sum, line) => sum + effectiveLineAmount(line),
+    (sum, line) =>
+      sum + effectiveDraftAmount(line, documentType, currentOutboundKind),
     0,
   );
   const balanceByItemId = useMemo(
@@ -5870,8 +6064,24 @@ function StockDocumentEditor({
         const updated = { ...line, ...nextLine };
         if (nextLine.itemId) {
           const item = items.find((record) => record.id === nextLine.itemId);
-          updated.unitPrice = item?.defaultPrice ?? updated.unitPrice;
+          const nextPrice =
+            documentType === "inbound"
+              ? (item?.defaultPrice ?? updated.unitPrice)
+              : currentOutboundKind === "guest_sale"
+                ? (item?.salePrice ?? updated.unitPrice)
+                : 0;
+          updated.unitPrice = nextPrice;
+          updated.purchaseUnitPrice =
+            documentType === "inbound" ? nextPrice : null;
+          updated.saleUnitPrice =
+            documentType === "outbound" && currentOutboundKind === "guest_sale"
+              ? nextPrice
+              : null;
           updated.amount = null;
+          updated.purchaseAmount = null;
+          updated.saleAmount = null;
+          updated.costUnitPrice = null;
+          updated.costAmount = null;
         }
         return updated;
       }),
@@ -5900,8 +6110,22 @@ function StockDocumentEditor({
     const nextLine = {
       itemId: item.id,
       quantity: 1,
-      unitPrice: item.defaultPrice,
+      unitPrice:
+        documentType === "inbound"
+          ? item.defaultPrice
+          : currentOutboundKind === "guest_sale"
+            ? item.salePrice
+            : 0,
       amount: null,
+      purchaseUnitPrice: documentType === "inbound" ? item.defaultPrice : null,
+      purchaseAmount: null,
+      saleUnitPrice:
+        documentType === "outbound" && currentOutboundKind === "guest_sale"
+          ? item.salePrice
+          : null,
+      saleAmount: null,
+      costUnitPrice: null,
+      costAmount: null,
       remark: "",
     };
     setDraft((current) => {
@@ -5924,7 +6148,8 @@ function StockDocumentEditor({
       <div className="editor-form-grid">
         <Field label="业务日期">
           <input
-            type="date"
+            type="datetime-local"
+            step={1}
             value={draft.businessDate}
             onChange={(e) =>
               setDraft({ ...draft, businessDate: e.target.value })
@@ -5935,18 +6160,45 @@ function StockDocumentEditor({
           <Field label="出库类型">
             <select
               value={draft.outboundKind ?? "internal"}
-              onChange={(e) =>
+              onChange={(e) => {
+                const nextOutboundKind = e.target.value as
+                  | "internal"
+                  | "guest_sale";
                 setDraft({
                   ...draft,
-                  outboundKind: e.target.value as "internal" | "guest_sale",
+                  outboundKind: nextOutboundKind,
                   departmentId:
-                    e.target.value === "guest_sale" ? "" : draft.departmentId,
+                    nextOutboundKind === "guest_sale" ? "" : draft.departmentId,
                   approvalRequestId:
-                    e.target.value === "guest_sale"
+                    nextOutboundKind === "guest_sale"
                       ? ""
                       : draft.approvalRequestId,
-                })
-              }
+                  lines: draft.lines.map((line) => {
+                    const item = items.find((record) => record.id === line.itemId);
+                    if (nextOutboundKind === "guest_sale") {
+                      const saleUnitPrice = item?.salePrice ?? line.saleUnitPrice ?? 0;
+                      return {
+                        ...line,
+                        unitPrice: saleUnitPrice,
+                        amount: null,
+                        saleUnitPrice,
+                        saleAmount: null,
+                        costUnitPrice: null,
+                        costAmount: null,
+                      };
+                    }
+                    return {
+                      ...line,
+                      unitPrice: 0,
+                      amount: null,
+                      saleUnitPrice: null,
+                      saleAmount: null,
+                      costUnitPrice: null,
+                      costAmount: null,
+                    };
+                  }),
+                });
+              }}
             >
               <option value="internal">内部员工领用</option>
               <option value="guest_sale">酒店客人销售</option>
@@ -6051,8 +6303,13 @@ function StockDocumentEditor({
               <th>物品</th>
               {isOutbound ? <th>可用库存</th> : null}
               <th>数量</th>
-              <th>单价</th>
-              <th>金额</th>
+              {isInternalOutbound ? null : (
+                <>
+                  <th>{isOutbound ? "销售单价" : "本次进价"}</th>
+                  <th>{isOutbound ? "销售金额" : "采购金额"}</th>
+                </>
+              )}
+              {isInternalOutbound ? <th>成本核算</th> : null}
               <th>备注</th>
               <th>操作</th>
             </tr>
@@ -6092,32 +6349,63 @@ function StockDocumentEditor({
                     }
                   />
                 </td>
-                <td>
-                  <input
-                    className="table-input"
-                    min="0"
-                    type="number"
-                    value={line.unitPrice}
-                    onChange={(e) =>
-                      updateLine(index, { unitPrice: Number(e.target.value) })
-                    }
-                  />
-                </td>
-                <td>
-                  <input
-                    className="table-input"
-                    min="0"
-                    placeholder={formatMoney(line.quantity * line.unitPrice)}
-                    type="number"
-                    value={line.amount ?? ""}
-                    onChange={(e) =>
-                      updateLine(index, {
-                        amount:
-                          e.target.value === "" ? null : Number(e.target.value),
-                      })
-                    }
-                  />
-                </td>
+                {isInternalOutbound ? (
+                  <td>
+                    <span className="muted-inline">提交后按 FIFO 批次成本计算</span>
+                  </td>
+                ) : (
+                  <>
+                    <td>
+                      <input
+                        className="table-input"
+                        min="0"
+                        type="number"
+                        value={
+                          isOutbound
+                            ? (line.saleUnitPrice ?? line.unitPrice)
+                            : (line.purchaseUnitPrice ?? line.unitPrice)
+                        }
+                        onChange={(e) => {
+                          const value = Number(e.target.value);
+                          updateLine(
+                            index,
+                            isOutbound
+                              ? { unitPrice: value, saleUnitPrice: value }
+                              : { unitPrice: value, purchaseUnitPrice: value },
+                          );
+                        }}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        className="table-input"
+                        min="0"
+                        placeholder={formatMoney(
+                          line.quantity *
+                            (isOutbound
+                              ? (line.saleUnitPrice ?? line.unitPrice)
+                              : (line.purchaseUnitPrice ?? line.unitPrice)),
+                        )}
+                        type="number"
+                        value={
+                          isOutbound
+                            ? (line.saleAmount ?? "")
+                            : (line.purchaseAmount ?? line.amount ?? "")
+                        }
+                        onChange={(e) => {
+                          const value =
+                            e.target.value === "" ? null : Number(e.target.value);
+                          updateLine(
+                            index,
+                            isOutbound
+                              ? { amount: value, saleAmount: value }
+                              : { amount: value, purchaseAmount: value },
+                          );
+                        }}
+                      />
+                    </td>
+                  </>
+                )}
                 <td>
                   <input
                     className="table-input"
@@ -6139,7 +6427,14 @@ function StockDocumentEditor({
       </div>
 
       <div className="editor-actions">
-        <strong>合计金额：{formatMoney(totalAmount)} 元</strong>
+        <strong>
+          {isOutbound
+            ? currentOutboundKind === "guest_sale"
+              ? "销售合计"
+              : "预计成本"
+            : "采购合计"}
+          ：{formatMoney(totalAmount)} 元
+        </strong>
         {isInternalOutbound ? (
           <button
             className="ghost-button"
@@ -6376,7 +6671,7 @@ function AdjustmentEditor({
     remark: "",
   };
   const [draft, setDraft] = useState<AdjustmentDraft>({
-    businessDate: todayString(),
+    businessDate: currentDateTimeString(),
     adjustmentType: "damage",
     handler: "",
     reason: "",
@@ -6428,7 +6723,8 @@ function AdjustmentEditor({
       <div className="editor-form-grid">
         <Field label="调整日期">
           <input
-            type="date"
+            type="datetime-local"
+            step={1}
             value={draft.businessDate}
             onChange={(e) =>
               setDraft({ ...draft, businessDate: e.target.value })
@@ -6482,7 +6778,7 @@ function AdjustmentEditor({
               <th>物品</th>
               <th>方向</th>
               <th>数量</th>
-              <th>单价</th>
+              <th>成本单价</th>
               <th>金额</th>
               <th>备注</th>
               <th>操作</th>
@@ -6610,7 +6906,7 @@ function StocktakeCreateEditor({
     remark?: string | null;
   }) => Promise<void>;
 }) {
-  const [businessDate, setBusinessDate] = useState(todayString());
+  const [businessDate, setBusinessDate] = useState(currentDateTimeString());
   const [scopeType, setScopeType] = useState<"all" | "category" | "custom">(
     "all",
   );
@@ -6644,7 +6940,8 @@ function StocktakeCreateEditor({
     >
       <Field label="盘点日期">
         <input
-          type="date"
+          type="datetime-local"
+          step={1}
           value={businessDate}
           onChange={(e) => setBusinessDate(e.target.value)}
         />
@@ -6793,7 +7090,7 @@ function StocktakeCountsEditor({
           >
             {stocktakes.map((stocktake) => (
               <option key={stocktake.id} value={stocktake.id}>
-                {stocktake.documentNo} · {stocktake.businessDate} ·{" "}
+                {stocktake.documentNo} · {formatDateTime(stocktake.businessDate)} ·{" "}
                 {stocktakeStatusLabel(stocktake.status)}
               </option>
             ))}
@@ -7085,13 +7382,14 @@ function ItemsPage({
             <th>分类</th>
             <th>规格</th>
             <th>单位</th>
-            <th>单价</th>
+            <th>参考进价</th>
+            <th>参考售价</th>
             <th>供应商</th>
             <th>状态</th>
             <th>操作</th>
           </tr>
         </thead>
-        <PaginatedTable colSpan={10} getRowKey={(item) => item.id} rows={items}>
+        <PaginatedTable colSpan={11} getRowKey={(item) => item.id} rows={items}>
           {(item) => (
             <>
               <td>{item.code}</td>
@@ -7103,6 +7401,7 @@ function ItemsPage({
               <td>{item.spec ?? "-"}</td>
               <td>{item.unitName ?? optionName(units, item.unitId)}</td>
               <td>{formatMoney(item.defaultPrice)}</td>
+              <td>{formatMoney(item.salePrice)}</td>
               <td>
                 {item.supplierName ?? optionName(suppliers, item.supplierId)}
               </td>
@@ -7510,7 +7809,7 @@ function SuppliersPage({
                 <tr
                   key={`${record.documentNo ?? "doc"}-${record.itemCode}-${index}`}
                 >
-                  <td>{record.movementDate}</td>
+                  <td>{formatDateTime(record.movementDate)}</td>
                   <td>{record.documentNo ?? "-"}</td>
                   <td>
                     {record.itemCode} · {record.itemName}
@@ -7691,8 +7990,8 @@ function ApprovalsPage({
                   {approvalStatusLabel(item.status)}
                 </span>
               </td>
-              <td>{item.createdAt}</td>
-              <td>{item.decidedAt ?? "-"}</td>
+              <td>{formatDateTime(item.createdAt)}</td>
+              <td>{formatDateTime(item.decidedAt)}</td>
               <td className="row-actions">
                 {item.status === "pending" ? (
                   <>
@@ -7881,10 +8180,18 @@ function DocumentList({
   voidReason?: string;
 }) {
   const [filterDraft, setFilterDraft] = useState<StockDocumentQuery>(
-    query ?? { documentType: isOutbound ? "outbound" : "inbound" },
+    query ?? {
+      documentType: isOutbound ? "outbound" : "inbound",
+      month: currentMonthString(),
+    },
   );
   useEffect(() => {
-    if (query) setFilterDraft(query);
+    if (query) {
+      setFilterDraft({
+        ...query,
+        month: query.month || currentMonthString(),
+      });
+    }
   }, [query]);
 
   const partyLabel = isOutbound ? "领用部门" : "供应商";
@@ -7903,7 +8210,7 @@ function DocumentList({
       ...filterDraft,
       documentType: query.documentType,
       outboundKind: isOutbound ? filterDraft.outboundKind || null : null,
-      month: filterDraft.month || null,
+      month: filterDraft.month || currentMonthString(),
       departmentId: isOutbound ? filterDraft.departmentId || null : null,
       supplierId: isOutbound ? null : filterDraft.supplierId || null,
       itemId: filterDraft.itemId || null,
@@ -7913,7 +8220,10 @@ function DocumentList({
 
   function resetFilters() {
     if (!query || !onQueryChange) return;
-    const nextQuery: StockDocumentQuery = { documentType: query.documentType };
+    const nextQuery: StockDocumentQuery = {
+      documentType: query.documentType,
+      month: currentMonthString(),
+    };
     setFilterDraft(nextQuery);
     onQueryChange(nextQuery);
   }
@@ -7929,7 +8239,7 @@ function DocumentList({
         <div className="document-filters">
           <Field label="月份">
             <MonthSelect
-              value={filterDraft.month ?? ""}
+              value={filterDraft.month ?? currentMonthString()}
               onChange={(month) => updateFilter({ month })}
             />
           </Field>
@@ -8019,7 +8329,7 @@ function DocumentList({
           {(doc) => (
             <>
               <td>{doc.documentNo}</td>
-              <td>{doc.businessDate}</td>
+              <td>{formatDateTime(doc.businessDate)}</td>
               {isOutbound ? (
                 <td>{outboundKindLabel(doc.outboundKind)}</td>
               ) : null}
@@ -8111,7 +8421,7 @@ function StockDocumentDetailViewer({
     return <div className="placeholder-panel">未找到单据明细</div>;
   }
 
-  const { document, lines } = detail;
+  const { document, lines, batchLines } = detail;
   const isOutbound = document.documentType === "outbound";
   const partyLabel = isOutbound ? "对象" : "供应商";
   const partyValue = isOutbound
@@ -8124,7 +8434,7 @@ function StockDocumentDetailViewer({
     <div className="document-detail-viewer">
       <div className="detail-summary-grid">
         <InfoTile label="单号" value={document.documentNo} />
-        <InfoTile label="日期" value={document.businessDate} />
+        <InfoTile label="日期" value={formatDateTime(document.businessDate)} />
         <InfoTile
           label="类型"
           value={
@@ -8137,7 +8447,22 @@ function StockDocumentDetailViewer({
         />
         <InfoTile label={partyLabel} value={partyValue} />
         <InfoTile label="数量" value={String(document.totalQuantity)} />
-        <InfoTile label="金额" value={formatMoney(document.totalAmount)} />
+        <InfoTile
+          label={
+            isOutbound
+              ? document.outboundKind === "guest_sale"
+                ? "销售金额"
+                : "成本金额"
+              : "采购金额"
+          }
+          value={formatMoney(document.totalAmount)}
+        />
+        {isOutbound && document.outboundKind === "guest_sale" ? (
+          <>
+            <InfoTile label="销售成本" value={formatMoney(document.totalCostAmount)} />
+            <InfoTile label="毛利" value={formatMoney(document.totalGrossProfit)} />
+          </>
+        ) : null}
         <InfoTile label="经办人" value={document.handler ?? "-"} />
         <InfoTile label="用途" value={document.purpose ?? "-"} />
       </div>
@@ -8154,8 +8479,15 @@ function StockDocumentDetailViewer({
               <th>规格</th>
               <th>单位</th>
               <th>数量</th>
-              <th>单价</th>
-              <th>金额</th>
+              <th>{isOutbound ? "成本单价" : "采购单价"}</th>
+              <th>{isOutbound ? "成本金额" : "采购金额"}</th>
+              {isOutbound && document.outboundKind === "guest_sale" ? (
+                <>
+                  <th>销售单价</th>
+                  <th>销售金额</th>
+                  <th>毛利</th>
+                </>
+              ) : null}
               <th>备注</th>
             </tr>
           </thead>
@@ -8169,21 +8501,174 @@ function StockDocumentDetailViewer({
                 <td>{line.spec ?? "-"}</td>
                 <td>{line.unitName ?? "-"}</td>
                 <td>{line.quantity}</td>
-                <td>{formatMoney(line.unitPrice)}</td>
-                <td>{formatMoney(line.amount)}</td>
+                <td>
+                  {formatMoney(
+                    isOutbound
+                      ? (line.costUnitPrice ?? line.unitPrice)
+                      : (line.purchaseUnitPrice ?? line.unitPrice),
+                  )}
+                </td>
+                <td>
+                  {formatMoney(
+                    isOutbound
+                      ? (line.costAmount ?? line.amount)
+                      : (line.purchaseAmount ?? line.amount),
+                  )}
+                </td>
+                {isOutbound && document.outboundKind === "guest_sale" ? (
+                  <>
+                    <td>{formatMoney(line.saleUnitPrice ?? 0)}</td>
+                    <td>{formatMoney(line.saleAmount ?? 0)}</td>
+                    <td>{formatMoney(line.grossProfit ?? 0)}</td>
+                  </>
+                ) : null}
                 <td>{line.remark ?? "-"}</td>
               </tr>
             ))}
             {lines.length === 0 ? (
               <tr>
-                <td colSpan={7}>暂无商品明细</td>
+                <td
+                  colSpan={
+                    isOutbound && document.outboundKind === "guest_sale" ? 10 : 7
+                  }
+                >
+                  暂无商品明细
+                </td>
               </tr>
             ) : null}
           </tbody>
         </table>
       </div>
+
+      {batchLines.length > 0 ? (
+        <div className="subtable document-detail-lines">
+          <div className="subtable-heading">
+            <h3>批次成本明细</h3>
+            <span>{batchLines.length} 条</span>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>商品</th>
+                <th>批次号</th>
+                <th>入库日期</th>
+                <th>供应商</th>
+                <th>方向</th>
+                <th>数量</th>
+                <th>批次单价</th>
+                <th>批次金额</th>
+              </tr>
+            </thead>
+            <tbody>
+              {batchLines.map((line) => (
+                <tr key={line.id}>
+                  <td>
+                    <strong>{line.itemName}</strong>
+                    <span className="muted-inline">{line.itemCode}</span>
+                  </td>
+                  <td>{line.batchNo}</td>
+                  <td>{formatDateTime(line.inboundDate)}</td>
+                  <td>{line.supplierName ?? "-"}</td>
+                  <td>{line.direction === "in" ? "入库" : "出库"}</td>
+                  <td>{line.quantity}</td>
+                  <td>{formatMoney(line.unitPrice)}</td>
+                  <td>{formatMoney(line.amount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
     </div>
   );
+}
+
+function StockBatchDetailViewer({
+  batches,
+  isLoading,
+}: {
+  batches: StockBatchRow[];
+  isLoading: boolean;
+}) {
+  if (isLoading) {
+    return <div className="placeholder-panel">正在加载批次库存...</div>;
+  }
+  if (batches.length === 0) {
+    return <div className="placeholder-panel">暂无批次库存</div>;
+  }
+
+  const first = batches[0];
+  const availableBatches = batches.filter(
+    (batch) => batch.status !== "voided" && batch.remainingQuantity > 0,
+  );
+  const totalRemainingQuantity = availableBatches.reduce(
+    (sum, batch) => sum + batch.remainingQuantity,
+    0,
+  );
+  const totalRemainingAmount = availableBatches.reduce(
+    (sum, batch) => sum + batch.remainingAmount,
+    0,
+  );
+
+  return (
+    <div className="document-detail-viewer">
+      <div className="detail-summary-grid">
+        <InfoTile label="物品" value={`${first.itemCode} · ${first.itemName}`} />
+        <InfoTile label="批次数" value={String(batches.length)} />
+        <InfoTile label="可用批次" value={String(availableBatches.length)} />
+        <InfoTile
+          label="剩余数量"
+          value={String(Number(totalRemainingQuantity.toFixed(6)))}
+        />
+        <InfoTile label="剩余金额" value={formatMoney(totalRemainingAmount)} />
+      </div>
+
+      <div className="subtable document-detail-lines">
+        <div className="subtable-heading">
+          <h3>批次余额</h3>
+          <span>{batches.length} 条</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>批次号</th>
+              <th>入库日期</th>
+              <th>来源单据</th>
+              <th>供应商</th>
+              <th>原始数量</th>
+              <th>剩余数量</th>
+              <th>批次单价</th>
+              <th>剩余金额</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            {batches.map((batch) => (
+              <tr key={batch.id}>
+                <td>{batch.batchNo}</td>
+                <td>{formatDateTime(batch.inboundDate)}</td>
+                <td>{batch.sourceDocumentNo ?? "-"}</td>
+                <td>{batch.supplierName ?? "-"}</td>
+                <td>{batch.originalQuantity}</td>
+                <td>{batch.remainingQuantity}</td>
+                <td>{formatMoney(batch.unitPrice)}</td>
+                <td>{formatMoney(batch.remainingAmount)}</td>
+                <td>{stockBatchStatusLabel(batch.status)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function stockBatchStatusLabel(status: string) {
+  if (status === "available") return "可用";
+  if (status === "depleted") return "已耗尽";
+  if (status === "voided") return "已作废";
+  if (status === "adjustment") return "调整批次";
+  return status;
 }
 
 function InfoTile({ label, value }: { label: string; value: string }) {
@@ -8200,6 +8685,7 @@ function StockBalancePage({
   categories,
   items,
   onQueryChange,
+  onViewBatches,
   onViewMovements,
   query,
 }: {
@@ -8207,6 +8693,7 @@ function StockBalancePage({
   categories: Category[];
   items: Item[];
   onQueryChange: (query: StockBalanceQuery) => Promise<void>;
+  onViewBatches: (itemId: string) => void;
   onViewMovements: (itemId: string) => Promise<void>;
   query: StockBalanceQuery;
 }) {
@@ -8326,6 +8813,9 @@ function StockBalancePage({
                 </span>
               </td>
               <td className="row-actions">
+                <button onClick={() => onViewBatches(row.itemId)}>
+                  批次
+                </button>
                 <button onClick={() => onViewMovements(row.itemId)}>
                   流水
                 </button>
@@ -8448,7 +8938,7 @@ function StockMovementPage({
         >
           {(row) => (
             <>
-              <td>{row.movementDate}</td>
+              <td>{formatDateTime(row.movementDate)}</td>
               <td>{row.documentNo ?? "-"}</td>
               <td>{movementTypeLabel(row.movementType)}</td>
               <td>
@@ -8475,29 +8965,120 @@ function outboundKindLabel(kind?: "internal" | "guest_sale" | null) {
 }
 
 function StocktakePage({
-  canViewReports,
   canWrite,
-  detail,
-  exportPath,
-  onConfirm,
-  onExport,
-  onSelect,
-  onVoid,
   stocktakes,
 }: {
-  canViewReports: boolean;
   canWrite: boolean;
-  detail: StocktakeDetail | null;
-  exportPath: string | null;
-  onConfirm: (handler: string, remark: string) => Promise<void>;
-  onExport: () => Promise<void>;
-  onSelect: (stocktakeId: string) => Promise<void>;
-  onVoid: (reason: string, handler: string) => Promise<void>;
   stocktakes: StocktakeDocument[];
+}) {
+  return (
+    <MasterTablePanel
+      actions={
+        <div className="supplier-toolbar">
+          <button
+            className="primary-button"
+            disabled={!canWrite}
+            onClick={() =>
+              openEditorWindow("stocktakeCreate", { width: 780, height: 620 })
+            }
+          >
+            创建盘点单
+          </button>
+        </div>
+      }
+      description="盘点记录创建与实盘录入在独立窗口中完成。"
+      hideHeading
+      title="库存盘点"
+    >
+      <table>
+        <thead>
+          <tr>
+            <th>单号</th>
+            <th>日期</th>
+            <th>范围</th>
+            <th>状态</th>
+            <th>录入进度</th>
+            <th>盘盈</th>
+            <th>盘亏</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {stocktakes.map((stocktake) => (
+            <tr key={stocktake.id}>
+              <td>{stocktake.documentNo}</td>
+              <td>{formatDateTime(stocktake.businessDate)}</td>
+              <td>{stocktakeScopeLabel(stocktake.scopeType)}</td>
+              <td>{stocktakeStatusLabel(stocktake.status)}</td>
+              <td>
+                {stocktake.countedCount}/{stocktake.lineCount} 行
+              </td>
+              <td>{formatMoney(stocktake.gainAmount)}</td>
+              <td>{formatMoney(stocktake.lossAmount)}</td>
+              <td className="row-actions">
+                <button
+                  onClick={() =>
+                    openEditorWindow("stocktakeDetail", {
+                      mode: "edit",
+                      id: stocktake.id,
+                    })
+                  }
+                >
+                  详情
+                </button>
+                <button
+                  disabled={
+                    !canWrite ||
+                    stocktake.status === "confirmed" ||
+                    stocktake.status === "voided"
+                  }
+                  onClick={() =>
+                    openEditorWindow("stocktakeCounts", {
+                      mode: "edit",
+                      id: stocktake.id,
+                      width: 1120,
+                      height: 760,
+                    })
+                  }
+                >
+                  录入实盘
+                </button>
+              </td>
+            </tr>
+          ))}
+          {stocktakes.length === 0 ? <EmptyRow colSpan={8} /> : null}
+        </tbody>
+      </table>
+    </MasterTablePanel>
+  );
+}
+
+function StocktakeDetailViewer({
+  detail,
+  disabled,
+  isLoading,
+  onConfirm,
+  onExport,
+  onVoid,
+}: {
+  detail: StocktakeDetail | null;
+  disabled: boolean;
+  isLoading: boolean;
+  onConfirm: (
+    stocktakeId: string,
+    handler: string,
+    remark: string,
+  ) => Promise<void>;
+  onExport: (stocktakeId: string) => Promise<void>;
+  onVoid: (
+    documentId: string,
+    stocktakeId: string,
+    reason: string,
+    handler: string,
+  ) => Promise<void>;
 }) {
   const [handler, setHandler] = useState("");
   const [remark, setRemark] = useState("");
-
   const canEdit =
     detail &&
     detail.document.status !== "confirmed" &&
@@ -8508,141 +9089,111 @@ function StocktakePage({
       (line) => Math.abs(line.differenceQuantity) > 0.000001,
     ) ?? [];
 
+  if (isLoading) {
+    return <div className="placeholder-panel">正在加载盘点详情...</div>;
+  }
+  if (!detail) {
+    return <div className="placeholder-panel">盘点单不存在或已被删除。</div>;
+  }
+
   return (
-    <section className="stocktake-layout">
-      <div className="form-panel">
-        <div className="section-heading">
-          <div>
-            <h2>盘点记录</h2>
-            <span>创建与实盘录入在独立窗口中完成</span>
-          </div>
+    <div className="stocktake-detail-panel">
+      <div className="document-detail-header">
+        <div>
+          <h2>{detail.document.documentNo}</h2>
+          <span>
+            {formatDateTime(detail.document.businessDate)} ·{" "}
+            {stocktakeScopeLabel(detail.document.scopeType)} ·{" "}
+            {stocktakeStatusLabel(detail.document.status)}
+          </span>
         </div>
-        <button
-          className="primary-button full-width-button"
-          disabled={!canWrite}
-          onClick={() =>
-            openEditorWindow("stocktakeCreate", { width: 780, height: 620 })
-          }
-        >
-          创建盘点单
-        </button>
-        <div className="stocktake-list">
-          {stocktakes.map((stocktake) => (
-            <button
-              className={
-                detail?.document.id === stocktake.id
-                  ? "stocktake-record active"
-                  : "stocktake-record"
-              }
-              key={stocktake.id}
-              onClick={() => onSelect(stocktake.id)}
-            >
-              <strong>{stocktake.documentNo}</strong>
-              <span>
-                {stocktake.businessDate} ·{" "}
-                {stocktakeStatusLabel(stocktake.status)}
-              </span>
-              <em>
-                {stocktake.countedCount}/{stocktake.lineCount} 行
-              </em>
-            </button>
-          ))}
-          {stocktakes.length === 0 ? (
-            <p className="muted-text">暂无盘点单</p>
-          ) : null}
+        <div className="report-actions">
+          <input
+            placeholder="经办人"
+            value={handler}
+            onChange={(e) => setHandler(e.target.value)}
+          />
+          <input
+            placeholder="备注/作废原因"
+            value={remark}
+            onChange={(e) => setRemark(e.target.value)}
+          />
+          <button
+            className="ghost-button"
+            disabled={disabled}
+            onClick={() => onExport(detail.document.id)}
+          >
+            导出盘点表
+          </button>
+          <button
+            className="ghost-button"
+            disabled={!canEdit || disabled}
+            onClick={() =>
+              openEditorWindow("stocktakeCounts", {
+                mode: "edit",
+                id: detail.document.id,
+                width: 1120,
+                height: 760,
+              })
+            }
+          >
+            录入实盘
+          </button>
+          <button
+            className="ghost-button"
+            disabled={!canVoid || disabled || !remark.trim()}
+            onClick={() =>
+              onVoid(
+                detail.document.documentId,
+                detail.document.id,
+                remark,
+                handler,
+              )
+            }
+          >
+            作废盘点
+          </button>
+          <button
+            className="primary-button"
+            disabled={!canEdit || disabled}
+            onClick={() => onConfirm(detail.document.id, handler, remark)}
+          >
+            确认盘点
+          </button>
         </div>
       </div>
 
-      <div className="table-panel stocktake-detail">
-        <div className="table-toolbar">
-          <div>
-            <h2>{detail ? detail.document.documentNo : "盘点明细"}</h2>
-            {detail ? (
-              <span className="table-note">
-                {detail.document.businessDate} ·{" "}
-                {stocktakeScopeLabel(detail.document.scopeType)} ·{" "}
-                {stocktakeStatusLabel(detail.document.status)}
-              </span>
-            ) : null}
-          </div>
-          <div className="report-actions">
-            <input
-              placeholder="经办人"
-              value={handler}
-              onChange={(e) => setHandler(e.target.value)}
-            />
-            <input
-              placeholder="备注/作废原因"
-              value={remark}
-              onChange={(e) => setRemark(e.target.value)}
-            />
-            <button
-              className="ghost-button"
-              disabled={!detail || !canViewReports}
-              onClick={onExport}
-            >
-              导出盘点表
-            </button>
-            <button
-              className="ghost-button"
-              disabled={!canEdit || !canWrite}
-              onClick={() =>
-                openEditorWindow("stocktakeCounts", {
-                  mode: "edit",
-                  id: detail?.document.id,
-                  width: 1120,
-                  height: 760,
-                })
-              }
-            >
-              录入实盘
-            </button>
-            <button
-              className="ghost-button"
-              disabled={!canVoid || !canWrite || !remark.trim()}
-              onClick={() => onVoid(remark, handler)}
-            >
-              作废盘点
-            </button>
-            <button
-              className="primary-button"
-              disabled={!canEdit || !canWrite}
-              onClick={() => onConfirm(handler, remark)}
-            >
-              确认盘点
-            </button>
-          </div>
+      <section className="metrics-grid stocktake-metrics">
+        <div className="metric-card">
+          <span>盘点行数</span>
+          <strong>{detail.document.lineCount}</strong>
+          <em>行</em>
         </div>
-        {exportPath ? (
-          <div className="export-path">已导出：{exportPath}</div>
-        ) : null}
-        {detail ? (
-          <section className="metrics-grid stocktake-metrics">
-            <div className="metric-card">
-              <span>盘点行数</span>
-              <strong>{detail.document.lineCount}</strong>
-              <em>行</em>
-            </div>
-            <div className="metric-card">
-              <span>已录入</span>
-              <strong>{detail.document.countedCount}</strong>
-              <em>行</em>
-            </div>
-            <div className="metric-card">
-              <span>差异项</span>
-              <strong>{differenceLines.length}</strong>
-              <em>项</em>
-            </div>
-            <div className="metric-card">
-              <span>盘盈/盘亏</span>
-              <strong>
-                {formatMoney(detail.document.gainAmount)} /{" "}
-                {formatMoney(detail.document.lossAmount)}
-              </strong>
-              <em>元</em>
-            </div>
-          </section>
-        ) : null}
+        <div className="metric-card">
+          <span>已录入</span>
+          <strong>{detail.document.countedCount}</strong>
+          <em>行</em>
+        </div>
+        <div className="metric-card">
+          <span>差异项</span>
+          <strong>{differenceLines.length}</strong>
+          <em>项</em>
+        </div>
+        <div className="metric-card">
+          <span>盘盈/盘亏</span>
+          <strong>
+            {formatMoney(detail.document.gainAmount)} /{" "}
+            {formatMoney(detail.document.lossAmount)}
+          </strong>
+          <em>元</em>
+        </div>
+      </section>
+
+      <div className="subtable document-detail-lines">
+        <div className="subtable-heading">
+          <h3>盘点商品</h3>
+          <span>{detail.lines.length} 行</span>
+        </div>
         <table>
           <thead>
             <tr>
@@ -8658,7 +9209,7 @@ function StocktakePage({
             </tr>
           </thead>
           <tbody>
-            {(detail?.lines ?? []).map((line) => (
+            {detail.lines.map((line) => (
               <tr key={line.id}>
                 <td>{line.itemCode}</td>
                 <td>{line.itemName}</td>
@@ -8681,13 +9232,11 @@ function StocktakePage({
                 <td>{line.remark ?? "-"}</td>
               </tr>
             ))}
-            {!detail || detail.lines.length === 0 ? (
-              <EmptyRow colSpan={9} />
-            ) : null}
+            {detail.lines.length === 0 ? <EmptyRow colSpan={9} /> : null}
           </tbody>
         </table>
       </div>
-    </section>
+    </div>
   );
 }
 
@@ -8773,6 +9322,7 @@ function ReportsPage({
   const itemRanking = bundle?.itemConsumptionRanking ?? [];
   const inboundDetails = bundle?.inboundDetails ?? [];
   const outboundDetails = bundle?.outboundDetails ?? [];
+  const salesProfit = bundle?.salesProfit ?? [];
   const stockBalances = bundle?.stockBalances ?? [];
   const stockWarnings = bundle?.stockWarnings ?? [];
   const stocktakeDifferences = bundle?.stocktakeDifferences ?? [];
@@ -8784,6 +9334,19 @@ function ReportsPage({
     (sum, row) => sum + row.outboundAmount,
     0,
   );
+  const totalSales = salesProfit.reduce((sum, row) => sum + row.saleAmount, 0);
+  const totalSalesCost = salesProfit.reduce(
+    (sum, row) => sum + row.costAmount,
+    0,
+  );
+  const totalGrossProfit = salesProfit.reduce(
+    (sum, row) => sum + row.grossProfit,
+    0,
+  );
+  const grossMargin = totalSales > 0 ? totalGrossProfit / totalSales : null;
+  const negativeProfitCount = salesProfit.filter(
+    (row) => row.negativeProfit,
+  ).length;
   const reportRangeLabel = `${filterDraft.month || currentMonthString()} 月`;
 
   function printReport() {
@@ -8820,8 +9383,9 @@ function ReportsPage({
             <span className="report-kicker">报表中心</span>
             <h2>{reportRangeLabel}经营报表</h2>
             <p>
-              入库 {formatMoney(totalInbound)} 元 · 领用{" "}
-              {formatMoney(totalOutbound)} 元 · 库存预警 {stockWarnings.length} 项
+              入库 {formatMoney(totalInbound)} 元 · 成本出库{" "}
+              {formatMoney(totalOutbound)} 元 · 销售 {formatMoney(totalSales)} 元 ·
+              毛利 {formatMoney(totalGrossProfit)} 元
             </p>
           </div>
           <div className="report-actions">
@@ -8930,14 +9494,19 @@ function ReportsPage({
           <em>元</em>
         </div>
         <div className="metric-card">
-          <span>本月领用金额</span>
+          <span>本月出库成本</span>
           <strong>{formatMoney(totalOutbound)}</strong>
           <em>元</em>
         </div>
         <div className="metric-card">
-          <span>消耗分类</span>
-          <strong>{categoryConsumption.length}</strong>
-          <em>类</em>
+          <span>客销收入</span>
+          <strong>{formatMoney(totalSales)}</strong>
+          <em>元</em>
+        </div>
+        <div className="metric-card">
+          <span>销售毛利</span>
+          <strong>{formatMoney(totalGrossProfit)}</strong>
+          <em>{grossMargin === null ? "无销售" : `${(grossMargin * 100).toFixed(1)}%`}</em>
         </div>
         <div className="metric-card">
           <span>库存预警</span>
@@ -8968,6 +9537,47 @@ function ReportsPage({
             value: row.amount,
           }))}
           title="分类消耗金额"
+        />
+      </div>
+
+      <ReportGroupHeader
+        title="销售毛利"
+        description="酒店客人销售按销售收入、FIFO 成本和毛利单独核算。"
+      />
+      <ReportInsightGrid>
+        <ReportInsightCard
+          label="销售收入"
+          value={`${formatMoney(totalSales)} 元`}
+          detail={`${salesProfit.length} 行客销明细，完整记录随 Excel 导出`}
+        />
+        <ReportInsightCard
+          label="销售成本"
+          value={`${formatMoney(totalSalesCost)} 元`}
+          detail="成本来自对应出库批次的实际采购成本"
+        />
+        <ReportInsightCard
+          label="毛利率"
+          value={grossMargin === null ? "暂无" : `${(grossMargin * 100).toFixed(1)}%`}
+          detail={
+            negativeProfitCount > 0
+              ? `${negativeProfitCount} 行销售低于成本`
+              : "暂无亏损销售"
+          }
+        />
+      </ReportInsightGrid>
+      <div className="workspace-grid">
+        <BarChartPanel
+          rows={salesProfit
+            .slice(0, 8)
+            .map((row) => ({ label: row.itemName, value: row.grossProfit }))}
+          title="销售毛利排行"
+        />
+        <BarChartPanel
+          rows={salesProfit
+            .filter((row) => row.negativeProfit)
+            .slice(0, 8)
+            .map((row) => ({ label: row.itemName, value: row.grossProfit }))}
+          title="亏损销售提醒"
         />
       </div>
 
@@ -9467,7 +10077,8 @@ function SettingsPage({
   systemSettings: SystemSettings | null;
 }) {
   const settingsIsClientMode = status?.runtime.mode === "client";
-  const canOperateSettings = canManage && !settingsIsClientMode;
+  const canOpenBusinessSettings = canManage;
+  const canOperatePrimaryDatabase = canManage && !settingsIsClientMode;
   const settingsEffectiveTheme = resolveTheme(appearanceSettings.themeMode);
   const settingsGlassPreviewThemeClass =
     settingsEffectiveTheme === "light"
@@ -9749,7 +10360,7 @@ function SettingsPage({
             <div className="setting-control">
               <button
                 className="primary-button"
-                disabled={!canOperateSettings}
+                disabled={!canOpenBusinessSettings}
                 type="button"
                 onClick={() =>
                   void openEditorWindow("businessSettings", {
@@ -9952,14 +10563,14 @@ function SettingsPage({
             <div className="settings-feature-actions">
               <button
                 className="primary-button"
-                disabled={!canOperateSettings || isWorking}
+                disabled={!canOperatePrimaryDatabase || isWorking}
                 onClick={onBackup}
               >
                 {i18n.t("settings.createManualBackup")}
               </button>
               <button
                 className="ghost-button"
-                disabled={!canOperateSettings || isWorking}
+                disabled={!canOperatePrimaryDatabase || isWorking}
                 type="button"
                 onClick={() =>
                   void openEditorWindow("secondBackupDir", {
@@ -9972,7 +10583,7 @@ function SettingsPage({
               </button>
               <button
                 className="ghost-button"
-                disabled={!canOperateSettings || isWorking}
+                disabled={!canOperatePrimaryDatabase || isWorking}
                 type="button"
                 onClick={() =>
                   void openEditorWindow("restoreBackup", {
@@ -10088,7 +10699,7 @@ function BackupRecordsPage({
         >
           {(backup) => (
             <>
-              <td>{backup.createdAt}</td>
+              <td>{formatDateTime(backup.createdAt)}</td>
               <td>{backupTypeLabel(backup.backupType, i18n)}</td>
               <td>
                 <span
@@ -10151,7 +10762,7 @@ function LogsPage({
         >
           {(log) => (
             <>
-              <td>{log.createdAt}</td>
+              <td>{formatDateTime(log.createdAt)}</td>
               <td>{auditActionLabel(log.action, i18n)}</td>
               <td>
                 <span className="audit-entity">

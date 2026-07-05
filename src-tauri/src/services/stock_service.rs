@@ -3,17 +3,18 @@ use crate::db::stock_repository;
 use crate::domain::runtime::RuntimeMode;
 use crate::domain::stock::{
     ConfirmStockDocumentDraftRequest, SaveStockDocumentDraftRequest, StockBalanceQuery,
-    StockBalanceRow, StockDocument, StockDocumentDetail, StockDocumentQuery, StockMovementQuery,
-    StockMovementRow, SubmitAdjustmentRequest, SubmitStockDocumentRequest,
+    StockBalanceRow, StockBatchRow, StockDocument, StockDocumentDetail, StockDocumentQuery,
+    StockMovementQuery, StockMovementRow, SubmitAdjustmentRequest, SubmitStockDocumentRequest,
     VoidStockDocumentRequest,
 };
 use crate::error::{AppError, AppResult};
 
 pub fn submit_stock_document(
     state: &AppState,
-    request: SubmitStockDocumentRequest,
+    mut request: SubmitStockDocumentRequest,
 ) -> AppResult<StockDocumentDetail> {
     crate::services::user_service::require_permission(state, "write_stock")?;
+    normalize_business_datetime(&mut request.business_date, "业务日期")?;
     validate_document(&request)?;
     if runtime_mode(state)? == RuntimeMode::Client {
         return crate::services::host_service::remote_submit_stock_document(state, request);
@@ -26,9 +27,10 @@ pub fn submit_stock_document(
 
 pub fn save_stock_document_draft(
     state: &AppState,
-    request: SaveStockDocumentDraftRequest,
+    mut request: SaveStockDocumentDraftRequest,
 ) -> AppResult<StockDocumentDetail> {
     crate::services::user_service::require_permission(state, "write_stock")?;
+    normalize_business_datetime(&mut request.business_date, "业务日期")?;
     validate_draft_document(&request)?;
     if runtime_mode(state)? == RuntimeMode::Client {
         return crate::services::host_service::remote_save_stock_document_draft(state, request);
@@ -55,9 +57,10 @@ pub fn confirm_stock_document_draft(
 
 pub fn submit_adjustment(
     state: &AppState,
-    request: SubmitAdjustmentRequest,
+    mut request: SubmitAdjustmentRequest,
 ) -> AppResult<StockDocumentDetail> {
     crate::services::user_service::require_permission(state, "write_stock")?;
+    normalize_business_datetime(&mut request.business_date, "调整日期")?;
     validate_adjustment(&request)?;
     if runtime_mode(state)? == RuntimeMode::Client {
         return crate::services::host_service::remote_submit_adjustment(state, request);
@@ -122,6 +125,16 @@ pub fn list_stock_balances(
         .with_conn(|conn| stock_repository::list_stock_balances(conn, query))
 }
 
+pub fn list_stock_batches(state: &AppState, item_id: String) -> AppResult<Vec<StockBatchRow>> {
+    crate::services::user_service::require_permission(state, "view_reports")?;
+    if runtime_mode(state)? == RuntimeMode::Client {
+        return crate::services::host_service::remote_list_stock_batches(state, item_id);
+    }
+    state
+        .db
+        .with_conn(|conn| stock_repository::list_stock_batches(conn, &item_id))
+}
+
 pub fn list_stock_movements(
     state: &AppState,
     mut query: StockMovementQuery,
@@ -141,13 +154,45 @@ fn runtime_mode(state: &AppState) -> AppResult<RuntimeMode> {
     Ok(crate::services::status_service::get_runtime_config(state)?.mode)
 }
 
+pub(crate) fn normalize_business_datetime(value: &mut String, label: &str) -> AppResult<()> {
+    let normalized = normalized_business_datetime(value, label)?;
+    *value = normalized;
+    Ok(())
+}
+
+pub(crate) fn validate_business_datetime(value: &str, label: &str) -> AppResult<()> {
+    normalized_business_datetime(value, label).map(|_| ())
+}
+
+fn normalized_business_datetime(value: &str, label: &str) -> AppResult<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Validation(format!("{label}不能为空")));
+    }
+    let normalized = trimmed.replace('T', " ");
+    let datetime = if normalized.len() == 10 {
+        chrono::NaiveDate::parse_from_str(&normalized, "%Y-%m-%d")
+            .map_err(|_| AppError::Validation(format!("{label}格式必须是 YYYY-MM-DD HH:mm")))?
+            .and_hms_opt(0, 0, 0)
+            .ok_or_else(|| AppError::Validation(format!("{label}格式无效")))?
+    } else if normalized.len() == 16 {
+        chrono::NaiveDateTime::parse_from_str(&normalized, "%Y-%m-%d %H:%M")
+            .map_err(|_| AppError::Validation(format!("{label}格式必须是 YYYY-MM-DD HH:mm")))?
+    } else {
+        chrono::NaiveDateTime::parse_from_str(&normalized, "%Y-%m-%d %H:%M:%S")
+            .map_err(|_| AppError::Validation(format!("{label}格式必须是 YYYY-MM-DD HH:mm:ss")))?
+    };
+    if datetime > chrono::Local::now().naive_local() {
+        return Err(AppError::Validation(format!("{label}不能晚于当前时间")));
+    }
+    Ok(datetime.format("%Y-%m-%d %H:%M:%S").to_string())
+}
+
 pub(crate) fn validate_document(request: &SubmitStockDocumentRequest) -> AppResult<()> {
     if request.document_type != "inbound" && request.document_type != "outbound" {
         return Err(AppError::Validation("单据类型必须是入库或出库".to_string()));
     }
-    if request.business_date.trim().is_empty() {
-        return Err(AppError::Validation("业务日期不能为空".to_string()));
-    }
+    validate_business_datetime(&request.business_date, "业务日期")?;
     let outbound_kind = request
         .outbound_kind
         .as_deref()
@@ -213,9 +258,7 @@ pub(crate) fn validate_confirm_draft(request: &ConfirmStockDocumentDraftRequest)
 }
 
 pub(crate) fn validate_adjustment(request: &SubmitAdjustmentRequest) -> AppResult<()> {
-    if request.business_date.trim().is_empty() {
-        return Err(AppError::Validation("调整日期不能为空".to_string()));
-    }
+    validate_business_datetime(&request.business_date, "调整日期")?;
     match request.adjustment_type.as_str() {
         "gain" | "loss" | "damage" | "correction" => {}
         other => return Err(AppError::Validation(format!("不支持的调整类型：{other}"))),
@@ -378,6 +421,19 @@ mod tests {
         set_warehouse_user(&state);
         let error = submit_stock_document(&state, sample_request()).unwrap_err();
         assert!(error.to_string().contains("单据行缺少物品"));
+    }
+
+    #[test]
+    fn normalize_business_datetime_accepts_datetime_local_and_rejects_future() {
+        let mut value = "2026-06-30T14:25".to_string();
+        normalize_business_datetime(&mut value, "业务日期").unwrap();
+        assert_eq!(value, "2026-06-30 14:25:00");
+
+        let mut future = (chrono::Local::now().naive_local() + chrono::Duration::minutes(1))
+            .format("%Y-%m-%dT%H:%M")
+            .to_string();
+        let error = normalize_business_datetime(&mut future, "业务日期").unwrap_err();
+        assert!(error.to_string().contains("不能晚于当前时间"));
     }
 
     #[test]

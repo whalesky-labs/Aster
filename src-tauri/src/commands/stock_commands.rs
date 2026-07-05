@@ -3,8 +3,8 @@ use tauri::State;
 use crate::app::state::AppState;
 use crate::domain::stock::{
     ConfirmStockDocumentDraftRequest, SaveStockDocumentDraftRequest, StockBalanceQuery,
-    StockBalanceRow, StockDocument, StockDocumentDetail, StockDocumentQuery, StockMovementQuery,
-    StockMovementRow, SubmitAdjustmentRequest, SubmitStockDocumentRequest,
+    StockBalanceRow, StockBatchRow, StockDocument, StockDocumentDetail, StockDocumentQuery,
+    StockMovementQuery, StockMovementRow, SubmitAdjustmentRequest, SubmitStockDocumentRequest,
     VoidStockDocumentRequest,
 };
 use crate::error::AppResult;
@@ -82,6 +82,14 @@ pub fn list_stock_balances(
         query.search = search;
     }
     stock_service::list_stock_balances(&state, query)
+}
+
+#[tauri::command]
+pub fn list_stock_batches(
+    item_id: String,
+    state: State<'_, AppState>,
+) -> AppResult<Vec<StockBatchRow>> {
+    stock_service::list_stock_batches(&state, item_id)
 }
 
 #[tauri::command]
