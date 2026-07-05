@@ -411,7 +411,6 @@ fn runtime_mode(state: &AppState) -> AppResult<RuntimeMode> {
 
 pub(crate) fn validate_budget_rule(request: &SaveBudgetRuleRequest) -> AppResult<()> {
     require_text("部门", &request.department_id)?;
-    require_text("分类", &request.category_id)?;
     require_text("预算月份", &request.period_month)?;
     if request.amount_limit < 0.0 {
         return Err(AppError::Validation("预算金额不能小于 0".to_string()));

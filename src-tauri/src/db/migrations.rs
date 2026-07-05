@@ -195,6 +195,20 @@ fn run_compatibility_migrations(conn: &Connection) -> AppResult<()> {
          ON client_connections(client_device_id)",
         [],
     )?;
+    if table_exists(conn, "budget_rules")? {
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_budget_rules_department_month
+             ON budget_rules(department_id, period_month)
+             WHERE category_id IS NULL",
+            [],
+        )?;
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_budget_rules_department_category_month
+             ON budget_rules(department_id, category_id, period_month)
+             WHERE category_id IS NOT NULL",
+            [],
+        )?;
+    }
     Ok(())
 }
 

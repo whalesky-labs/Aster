@@ -1067,6 +1067,25 @@ fn enforce_budget_limits(conn: &Connection, request: &SubmitStockDocumentRequest
         return Ok(());
     };
     let period_month = request.business_date.chars().take(7).collect::<String>();
+    let document_amount = round_money(request.lines.iter().map(line_amount).sum());
+    if let Some((rule_id, amount_limit, used_amount)) =
+        active_department_budget(conn, department_id, &period_month)?
+    {
+        if used_amount + document_amount > amount_limit
+            && !approval_allows_budget_override(
+                conn,
+                request.approval_request_id.as_deref(),
+                department_id,
+                &period_month,
+            )?
+        {
+            return Err(AppError::Validation(format!(
+                "超出预算：{} 部门总预算已用 {:.2}，本单 {:.2}，预算 {:.2}（规则 {}），请先提交并通过审批",
+                period_month, used_amount, document_amount, amount_limit, rule_id
+            )));
+        }
+    }
+
     let mut category_amounts: HashMap<String, (String, f64)> = HashMap::new();
     for line in &request.lines {
         let item = get_item_for_stock(conn, &line.item_id)?;
@@ -1103,6 +1122,34 @@ fn enforce_budget_limits(conn: &Connection, request: &SubmitStockDocumentRequest
         }
     }
     Ok(())
+}
+
+fn active_department_budget(
+    conn: &Connection,
+    department_id: &str,
+    period_month: &str,
+) -> AppResult<Option<(String, f64, f64)>> {
+    conn.query_row(
+        "SELECT b.id, b.amount_limit,
+                COALESCE((
+                  SELECT SUM(m.amount)
+                  FROM stock_movements m
+                  WHERE m.direction = 'out'
+                    AND m.department_id = b.department_id
+                    AND strftime('%Y-%m', m.movement_date) = b.period_month
+                ), 0)
+         FROM budget_rules b
+         WHERE b.enabled = 1
+           AND b.department_id = ?1
+           AND b.category_id IS NULL
+           AND b.period_month = ?2
+         ORDER BY b.updated_at DESC
+         LIMIT 1",
+        params![department_id, period_month],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )
+    .optional()
+    .map_err(Into::into)
 }
 
 fn active_budget_for_category(
@@ -2112,6 +2159,76 @@ mod tests {
             )
             .unwrap();
         assert_eq!(document_count, 0);
+    }
+
+    #[test]
+    fn submit_outbound_rejects_when_department_budget_total_would_be_exceeded() {
+        let mut conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrations::run(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO categories (id, name, enabled) VALUES ('cat-dept-budget', '部门预算分类', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO master_items (id, code, name, category_id, unit_id, default_price)
+             VALUES ('item-dept-budget', 'DBUD-001', '部门预算物品', 'cat-dept-budget', 'unit-piece', 10)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO stock_balances (id, item_id, quantity, amount, average_price)
+             VALUES ('balance-dept-budget', 'item-dept-budget', 20, 200, 10)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO budget_rules (
+               id, department_id, category_id, period_month, amount_limit, enabled
+             )
+             VALUES ('budget-dept-total', 'dept-admin-office', NULL, '2026-06', 100, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO stock_movements (
+               id, movement_date, item_id, direction, quantity, unit_price, amount,
+               department_id, movement_type
+             )
+             VALUES (
+               'mov-dept-used', '2026-06-10', 'item-dept-budget', 'out', 8, 10, 80,
+               'dept-admin-office', 'outbound'
+             )",
+            [],
+        )
+        .unwrap();
+
+        let error = submit_stock_document(
+            &mut conn,
+            SubmitStockDocumentRequest {
+                document_type: "outbound".to_string(),
+                outbound_kind: Some("internal".to_string()),
+                business_date: "2026-06-30".to_string(),
+                department_id: Some("dept-admin-office".to_string()),
+                supplier_id: None,
+                handler: Some("tester".to_string()),
+                purpose: Some("部门总预算测试".to_string()),
+                remark: None,
+                approval_request_id: None,
+                lines: vec![SubmitStockDocumentLine {
+                    item_id: "item-dept-budget".to_string(),
+                    quantity: 3.0,
+                    unit_price: 10.0,
+                    amount: None,
+                    remark: None,
+                }],
+            },
+            false,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("部门总预算"));
     }
 
     #[test]

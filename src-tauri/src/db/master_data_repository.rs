@@ -526,7 +526,7 @@ pub fn list_budget_rules(
     period_month: Option<String>,
 ) -> AppResult<Vec<BudgetRule>> {
     let mut stmt = conn.prepare(
-        "SELECT b.id, b.department_id, d.name, b.category_id, c.name, b.period_month,
+        "SELECT b.id, b.department_id, d.name, b.category_id, COALESCE(c.name, '全部分类'), b.period_month,
                 b.amount_limit,
                 COALESCE((
                   SELECT SUM(m.amount)
@@ -534,15 +534,15 @@ pub fn list_budget_rules(
                   JOIN master_items i ON i.id = m.item_id
                   WHERE m.direction = 'out'
                     AND m.department_id = b.department_id
-                    AND i.category_id = b.category_id
+                    AND (b.category_id IS NULL OR i.category_id = b.category_id)
                     AND strftime('%Y-%m', m.movement_date) = b.period_month
                 ), 0) AS used_amount,
                 b.enabled, b.created_at, b.updated_at
          FROM budget_rules b
          JOIN departments d ON d.id = b.department_id
-         JOIN categories c ON c.id = b.category_id
+         LEFT JOIN categories c ON c.id = b.category_id
          WHERE (?1 IS NULL OR b.period_month = ?1)
-         ORDER BY b.period_month DESC, d.sort_order ASC, c.sort_order ASC, c.name ASC",
+         ORDER BY b.period_month DESC, d.sort_order ASC, b.category_id IS NOT NULL ASC, c.sort_order ASC, c.name ASC",
     )?;
     let rows = stmt.query_map(params![period_month], |row| {
         Ok(BudgetRule {
@@ -574,12 +574,8 @@ pub fn save_budget_rule(
         Some(request.department_id.as_str()),
         "部门",
     )?;
-    require_enabled_reference(
-        conn,
-        "categories",
-        Some(request.category_id.as_str()),
-        "分类",
-    )?;
+    let category_id = blank_to_none(request.category_id.clone());
+    require_enabled_reference(conn, "categories", category_id.as_deref(), "分类")?;
     if is_update {
         require_current_version(
             conn,
@@ -594,7 +590,7 @@ pub fn save_budget_rule(
              WHERE id = ?7",
             params![
                 request.department_id,
-                request.category_id,
+                category_id,
                 request.period_month,
                 request.amount_limit,
                 bool_to_i64(request.enabled),
@@ -611,7 +607,7 @@ pub fn save_budget_rule(
             params![
                 id,
                 request.department_id,
-                request.category_id,
+                category_id,
                 request.period_month,
                 request.amount_limit,
                 bool_to_i64(request.enabled)
@@ -751,7 +747,7 @@ fn get_item(conn: &Connection, id: &str) -> AppResult<Item> {
 
 fn get_budget_rule(conn: &Connection, id: &str) -> AppResult<BudgetRule> {
     Ok(conn.query_row(
-        "SELECT b.id, b.department_id, d.name, b.category_id, c.name, b.period_month,
+        "SELECT b.id, b.department_id, d.name, b.category_id, COALESCE(c.name, '全部分类'), b.period_month,
                 b.amount_limit,
                 COALESCE((
                   SELECT SUM(m.amount)
@@ -759,13 +755,13 @@ fn get_budget_rule(conn: &Connection, id: &str) -> AppResult<BudgetRule> {
                   JOIN master_items i ON i.id = m.item_id
                   WHERE m.direction = 'out'
                     AND m.department_id = b.department_id
-                    AND i.category_id = b.category_id
+                    AND (b.category_id IS NULL OR i.category_id = b.category_id)
                     AND strftime('%Y-%m', m.movement_date) = b.period_month
                 ), 0) AS used_amount,
                 b.enabled, b.created_at, b.updated_at
          FROM budget_rules b
          JOIN departments d ON d.id = b.department_id
-         JOIN categories c ON c.id = b.category_id
+         LEFT JOIN categories c ON c.id = b.category_id
          WHERE b.id = ?1",
         params![id],
         |row| {
@@ -1179,7 +1175,7 @@ mod tests {
                 id: Some("budget-disabled-dept".to_string()),
                 expected_updated_at: None,
                 department_id: "dept-budget-disabled".to_string(),
-                category_id: "cat-budget-disabled".to_string(),
+                category_id: Some("cat-budget-disabled".to_string()),
                 period_month: "2026-06".to_string(),
                 amount_limit: 100.0,
                 enabled: true,
@@ -1194,7 +1190,7 @@ mod tests {
                 id: Some("budget-disabled-cat".to_string()),
                 expected_updated_at: None,
                 department_id: "dept-admin-office".to_string(),
-                category_id: "cat-budget-disabled".to_string(),
+                category_id: Some("cat-budget-disabled".to_string()),
                 period_month: "2026-06".to_string(),
                 amount_limit: 100.0,
                 enabled: true,
@@ -1202,6 +1198,54 @@ mod tests {
         )
         .unwrap_err();
         assert!(category_error.to_string().contains("分类已停用"));
+    }
+
+    #[test]
+    fn save_budget_rule_allows_department_month_total_without_category() {
+        let conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrations::run(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO categories (id, name, enabled) VALUES ('cat-budget-total', '预算分类', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO master_items (id, code, name, category_id, unit_id, default_price)
+             VALUES ('item-budget-total', 'BT-001', '预算物品', 'cat-budget-total', 'unit-piece', 10)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO stock_movements (
+               id, movement_date, item_id, direction, quantity, unit_price, amount,
+               department_id, movement_type
+             )
+             VALUES (
+               'mov-total-used', '2026-06-10', 'item-budget-total', 'out', 3, 10, 30,
+               'dept-admin-office', 'outbound'
+             )",
+            [],
+        )
+        .unwrap();
+
+        let rule = save_budget_rule(
+            &conn,
+            SaveBudgetRuleRequest {
+                id: Some("budget-total".to_string()),
+                expected_updated_at: None,
+                department_id: "dept-admin-office".to_string(),
+                category_id: None,
+                period_month: "2026-06".to_string(),
+                amount_limit: 100.0,
+                enabled: true,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(rule.category_id, None);
+        assert_eq!(rule.category_name, "全部分类");
+        assert_eq!(rule.used_amount, 30.0);
     }
 
     #[test]

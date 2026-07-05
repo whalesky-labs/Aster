@@ -726,7 +726,7 @@ type BudgetRule = {
   id: string;
   departmentId: string;
   departmentName: string;
-  categoryId: string;
+  categoryId?: string | null;
   categoryName: string;
   periodMonth: string;
   amountLimit: number;
@@ -740,7 +740,7 @@ type BudgetRuleDraft = {
   id?: string;
   expectedUpdatedAt?: string;
   departmentId: string;
-  categoryId: string;
+  categoryId?: string | null;
   periodMonth: string;
   amountLimit: number;
   enabled: boolean;
@@ -4519,7 +4519,7 @@ function BudgetRuleEditor({
 }) {
   const [draft, setDraft] = useState<BudgetRuleDraft>({
     departmentId: departments[0]?.id ?? "",
-    categoryId: categories[0]?.id ?? "",
+    categoryId: null,
     periodMonth,
     amountLimit: 0,
     enabled: true,
@@ -4530,7 +4530,7 @@ function BudgetRuleEditor({
         id: rule.id,
         expectedUpdatedAt: rule.updatedAt,
         departmentId: rule.departmentId,
-        categoryId: rule.categoryId,
+        categoryId: rule.categoryId ?? null,
         periodMonth: rule.periodMonth,
         amountLimit: rule.amountLimit,
         enabled: rule.enabled,
@@ -4539,7 +4539,6 @@ function BudgetRuleEditor({
       setDraft((current) => ({
         ...current,
         departmentId: current.departmentId || departments[0]?.id || "",
-        categoryId: current.categoryId || categories[0]?.id || "",
         periodMonth: current.periodMonth || periodMonth,
       }));
     }
@@ -4549,7 +4548,6 @@ function BudgetRuleEditor({
       disabled={
         disabled ||
         !draft.departmentId ||
-        !draft.categoryId ||
         !draft.periodMonth
       }
       saveLabel="保存预算"
@@ -4575,9 +4573,12 @@ function BudgetRuleEditor({
       </Field>
       <Field label="分类">
         <select
-          value={draft.categoryId}
-          onChange={(e) => setDraft({ ...draft, categoryId: e.target.value })}
+          value={draft.categoryId ?? ""}
+          onChange={(e) =>
+            setDraft({ ...draft, categoryId: e.target.value || null })
+          }
         >
+          <option value="">全部分类</option>
           {categories.map((record) => (
             <option key={record.id} value={record.id}>
               {record.name}
@@ -7484,7 +7485,7 @@ function BudgetRulesPage({
           新增预算
         </button>
       }
-      description="预算按部门、分类和月份控制出库领用金额，超出预算时出库确认会被阻止。"
+      description="预算按部门、月份控制内部领用金额，可选分类做精细控制，超出预算时出库确认会被阻止。"
       hideHeading
       title="预算控制"
     >
@@ -7516,7 +7517,7 @@ function BudgetRulesPage({
               <tr key={rule.id}>
                 <td>{rule.periodMonth}</td>
                 <td>{rule.departmentName}</td>
-                <td>{rule.categoryName}</td>
+                <td>{rule.categoryName || "全部分类"}</td>
                 <td>{formatMoney(rule.amountLimit)}</td>
                 <td>{formatMoney(rule.usedAmount)}</td>
                 <td className={remaining < 0 ? "danger-cell" : ""}>

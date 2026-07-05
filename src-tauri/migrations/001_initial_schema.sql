@@ -277,6 +277,12 @@ CREATE INDEX IF NOT EXISTS idx_stock_movements_date ON stock_movements(movement_
 CREATE INDEX IF NOT EXISTS idx_stock_movements_item ON stock_movements(item_id);
 CREATE INDEX IF NOT EXISTS idx_stock_movements_department ON stock_movements(department_id);
 CREATE INDEX IF NOT EXISTS idx_stock_movements_type ON stock_movements(movement_type);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_budget_rules_department_month
+  ON budget_rules(department_id, period_month)
+  WHERE category_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_budget_rules_department_category_month
+  ON budget_rules(department_id, category_id, period_month)
+  WHERE category_id IS NOT NULL;
 
 INSERT OR IGNORE INTO roles (id, code, name) VALUES
   ('role-admin', 'admin', '管理员'),
