@@ -120,19 +120,51 @@ jobs:
 
           const major = Number(match[1]);
           const minor = Number(match[2]);
-          let patch = Number(match[3]);
-          const tags = new Set(
-            execFileSync('git', ['ls-remote', '--tags', 'origin', `refs/tags/v${major}.${minor}.*`], {
-              encoding: 'utf8',
-            })
-              .split(/\r?\n/)
-              .map((line) => line.trim().split(/\s+/)[1])
-              .filter(Boolean)
-              .map((ref) => ref.replace('refs/tags/v', '')),
-          );
+          const basePatch = Number(match[3]);
+          const rawRefs = [];
 
+          function appendRefs(command, args) {
+            try {
+              rawRefs.push(
+                ...execFileSync(command, args, { encoding: 'utf8' })
+                  .split(/\r?\n/)
+                  .map((line) => line.trim())
+                  .filter(Boolean),
+              );
+            } catch (error) {
+              const detail = error.stderr?.toString()?.trim() || error.message;
+              console.error(`[version] Unable to read tags from ${command} ${args.join(' ')}: ${detail}`);
+            }
+          }
+
+          appendRefs('git', ['tag', '--list', `v${major}.${minor}.*`]);
+          appendRefs('git', ['ls-remote', '--tags', 'origin', `refs/tags/v${major}.${minor}.*`]);
+
+          const versions = rawRefs
+            .flatMap((line) => line.split(/\s+/))
+            .map((ref) => ref.replace(/\^\{\}$/, ''))
+            .map((ref) => ref.replace(/^refs\/tags\//, ''))
+            .map((ref) => ref.replace(/^v/, ''))
+            .map((value) => value.match(/^(\d+)\.(\d+)\.(\d+)$/))
+            .filter(Boolean)
+            .map((tagMatch) => ({
+              major: Number(tagMatch[1]),
+              minor: Number(tagMatch[2]),
+              patch: Number(tagMatch[3]),
+            }))
+            .filter((value) => value.major === major && value.minor === minor);
+
+          const highestExistingPatch = versions.reduce(
+            (current, value) => Math.max(current, value.patch),
+            basePatch - 1,
+          );
+          let patch = Math.max(basePatch, highestExistingPatch + 1);
           let nextVersion = `${major}.${minor}.${patch}`;
-          while (tags.has(nextVersion)) {
+
+          const existingVersions = new Set(
+            versions.map((value) => `${value.major}.${value.minor}.${value.patch}`),
+          );
+          while (existingVersions.has(nextVersion)) {
             patch += 1;
             nextVersion = `${major}.${minor}.${patch}`;
           }

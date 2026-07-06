@@ -315,7 +315,7 @@ const requirements = [
       ["客户端未配对只允许本机管理员配对设置", "userService", "client_mode_without_pairing_token_allows_local_admin_for_pairing_setup"],
       ["审计日志查询有测试覆盖", "repository", "list_audit_logs_returns_latest_rows_with_limit"],
       ["系统设置保存写审计日志有测试覆盖", "statusService", "save_system_settings_persists_values_and_writes_audit_log"],
-      ["系统设置保存限制客户端模式", "statusService", "save_system_settings_rejects_client_mode_even_for_admin"],
+      ["客户端模式系统设置仅保存本机目录", "statusService", "save_system_settings_in_client_mode_only_persists_local_directories"],
       ["前端按权限隐藏模块", "app", "canAccessNav"],
     ],
   },
