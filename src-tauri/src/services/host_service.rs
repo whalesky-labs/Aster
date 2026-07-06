@@ -3060,6 +3060,7 @@ mod tests {
             "spec": null,
             "unitId": null,
             "defaultPrice": -1,
+            "salePrice": 0,
             "supplierId": null,
             "warningQuantity": 0,
             "enabled": true,
@@ -3075,7 +3076,7 @@ mod tests {
                 item_body
             ),
         );
-        assert!(item_response.contains("默认单价不能小于 0"));
+        assert!(item_response.contains("参考进价不能小于 0"));
 
         let (unit_count, item_count): (i64, i64) = db
             .with_conn(|conn| {
