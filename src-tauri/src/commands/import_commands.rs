@@ -1,7 +1,9 @@
 use tauri::State;
 
 use crate::app::state::AppState;
-use crate::domain::imports::{ImportPreview, ImportPreviewRequest, ImportResult, RunImportRequest};
+use crate::domain::imports::{
+    ExportImportTemplateResult, ImportPreview, ImportPreviewRequest, ImportResult, RunImportRequest,
+};
 use crate::error::AppResult;
 use crate::services::import_service;
 
@@ -11,6 +13,11 @@ pub fn preview_excel_import(
     request: ImportPreviewRequest,
 ) -> AppResult<ImportPreview> {
     import_service::preview_excel_import(&state, request)
+}
+
+#[tauri::command]
+pub fn export_import_template(state: State<'_, AppState>) -> AppResult<ExportImportTemplateResult> {
+    import_service::export_import_template(&state)
 }
 
 #[tauri::command]

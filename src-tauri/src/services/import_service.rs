@@ -3,45 +3,52 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use calamine::{open_workbook_auto, Data, Reader};
-use chrono::NaiveDate;
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, OptionalExtension};
+use rust_xlsxwriter::{Format, Workbook, XlsxError};
 use serde::Serialize;
 use uuid::Uuid;
 
 use crate::app::state::AppState;
+use crate::db::stock_repository;
 use crate::domain::imports::{
-    ImportItemPreview, ImportMessage, ImportMonthPreview, ImportPreview, ImportPreviewRequest,
-    ImportResult, RunImportRequest,
+    ExportImportTemplateResult, ImportItemPreview, ImportMessage, ImportMonthPreview,
+    ImportPreview, ImportPreviewRequest, ImportResult, RunImportRequest,
 };
+use crate::domain::stock::{SubmitStockDocumentLine, SubmitStockDocumentRequest};
 use crate::error::{AppError, AppResult};
 use crate::services::backup_service;
 
-const DEPARTMENT_COLUMNS: [(&str, usize, Option<usize>); 8] = [
-    ("行政办", 11, Some(12)),
-    ("餐饮", 13, Some(14)),
-    ("温泉+前台", 15, Some(16)),
-    ("客房", 17, Some(18)),
-    ("工程", 19, Some(20)),
-    ("安保", 21, Some(22)),
-    ("妇女之家", 23, Some(24)),
-    ("调物品", 25, None),
-];
+const ITEM_SHEET: &str = "物品档案";
+const INBOUND_SHEET: &str = "入库明细";
+const OUTBOUND_SHEET: &str = "出库明细";
+const TEMPLATE_FILE_NAME: &str = "Aster-Excel导入模板.xlsx";
 
 pub fn preview_excel_import(
     state: &AppState,
     request: ImportPreviewRequest,
 ) -> AppResult<ImportPreview> {
     crate::services::safety_service::require_local_primary_database(state, "预览 Excel 导入")?;
-    let parsed = parse_legacy_workbook(&request.path)?;
+    let parsed = parse_import_template_workbook(&request.path)?;
     state
         .db
         .with_conn(|conn| build_preview(conn, &request.path, parsed))
 }
 
+pub fn export_import_template(state: &AppState) -> AppResult<ExportImportTemplateResult> {
+    crate::services::user_service::require_permission(state, "write_stock")?;
+    let export_dir = crate::services::status_service::effective_export_dir(state)?;
+    fs::create_dir_all(&export_dir)?;
+    let path = export_dir.join(TEMPLATE_FILE_NAME);
+    write_import_template_workbook(&path)?;
+    Ok(ExportImportTemplateResult {
+        path: path.display().to_string(),
+    })
+}
+
 pub fn run_excel_import(state: &AppState, request: RunImportRequest) -> AppResult<ImportResult> {
     crate::services::safety_service::require_dangerous_local_operation(state, "正式导入 Excel")?;
     let mode = ImportMode::from_request(request.mode.as_deref())?;
-    let parsed = parse_legacy_workbook(&request.path)?;
+    let parsed = parse_import_template_workbook(&request.path)?;
     if !parsed.errors.is_empty() {
         return Err(AppError::Validation(format!(
             "导入预览存在 {} 个错误，请修正 Excel 后再导入",
@@ -61,20 +68,26 @@ pub fn run_excel_import(state: &AppState, request: RunImportRequest) -> AppResul
     }
 
     backup_service::create_backup_of_type(state, "before_import")?;
+    let allow_negative_stock = crate::services::status_service::allow_negative_stock(state)?;
 
     state.db.with_conn_mut(|conn| {
-        let mut tx = conn.transaction()?;
         let job_id = new_id();
-        let preview = build_preview_for_tx(&tx, &source_file, &parsed)?;
+        let preview = build_preview_from_parts(conn, &source_file, &parsed)?;
         if !preview.errors.is_empty() {
             return Err(AppError::Validation(format!(
                 "导入预览存在 {} 个错误，请修正 Excel 后再导入",
                 preview.errors.len()
             )));
         }
-        let result =
-            import_parsed_workbook(&mut tx, &source_file, &job_id, &parsed, &preview, mode)?;
-        tx.commit()?;
+        let result = import_parsed_workbook(
+            conn,
+            &source_file,
+            &job_id,
+            &parsed,
+            &preview,
+            mode,
+            allow_negative_stock,
+        )?;
         let source_copy_path =
             write_import_source_copy(&state.paths.import_report_dir, &source_file)?;
         let report_path = write_import_report(
@@ -92,7 +105,7 @@ pub fn run_excel_import(state: &AppState, request: RunImportRequest) -> AppResul
     })
 }
 
-fn parse_legacy_workbook(path: &str) -> AppResult<ParsedWorkbook> {
+fn parse_import_template_workbook(path: &str) -> AppResult<ParsedWorkbook> {
     let path_ref = Path::new(path);
     if !path_ref.exists() {
         return Err(AppError::Validation(format!("Excel 文件不存在：{path}")));
@@ -100,313 +113,429 @@ fn parse_legacy_workbook(path: &str) -> AppResult<ParsedWorkbook> {
 
     let mut workbook = open_workbook_auto(path_ref)
         .map_err(|error| AppError::Validation(format!("无法读取 Excel：{error}")))?;
+    let sheet_names = workbook.sheet_names().to_owned();
+    let mut missing_sheets = [ITEM_SHEET, INBOUND_SHEET, OUTBOUND_SHEET]
+        .into_iter()
+        .filter(|sheet| !sheet_names.iter().any(|name| name.trim() == *sheet))
+        .collect::<Vec<_>>();
+    if !missing_sheets.is_empty() {
+        missing_sheets.sort();
+        return Err(AppError::Validation(format!(
+            "导入模板不匹配：缺少工作表 {}。请使用系统导出的新版模板。",
+            missing_sheets.join("、")
+        )));
+    }
 
-    let mut rows = Vec::new();
     let mut warnings = Vec::new();
     let mut errors = Vec::new();
-    let mut parsed_sheets = HashSet::new();
-    let mut seen_rows = HashSet::new();
+    let item_sheet = workbook
+        .worksheet_range(ITEM_SHEET)
+        .map_err(|error| AppError::Validation(format!("读取工作表失败：{ITEM_SHEET}：{error}")))?;
+    let inbound_sheet = workbook.worksheet_range(INBOUND_SHEET).map_err(|error| {
+        AppError::Validation(format!("读取工作表失败：{INBOUND_SHEET}：{error}"))
+    })?;
+    let outbound_sheet = workbook.worksheet_range(OUTBOUND_SHEET).map_err(|error| {
+        AppError::Validation(format!("读取工作表失败：{OUTBOUND_SHEET}：{error}"))
+    })?;
 
-    for sheet_name in workbook.sheet_names().to_owned() {
-        let range = workbook.worksheet_range(&sheet_name).map_err(|error| {
-            AppError::Validation(format!("读取工作表失败：{sheet_name}：{error}"))
-        })?;
-
-        if let Some(month) = parse_sheet_month(&sheet_name) {
-            parsed_sheets.insert(sheet_name.clone());
-            parse_legacy_sheet(
-                &sheet_name,
-                &month,
-                &range,
-                &mut rows,
-                &mut warnings,
-                &mut errors,
-                &mut seen_rows,
-            );
-            continue;
-        }
-
-        if let Some(header) = TemplateHeader::from_range(&range) {
-            parsed_sheets.insert(sheet_name.clone());
-            parse_template_sheet(
-                &sheet_name,
-                &range,
-                &header,
-                &mut rows,
-                &mut warnings,
-                &mut errors,
-                &mut seen_rows,
-            );
-        }
-    }
-
-    if parsed_sheets.is_empty() {
-        return Err(AppError::Validation(
-            "未找到可识别的工作表。旧表工作表名应类似 2026.1、2026.02；通用模板需包含月份、物品名称等表头".to_string(),
-        ));
-    }
+    let mut items = parse_item_sheet(&item_sheet, &mut warnings, &mut errors)?;
+    let inbound_rows = parse_inbound_sheet(&inbound_sheet, &mut items, &mut warnings, &mut errors)?;
+    let outbound_rows =
+        parse_outbound_sheet(&outbound_sheet, &mut items, &mut warnings, &mut errors)?;
 
     Ok(ParsedWorkbook {
-        rows,
+        items: items.into_values().collect(),
+        inbound_rows,
+        outbound_rows,
         warnings,
         errors,
-        sheet_count: parsed_sheets.len(),
+        sheet_count: 3,
     })
 }
 
-fn parse_legacy_sheet(
-    sheet_name: &str,
-    month: &str,
+fn parse_item_sheet(
     range: &calamine::Range<Data>,
-    rows: &mut Vec<ParsedRow>,
     warnings: &mut Vec<ImportMessage>,
     errors: &mut Vec<ImportMessage>,
-    seen_rows: &mut HashSet<(String, String, String)>,
-) {
-    for (row_index, row) in range.rows().enumerate() {
-        let excel_row = row_index + 1;
-        let item_name = text_at(row, 0);
-        if item_name.trim().is_empty() {
-            if row.iter().all(is_empty_cell) {
-                continue;
-            }
-            errors.push(message(
-                "error",
-                sheet_name,
-                excel_row,
-                Some("A"),
-                "物品名称不能为空",
-            ));
-            continue;
-        }
-        if should_skip_row(&item_name) {
-            continue;
-        }
-
-        let category_name = empty_to_none(text_at(row, 1));
-        let unit_name = empty_to_none(text_at(row, 5));
-        let spec = empty_to_none(text_at(row, 6));
-        let opening_quantity = number_at(row, 2).unwrap_or(0.0);
-        let opening_price = number_at(row, 3).unwrap_or(0.0);
-        let opening_amount = number_at(row, 4).unwrap_or_else(|| opening_quantity * opening_price);
-        let inbound_quantity = number_at(row, 7).unwrap_or(0.0);
-        let inbound_price = number_at(row, 8).unwrap_or(0.0);
-        let inbound_amount = number_at(row, 9).unwrap_or_else(|| inbound_quantity * inbound_price);
-        let average_price = number_at(row, 10)
-            .or_else(|| positive_price(opening_quantity, opening_amount))
-            .or_else(|| positive_price(inbound_quantity, inbound_amount))
-            .unwrap_or(0.0);
-
-        detect_formula_errors(sheet_name, excel_row, row, errors);
-        validate_import_row(
-            sheet_name,
-            excel_row,
-            month,
-            &item_name,
-            unit_name.as_deref(),
-            opening_quantity,
-            opening_price,
-            Some(opening_amount),
-            inbound_quantity,
-            inbound_price,
-            Some(inbound_amount),
-            None,
-            None,
-            seen_rows,
-            warnings,
-            errors,
-        );
-
-        let mut outbound_lines = Vec::new();
-        for (department_name, quantity_col, amount_col) in DEPARTMENT_COLUMNS {
-            let quantity = number_at(row, quantity_col).unwrap_or(0.0);
-            let amount = amount_col
-                .and_then(|col| number_at(row, col))
-                .unwrap_or_else(|| quantity * average_price);
-            if quantity > 0.0 {
-                outbound_lines.push(ParsedDepartmentIssue {
-                    department_name: department_name.to_string(),
-                    quantity,
-                    amount: round_money(amount),
-                });
-            }
-        }
-
-        detect_unmapped_legacy_department_columns(sheet_name, excel_row, row, warnings);
-
-        rows.push(ParsedRow {
-            sheet_name: sheet_name.to_string(),
-            row_number: excel_row,
-            month: month.to_string(),
-            item_name: normalized_name(&item_name),
-            category_name,
-            unit_name,
-            spec,
-            opening_quantity,
-            opening_price,
-            opening_amount: round_money(opening_amount),
-            inbound_quantity,
-            inbound_price,
-            inbound_amount: round_money(inbound_amount),
-            average_price,
-            outbound_lines,
-        });
-    }
-}
-
-fn parse_template_sheet(
-    sheet_name: &str,
-    range: &calamine::Range<Data>,
-    header: &TemplateHeader,
-    rows: &mut Vec<ParsedRow>,
-    warnings: &mut Vec<ImportMessage>,
-    errors: &mut Vec<ImportMessage>,
-    seen_rows: &mut HashSet<(String, String, String)>,
-) {
+) -> AppResult<BTreeMap<String, ParsedItem>> {
+    let header = SheetHeader::from_range(range, ITEM_SHEET, &["物品名称"])?;
+    let mut items = BTreeMap::new();
     for (row_index, row) in range.rows().enumerate().skip(header.row_index + 1) {
         let excel_row = row_index + 1;
-        let item_name = text_at(row, header.item_name);
-        if item_name.trim().is_empty() {
-            if row.iter().all(is_empty_cell) {
-                continue;
-            }
+        if row.iter().all(is_empty_cell) {
+            continue;
+        }
+        detect_formula_errors(ITEM_SHEET, excel_row, row, errors);
+        let name = normalized_name(&header.text(row, "物品名称"));
+        if name.is_empty() {
             errors.push(message(
                 "error",
-                sheet_name,
+                ITEM_SHEET,
                 excel_row,
-                None,
+                Some("物品名称"),
                 "物品名称不能为空",
             ));
             continue;
         }
-
-        let Some(month) = header
-            .month
-            .and_then(|index| parse_month_cell(row.get(index)))
-            .or_else(|| {
-                header
-                    .business_date
-                    .and_then(|index| parse_month_cell(row.get(index)))
-            })
-        else {
+        let code = header
+            .optional_text(row, "物品编码")
+            .filter(|value| !value.is_empty());
+        let key = item_lookup_key(code.as_deref(), &name);
+        if items.contains_key(&key) {
             errors.push(message(
                 "error",
-                sheet_name,
+                ITEM_SHEET,
+                excel_row,
+                Some("物品名称"),
+                "物品档案中物品编码/名称重复",
+            ));
+            continue;
+        }
+        let unit_name = header
+            .optional_text(row, "单位")
+            .filter(|value| !value.is_empty());
+        if unit_name.is_none() {
+            errors.push(message(
+                "error",
+                ITEM_SHEET,
+                excel_row,
+                Some("单位"),
+                "单位不能为空",
+            ));
+        }
+        let default_price = header.optional_number(row, "参考进价").unwrap_or(0.0);
+        let sale_price = header.optional_number(row, "参考售价").unwrap_or(0.0);
+        let warning_quantity = header.optional_number(row, "预警库存").unwrap_or(0.0);
+        if default_price < 0.0 || sale_price < 0.0 || warning_quantity < 0.0 {
+            errors.push(message(
+                "error",
+                ITEM_SHEET,
                 excel_row,
                 None,
-                "通用模板必须填写月份，格式示例：2026-06",
+                "参考进价、参考售价和预警库存不能小于 0",
+            ));
+        }
+        items.insert(
+            key.clone(),
+            ParsedItem {
+                key,
+                sheet_name: ITEM_SHEET.to_string(),
+                row_number: excel_row,
+                code,
+                name,
+                category_name: header
+                    .optional_text(row, "分类")
+                    .filter(|value| !value.is_empty()),
+                spec: header
+                    .optional_text(row, "规格")
+                    .filter(|value| !value.is_empty()),
+                unit_name,
+                default_price,
+                sale_price,
+                warning_quantity,
+                remark: header
+                    .optional_text(row, "备注")
+                    .filter(|value| !value.is_empty()),
+            },
+        );
+    }
+    if items.is_empty() {
+        warnings.push(message(
+            "warning",
+            ITEM_SHEET,
+            1,
+            None,
+            "物品档案为空，将仅根据入库/出库明细自动补充物品档案",
+        ));
+    }
+    Ok(items)
+}
+
+fn parse_inbound_sheet(
+    range: &calamine::Range<Data>,
+    items: &mut BTreeMap<String, ParsedItem>,
+    warnings: &mut Vec<ImportMessage>,
+    errors: &mut Vec<ImportMessage>,
+) -> AppResult<Vec<ParsedInboundLine>> {
+    let header = SheetHeader::from_range(
+        range,
+        INBOUND_SHEET,
+        &["业务时间", "物品名称", "数量", "进货单价"],
+    )?;
+    let mut rows = Vec::new();
+    for (row_index, row) in range.rows().enumerate().skip(header.row_index + 1) {
+        let excel_row = row_index + 1;
+        if row.iter().all(is_empty_cell) {
+            continue;
+        }
+        detect_formula_errors(INBOUND_SHEET, excel_row, row, errors);
+        let business_date = match header.datetime(row, "业务时间") {
+            Ok(Some(value)) => value,
+            Ok(None) => {
+                errors.push(message(
+                    "error",
+                    INBOUND_SHEET,
+                    excel_row,
+                    Some("业务时间"),
+                    "业务时间不能为空，格式示例：2026-06-01 09:00:00",
+                ));
+                continue;
+            }
+            Err(error) => {
+                errors.push(message(
+                    "error",
+                    INBOUND_SHEET,
+                    excel_row,
+                    Some("业务时间"),
+                    &error,
+                ));
+                continue;
+            }
+        };
+        let item_name = normalized_name(&header.text(row, "物品名称"));
+        if item_name.is_empty() {
+            errors.push(message(
+                "error",
+                INBOUND_SHEET,
+                excel_row,
+                Some("物品名称"),
+                "物品名称不能为空",
+            ));
+            continue;
+        }
+        let item_code = header
+            .optional_text(row, "物品编码")
+            .filter(|value| !value.is_empty());
+        let key = item_lookup_key(item_code.as_deref(), &item_name);
+        ensure_parsed_item_from_line(
+            items,
+            &key,
+            item_code,
+            &item_name,
+            &header,
+            row,
+            INBOUND_SHEET,
+            excel_row,
+        );
+        let quantity = header.optional_number(row, "数量").unwrap_or(0.0);
+        let unit_price = header.optional_number(row, "进货单价").unwrap_or(0.0);
+        let amount = header
+            .optional_number(row, "进货金额")
+            .unwrap_or_else(|| quantity * unit_price);
+        if quantity <= 0.0 {
+            errors.push(message(
+                "error",
+                INBOUND_SHEET,
+                excel_row,
+                Some("数量"),
+                "入库数量必须大于 0",
+            ));
+        }
+        if unit_price < 0.0 || amount < 0.0 {
+            errors.push(message(
+                "error",
+                INBOUND_SHEET,
+                excel_row,
+                None,
+                "进货单价和进货金额不能小于 0",
+            ));
+        }
+        warn_amount_mismatch(
+            INBOUND_SHEET,
+            excel_row,
+            "进货金额",
+            quantity,
+            unit_price,
+            Some(amount),
+            warnings,
+        );
+        rows.push(ParsedInboundLine {
+            sheet_name: INBOUND_SHEET.to_string(),
+            row_number: excel_row,
+            business_date,
+            supplier_name: header
+                .optional_text(row, "供应商")
+                .filter(|value| !value.is_empty()),
+            item_key: key,
+            quantity,
+            unit_price,
+            amount: round_money(amount),
+            handler: header
+                .optional_text(row, "经办人")
+                .filter(|value| !value.is_empty()),
+            remark: header
+                .optional_text(row, "备注")
+                .filter(|value| !value.is_empty()),
+        });
+    }
+    Ok(rows)
+}
+
+fn parse_outbound_sheet(
+    range: &calamine::Range<Data>,
+    items: &mut BTreeMap<String, ParsedItem>,
+    _warnings: &mut Vec<ImportMessage>,
+    errors: &mut Vec<ImportMessage>,
+) -> AppResult<Vec<ParsedOutboundLine>> {
+    let header = SheetHeader::from_range(
+        range,
+        OUTBOUND_SHEET,
+        &["业务时间", "出库类型", "部门", "物品名称", "数量"],
+    )?;
+    let mut rows = Vec::new();
+    for (row_index, row) in range.rows().enumerate().skip(header.row_index + 1) {
+        let excel_row = row_index + 1;
+        if row.iter().all(is_empty_cell) {
+            continue;
+        }
+        detect_formula_errors(OUTBOUND_SHEET, excel_row, row, errors);
+        let business_date = match header.datetime(row, "业务时间") {
+            Ok(Some(value)) => value,
+            Ok(None) => {
+                errors.push(message(
+                    "error",
+                    OUTBOUND_SHEET,
+                    excel_row,
+                    Some("业务时间"),
+                    "业务时间不能为空，格式示例：2026-06-01 09:00:00",
+                ));
+                continue;
+            }
+            Err(error) => {
+                errors.push(message(
+                    "error",
+                    OUTBOUND_SHEET,
+                    excel_row,
+                    Some("业务时间"),
+                    &error,
+                ));
+                continue;
+            }
+        };
+        let outbound_kind_text = header.text(row, "出库类型");
+        let Some(outbound_kind) = parse_outbound_kind(&outbound_kind_text) else {
+            errors.push(message(
+                "error",
+                OUTBOUND_SHEET,
+                excel_row,
+                Some("出库类型"),
+                "出库类型只能填写：内部领用 或 酒店客人销售",
             ));
             continue;
         };
-        detect_formula_errors(sheet_name, excel_row, row, errors);
-
-        let opening_quantity = header
-            .opening_quantity
-            .and_then(|index| number_at(row, index))
-            .unwrap_or(0.0);
-        let opening_price = header
-            .opening_price
-            .and_then(|index| number_at(row, index))
-            .unwrap_or(0.0);
-        let opening_amount = header
-            .opening_amount
-            .and_then(|index| number_at(row, index))
-            .unwrap_or_else(|| opening_quantity * opening_price);
-        let inbound_quantity = header
-            .inbound_quantity
-            .and_then(|index| number_at(row, index))
-            .unwrap_or(0.0);
-        let inbound_price = header
-            .inbound_price
-            .and_then(|index| number_at(row, index))
-            .unwrap_or(0.0);
-        let inbound_amount = header
-            .inbound_amount
-            .and_then(|index| number_at(row, index))
-            .unwrap_or_else(|| inbound_quantity * inbound_price);
-        let average_price = header
-            .average_price
-            .and_then(|index| number_at(row, index))
-            .or_else(|| positive_price(opening_quantity, opening_amount))
-            .or_else(|| positive_price(inbound_quantity, inbound_amount))
-            .unwrap_or_else(|| first_positive(opening_price, inbound_price, 0.0));
-
-        let outbound_quantity = header
-            .outbound_quantity
-            .and_then(|index| number_at(row, index))
-            .unwrap_or(0.0);
-        let outbound_amount = header
-            .outbound_amount
-            .and_then(|index| number_at(row, index))
-            .unwrap_or_else(|| outbound_quantity * average_price);
-        let department_name = header
-            .department_name
-            .map(|index| text_at(row, index))
-            .unwrap_or_default();
-        validate_import_row(
-            sheet_name,
-            excel_row,
-            &month,
-            &item_name,
-            header
-                .unit_name
-                .and_then(|index| empty_to_none(text_at(row, index)))
-                .as_deref(),
-            opening_quantity,
-            opening_price,
-            header.opening_amount.and_then(|_| Some(opening_amount)),
-            inbound_quantity,
-            inbound_price,
-            header.inbound_amount.and_then(|_| Some(inbound_amount)),
-            Some(outbound_quantity),
-            header.outbound_amount.and_then(|_| Some(outbound_amount)),
-            seen_rows,
-            warnings,
-            errors,
-        );
-        let mut outbound_lines = Vec::new();
-        if outbound_quantity > 0.0 {
-            if department_name.trim().is_empty() {
-                errors.push(message(
-                    "error",
-                    sheet_name,
-                    excel_row,
-                    None,
-                    "出库数量大于 0 时必须填写出库部门",
-                ));
-            } else {
-                outbound_lines.push(ParsedDepartmentIssue {
-                    department_name: normalized_name(&department_name),
-                    quantity: outbound_quantity,
-                    amount: round_money(outbound_amount),
-                });
-            }
+        let department_name = normalized_name(&header.text(row, "部门"));
+        if department_name.is_empty() {
+            errors.push(message(
+                "error",
+                OUTBOUND_SHEET,
+                excel_row,
+                Some("部门"),
+                "部门不能为空",
+            ));
         }
-
-        rows.push(ParsedRow {
-            sheet_name: sheet_name.to_string(),
+        let item_name = normalized_name(&header.text(row, "物品名称"));
+        if item_name.is_empty() {
+            errors.push(message(
+                "error",
+                OUTBOUND_SHEET,
+                excel_row,
+                Some("物品名称"),
+                "物品名称不能为空",
+            ));
+            continue;
+        }
+        let item_code = header
+            .optional_text(row, "物品编码")
+            .filter(|value| !value.is_empty());
+        let key = item_lookup_key(item_code.as_deref(), &item_name);
+        ensure_parsed_item_from_line(
+            items,
+            &key,
+            item_code,
+            &item_name,
+            &header,
+            row,
+            OUTBOUND_SHEET,
+            excel_row,
+        );
+        let quantity = header.optional_number(row, "数量").unwrap_or(0.0);
+        if quantity <= 0.0 {
+            errors.push(message(
+                "error",
+                OUTBOUND_SHEET,
+                excel_row,
+                Some("数量"),
+                "出库数量必须大于 0",
+            ));
+        }
+        let sale_unit_price = header.optional_number(row, "销售单价").unwrap_or(0.0);
+        if sale_unit_price < 0.0 {
+            errors.push(message(
+                "error",
+                OUTBOUND_SHEET,
+                excel_row,
+                Some("销售单价"),
+                "销售单价不能小于 0",
+            ));
+        }
+        rows.push(ParsedOutboundLine {
+            sheet_name: OUTBOUND_SHEET.to_string(),
             row_number: excel_row,
-            month,
-            item_name: normalized_name(&item_name),
-            category_name: header
-                .category_name
-                .and_then(|index| empty_to_none(text_at(row, index))),
-            unit_name: header
-                .unit_name
-                .and_then(|index| empty_to_none(text_at(row, index))),
-            spec: header
-                .spec
-                .and_then(|index| empty_to_none(text_at(row, index))),
-            opening_quantity,
-            opening_price,
-            opening_amount: round_money(opening_amount),
-            inbound_quantity,
-            inbound_price,
-            inbound_amount: round_money(inbound_amount),
-            average_price,
-            outbound_lines,
+            business_date,
+            outbound_kind: outbound_kind.to_string(),
+            department_name,
+            item_key: key,
+            quantity,
+            sale_unit_price,
+            handler: header
+                .optional_text(row, "经办人")
+                .filter(|value| !value.is_empty()),
+            purpose: header
+                .optional_text(row, "用途")
+                .filter(|value| !value.is_empty()),
+            remark: header
+                .optional_text(row, "备注")
+                .filter(|value| !value.is_empty()),
         });
     }
+    Ok(rows)
+}
+
+fn ensure_parsed_item_from_line(
+    items: &mut BTreeMap<String, ParsedItem>,
+    key: &str,
+    code: Option<String>,
+    name: &str,
+    header: &SheetHeader,
+    row: &[Data],
+    sheet_name: &str,
+    excel_row: usize,
+) {
+    items.entry(key.to_string()).or_insert_with(|| {
+        let default_price = header
+            .optional_number(row, "参考进价")
+            .unwrap_or_else(|| header.optional_number(row, "进货单价").unwrap_or(0.0));
+        ParsedItem {
+            key: key.to_string(),
+            sheet_name: sheet_name.to_string(),
+            row_number: excel_row,
+            code,
+            name: name.to_string(),
+            category_name: header
+                .optional_text(row, "分类")
+                .filter(|value| !value.is_empty()),
+            spec: header
+                .optional_text(row, "规格")
+                .filter(|value| !value.is_empty()),
+            unit_name: header
+                .optional_text(row, "单位")
+                .filter(|value| !value.is_empty()),
+            default_price,
+            sale_price: header.optional_number(row, "参考售价").unwrap_or(0.0),
+            warning_quantity: 0.0,
+            remark: None,
+        }
+    });
 }
 
 fn build_preview(
@@ -417,128 +546,76 @@ fn build_preview(
     build_preview_from_parts(conn, source_file, &parsed)
 }
 
-fn build_preview_for_tx(
-    tx: &Transaction<'_>,
-    source_file: &str,
-    parsed: &ParsedWorkbook,
-) -> AppResult<ImportPreview> {
-    build_preview_from_parts(tx, source_file, parsed)
-}
-
 fn build_preview_from_parts(
     conn: &Connection,
     source_file: &str,
     parsed: &ParsedWorkbook,
 ) -> AppResult<ImportPreview> {
-    let existing_names = existing_item_names(conn)?;
+    let existing_keys = existing_item_keys(conn)?;
     let mut item_map: BTreeMap<String, ImportItemAccumulator> = BTreeMap::new();
     let mut month_map: BTreeMap<String, ImportMonthAccumulator> = BTreeMap::new();
-    let mut opening_seen = HashSet::new();
-    let mut document_keys = HashSet::new();
 
-    for row in &parsed.rows {
-        let item = item_map
-            .entry(row.item_name.clone())
+    for item in &parsed.items {
+        item_map
+            .entry(item.key.clone())
             .or_insert_with(|| ImportItemAccumulator {
-                category_name: row.category_name.clone(),
-                spec: row.spec.clone(),
-                unit_name: row.unit_name.clone(),
-                default_price: first_positive(
-                    row.average_price,
-                    row.inbound_price,
-                    row.opening_price,
-                ),
+                name: item.name.clone(),
+                category_name: item.category_name.clone(),
+                spec: item.spec.clone(),
+                unit_name: item.unit_name.clone(),
+                default_price: item.default_price,
                 opening_quantity: 0.0,
                 inbound_quantity: 0.0,
                 outbound_quantity: 0.0,
-                existing: existing_names.contains(&row.item_name),
+                existing: existing_keys.contains(&item.key),
             });
-
-        if item.default_price <= 0.0 {
-            item.default_price =
-                first_positive(row.average_price, row.inbound_price, row.opening_price);
+    }
+    for line in &parsed.inbound_rows {
+        if let Some(item) = item_map.get_mut(&line.item_key) {
+            item.inbound_quantity += line.quantity.max(0.0);
         }
-        item.inbound_quantity += row.inbound_quantity.max(0.0);
-        if !opening_seen.contains(&row.item_name) && row.opening_quantity > 0.0 {
-            item.opening_quantity += row.opening_quantity;
-            opening_seen.insert(row.item_name.clone());
-            document_keys.insert((row.month.clone(), "opening".to_string(), "期初".to_string()));
-        }
-        for issue in &row.outbound_lines {
-            item.outbound_quantity += issue.quantity;
-            document_keys.insert((
-                row.month.clone(),
-                "outbound".to_string(),
-                issue.department_name.clone(),
-            ));
-        }
-        if row.inbound_quantity > 0.0 {
-            document_keys.insert((
-                row.month.clone(),
-                "inbound".to_string(),
-                "导入入库".to_string(),
-            ));
-        }
-
-        let month = month_map.entry(row.month.clone()).or_default();
+        let month = month_map
+            .entry(month_from_datetime(&line.business_date))
+            .or_default();
         month.row_count += 1;
-        if !opening_seen.contains(&format!("{}:{}", row.month, row.item_name))
-            && row.opening_quantity > 0.0
-        {
-            month.opening_quantity += row.opening_quantity;
+        month.inbound_quantity += line.quantity.max(0.0);
+    }
+    for line in &parsed.outbound_rows {
+        if let Some(item) = item_map.get_mut(&line.item_key) {
+            item.outbound_quantity += line.quantity.max(0.0);
         }
-        month.inbound_quantity += row.inbound_quantity.max(0.0);
-        for issue in &row.outbound_lines {
-            month.outbound_quantity += issue.quantity;
-            month.outbound_amount += issue.amount;
-        }
+        let month = month_map
+            .entry(month_from_datetime(&line.business_date))
+            .or_default();
+        month.row_count += 1;
+        month.outbound_quantity += line.quantity.max(0.0);
+        month.outbound_amount += round_money(line.quantity * line.sale_unit_price);
     }
 
-    let mut first_opening_items = HashSet::new();
-    let opening_quantity = parsed
-        .rows
-        .iter()
-        .filter(|row| {
-            row.opening_quantity > 0.0 && first_opening_items.insert(row.item_name.clone())
-        })
-        .map(|row| row.opening_quantity)
-        .sum();
-    let mut first_opening_amount_items = HashSet::new();
-    let opening_amount = parsed
-        .rows
-        .iter()
-        .filter(|row| {
-            row.opening_amount > 0.0 && first_opening_amount_items.insert(row.item_name.clone())
-        })
-        .map(|row| row.opening_amount)
-        .sum();
     let inbound_quantity = parsed
-        .rows
+        .inbound_rows
         .iter()
-        .map(|row| row.inbound_quantity.max(0.0))
+        .map(|row| row.quantity.max(0.0))
         .sum();
     let inbound_amount = parsed
-        .rows
+        .inbound_rows
         .iter()
-        .map(|row| row.inbound_amount.max(0.0))
+        .map(|row| row.amount.max(0.0))
         .sum();
     let outbound_quantity = parsed
-        .rows
+        .outbound_rows
         .iter()
-        .flat_map(|row| &row.outbound_lines)
-        .map(|line| line.quantity)
+        .map(|row| row.quantity.max(0.0))
         .sum();
     let outbound_amount = parsed
-        .rows
+        .outbound_rows
         .iter()
-        .flat_map(|row| &row.outbound_lines)
-        .map(|line| line.amount)
+        .map(|row| round_money(row.quantity * row.sale_unit_price))
         .sum();
-
     let items = item_map
-        .into_iter()
-        .map(|(name, item)| ImportItemPreview {
-            name,
+        .into_values()
+        .map(|item| ImportItemPreview {
+            name: item.name,
             category_name: item.category_name,
             spec: item.spec,
             unit_name: item.unit_name,
@@ -554,17 +631,17 @@ fn build_preview_from_parts(
     Ok(ImportPreview {
         source_file: source_file.to_string(),
         sheet_count: parsed.sheet_count,
-        row_count: parsed.rows.len(),
+        row_count: parsed.items.len() + parsed.inbound_rows.len() + parsed.outbound_rows.len(),
         item_count: items.len(),
         new_item_count: items.len().saturating_sub(existing_item_count),
         existing_item_count,
-        opening_quantity,
-        opening_amount: round_money(opening_amount),
+        opening_quantity: 0.0,
+        opening_amount: 0.0,
         inbound_quantity,
         inbound_amount: round_money(inbound_amount),
         outbound_quantity,
         outbound_amount: round_money(outbound_amount),
-        document_count: document_keys.len(),
+        document_count: planned_document_count(parsed),
         warnings: parsed.warnings.clone(),
         errors: parsed.errors.clone(),
         items,
@@ -573,7 +650,7 @@ fn build_preview_from_parts(
             .map(|(month, data)| ImportMonthPreview {
                 month,
                 row_count: data.row_count,
-                opening_quantity: data.opening_quantity,
+                opening_quantity: 0.0,
                 inbound_quantity: data.inbound_quantity,
                 outbound_quantity: data.outbound_quantity,
                 outbound_amount: round_money(data.outbound_amount),
@@ -583,218 +660,65 @@ fn build_preview_from_parts(
 }
 
 fn import_parsed_workbook(
-    tx: &mut Transaction<'_>,
+    conn: &mut Connection,
     source_file: &str,
     job_id: &str,
     parsed: &ParsedWorkbook,
     preview: &ImportPreview,
     mode: ImportMode,
+    allow_negative_stock: bool,
 ) -> AppResult<ImportResult> {
-    tx.execute(
+    conn.execute(
         "INSERT INTO import_jobs (id, source_file, status, total_rows, warning_rows, error_rows, report_json)
          VALUES (?1, ?2, 'previewed', ?3, ?4, ?5, ?6)",
         params![
             job_id,
             source_file,
-            parsed.rows.len() as i64,
+            preview.row_count as i64,
             parsed.warnings.len() as i64,
             parsed.errors.len() as i64,
             serde_json::to_string(preview).unwrap_or_else(|_| "{}".to_string())
         ],
     )?;
 
-    let category_ids = ensure_categories(tx, parsed)?;
-    let unit_ids = ensure_units(tx, parsed)?;
-    let department_ids = if mode.import_movements() {
-        ensure_departments(tx, parsed)?
-    } else {
-        HashMap::new()
+    let (item_ids, supplier_ids, department_ids, imported_items, matched_items) = {
+        let tx = conn.transaction()?;
+        let category_ids = ensure_categories(&tx, parsed)?;
+        let unit_ids = ensure_units(&tx, parsed)?;
+        let (ids, imported, matched) = ensure_items(&tx, parsed, &category_ids, &unit_ids)?;
+        let supplier_ids = if mode.import_movements() {
+            ensure_suppliers(&tx, parsed)?
+        } else {
+            HashMap::new()
+        };
+        let department_ids = if mode.import_movements() {
+            ensure_departments(&tx, parsed)?
+        } else {
+            HashMap::new()
+        };
+        tx.commit()?;
+        (ids, supplier_ids, department_ids, imported, matched)
     };
-    let mut item_ids = HashMap::new();
-    let mut imported_items = 0;
-    let mut matched_items = 0;
 
-    for item in &preview.items {
-        let item_id = find_item_id(tx, &item.name)?;
-        if let Some(existing_id) = item_id {
-            matched_items += 1;
-            item_ids.insert(item.name.clone(), existing_id);
-            continue;
-        }
-
-        let id = new_id();
-        let code = next_item_code(tx)?;
-        tx.execute(
-            "INSERT INTO master_items (
-               id, code, name, category_id, spec, unit_id, default_price,
-               warning_quantity, enabled, remark
-             )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, 1, ?8)",
-            params![
-                id,
-                code,
-                item.name,
-                item.category_name
-                    .as_ref()
-                    .and_then(|name| category_ids.get(name))
-                    .cloned(),
-                item.spec.clone(),
-                item.unit_name
-                    .as_ref()
-                    .and_then(|name| unit_ids.get(name))
-                    .cloned(),
-                item.default_price,
-                "Excel 迁移导入"
-            ],
-        )?;
-        tx.execute(
-            "INSERT OR IGNORE INTO stock_balances (id, item_id) VALUES (?1, ?2)",
-            params![new_id(), id],
-        )?;
-        imported_items += 1;
-        item_ids.insert(item.name.clone(), id);
-    }
-
-    let mut opening_seen = HashSet::new();
     let mut document_count = 0;
     let mut movement_count = 0;
-
     if mode.import_movements() {
-        for (month, rows) in rows_by_month(parsed) {
-            let business_date = month_start_date(&month)?;
-            let opening_lines = rows
-                .iter()
-                .filter(|row| {
-                    row.opening_quantity > 0.0 && opening_seen.insert(row.item_name.clone())
-                })
-                .filter_map(|row| {
-                    item_ids
-                        .get(&row.item_name)
-                        .map(|item_id| (row, item_id.clone()))
-                })
-                .collect::<Vec<_>>();
-            if !opening_lines.is_empty() {
-                let document_id = create_document(
-                    tx,
-                    "inbound",
-                    &business_date,
-                    None,
-                    None,
-                    "Excel迁移",
-                    "期初库存导入",
-                )?;
-                document_count += 1;
-                for (row, item_id) in opening_lines {
-                    let price = first_positive(row.average_price, row.opening_price, 0.0);
-                    write_stock_line_and_movement(
-                        tx,
-                        &document_id,
-                        &business_date,
-                        &item_id,
-                        "in",
-                        "opening",
-                        row.opening_quantity,
-                        price,
-                        row.opening_amount,
-                        None,
-                        None,
-                        &format!("{} 第 {} 行期初", row.sheet_name, row.row_number),
-                    )?;
-                    movement_count += 1;
-                }
-            }
-
-            let inbound_lines = rows
-                .iter()
-                .filter(|row| row.inbound_quantity > 0.0)
-                .filter_map(|row| {
-                    item_ids
-                        .get(&row.item_name)
-                        .map(|item_id| (row, item_id.clone()))
-                })
-                .collect::<Vec<_>>();
-            if !inbound_lines.is_empty() {
-                let document_id = create_document(
-                    tx,
-                    "inbound",
-                    &business_date,
-                    None,
-                    None,
-                    "Excel迁移",
-                    "本月入库导入",
-                )?;
-                document_count += 1;
-                for (row, item_id) in inbound_lines {
-                    let price =
-                        first_positive(row.inbound_price, row.average_price, row.opening_price);
-                    write_stock_line_and_movement(
-                        tx,
-                        &document_id,
-                        &business_date,
-                        &item_id,
-                        "in",
-                        "inbound",
-                        row.inbound_quantity,
-                        price,
-                        row.inbound_amount,
-                        None,
-                        None,
-                        &format!("{} 第 {} 行入库", row.sheet_name, row.row_number),
-                    )?;
-                    movement_count += 1;
-                }
-            }
-
-            for (department_name, department_rows) in rows_by_department(&rows) {
-                let Some(department_id) = department_ids.get(&department_name).cloned() else {
-                    continue;
-                };
-                let document_id = create_document(
-                    tx,
-                    "outbound",
-                    &business_date,
-                    Some(&department_id),
-                    None,
-                    "Excel迁移",
-                    &format!("{department_name} 部门领用导入"),
-                )?;
-                document_count += 1;
-                for (row, issue) in department_rows {
-                    let Some(item_id) = item_ids.get(&row.item_name) else {
-                        continue;
-                    };
-                    let price = if issue.quantity > 0.0 {
-                        round_price(issue.amount / issue.quantity)
-                    } else {
-                        row.average_price
-                    };
-                    write_stock_line_and_movement(
-                        tx,
-                        &document_id,
-                        &business_date,
-                        item_id,
-                        "out",
-                        "outbound",
-                        issue.quantity,
-                        price,
-                        issue.amount,
-                        Some(&department_id),
-                        None,
-                        &format!("{} 第 {} 行领用", row.sheet_name, row.row_number),
-                    )?;
-                    movement_count += 1;
-                }
-            }
+        for request in build_submit_requests(parsed, &item_ids, &supplier_ids, &department_ids)? {
+            crate::services::stock_service::validate_document(&request)?;
+            let detail =
+                stock_repository::submit_stock_document(conn, request, allow_negative_stock)?;
+            document_count += 1;
+            movement_count += count_document_movements(conn, &detail.document.id)? as usize;
         }
     }
 
-    tx.execute(
+    conn.execute(
         "UPDATE import_jobs
          SET status = 'imported', success_rows = ?1, completed_at = CURRENT_TIMESTAMP
          WHERE id = ?2",
-        params![parsed.rows.len() as i64, job_id],
+        params![preview.row_count as i64, job_id],
     )?;
-    tx.execute(
+    conn.execute(
         "INSERT INTO audit_logs (id, action, entity_type, entity_id, summary, operator)
          VALUES (?1, 'run_excel_import', 'import_job', ?2, ?3, 'system')",
         params![
@@ -802,9 +726,7 @@ fn import_parsed_workbook(
             job_id,
             format!(
                 "导入 Excel：{}，{} 行，{} 条流水",
-                source_file,
-                parsed.rows.len(),
-                movement_count
+                source_file, preview.row_count, movement_count
             )
         ],
     )?;
@@ -823,253 +745,233 @@ fn import_parsed_workbook(
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ImportMode {
-    Full,
-    ItemsOnly,
-}
-
-impl ImportMode {
-    fn from_request(value: Option<&str>) -> AppResult<Self> {
-        match value.unwrap_or("full") {
-            "full" => Ok(Self::Full),
-            "itemsOnly" | "items_only" => Ok(Self::ItemsOnly),
-            other => Err(AppError::Validation(format!("不支持的导入模式：{other}"))),
+fn ensure_items(
+    conn: &Connection,
+    parsed: &ParsedWorkbook,
+    category_ids: &HashMap<String, String>,
+    unit_ids: &HashMap<String, String>,
+) -> AppResult<(HashMap<String, String>, usize, usize)> {
+    let mut ids = HashMap::new();
+    let mut imported = 0;
+    let mut matched = 0;
+    for item in &parsed.items {
+        if item.name.trim().is_empty() {
+            return Err(AppError::Validation(format!(
+                "{} 第 {} 行物品名称不能为空",
+                item.sheet_name, item.row_number
+            )));
         }
-    }
-
-    fn import_movements(self) -> bool {
-        self == Self::Full
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Full => "完整导入",
-            Self::ItemsOnly => "只导入物品档案",
+        if let Some(existing_id) = find_item_id(conn, item.code.as_deref(), &item.name)? {
+            matched += 1;
+            ids.insert(item.key.clone(), existing_id);
+            continue;
         }
+        let id = new_id();
+        let code = item
+            .code
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                next_item_code(conn).unwrap_or_else(|_| format!("IMP-{}", imported + 1))
+            });
+        conn.execute(
+            "INSERT INTO master_items (
+               id, code, name, category_id, spec, unit_id, default_price,
+               sale_price, warning_quantity, enabled, remark
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10)",
+            params![
+                id,
+                code,
+                item.name,
+                item.category_name
+                    .as_ref()
+                    .and_then(|name| category_ids.get(name))
+                    .cloned(),
+                item.spec,
+                item.unit_name
+                    .as_ref()
+                    .and_then(|name| unit_ids.get(name))
+                    .cloned(),
+                item.default_price,
+                item.sale_price,
+                item.warning_quantity,
+                item.remark
+            ],
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO stock_balances (id, item_id) VALUES (?1, ?2)",
+            params![new_id(), id],
+        )?;
+        imported += 1;
+        ids.insert(item.key.clone(), id);
     }
+    Ok((ids, imported, matched))
 }
 
-fn write_stock_line_and_movement(
-    tx: &Transaction<'_>,
-    document_id: &str,
-    business_date: &str,
-    item_id: &str,
-    direction: &str,
-    movement_type: &str,
-    quantity: f64,
-    unit_price: f64,
-    amount: f64,
-    department_id: Option<&str>,
-    supplier_id: Option<&str>,
-    remark: &str,
-) -> AppResult<()> {
-    let department_name = snapshot_department_name(tx, department_id)?;
-    let supplier_name = snapshot_supplier_name(tx, supplier_id)?;
-    let line_id = new_id();
-    let rounded_amount = round_money(if amount > 0.0 {
-        amount
-    } else {
-        quantity * unit_price
-    });
-    tx.execute(
-        "INSERT INTO stock_document_lines (id, document_id, item_id, quantity, unit_price, amount, remark)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![line_id, document_id, item_id, quantity, unit_price, rounded_amount, remark],
-    )?;
-
-    apply_import_balance(tx, item_id, direction, quantity, unit_price, rounded_amount)?;
-
-    tx.execute(
-        "INSERT INTO stock_movements (
-           id, movement_date, item_id, direction, quantity, unit_price, amount,
-           document_id, document_line_id, department_id, department_name,
-           supplier_id, supplier_name, movement_type,
-           operator, remark
-         )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 'Excel迁移', ?15)",
-        params![
-            new_id(),
-            business_date,
-            item_id,
-            direction,
-            quantity,
-            unit_price,
-            rounded_amount,
-            document_id,
-            line_id,
-            department_id,
-            department_name,
-            supplier_id,
-            supplier_name,
-            movement_type,
-            remark
-        ],
-    )?;
-    Ok(())
-}
-
-fn apply_import_balance(
-    tx: &Transaction<'_>,
-    item_id: &str,
-    direction: &str,
-    quantity: f64,
-    unit_price: f64,
-    amount: f64,
-) -> AppResult<()> {
-    let existing = tx
-        .query_row(
-            "SELECT quantity, amount, average_price, last_inbound_price
-             FROM stock_balances WHERE item_id = ?1",
-            params![item_id],
-            |row| {
-                Ok((
-                    row.get::<_, f64>(0)?,
-                    row.get::<_, f64>(1)?,
-                    row.get::<_, f64>(2)?,
-                    row.get::<_, f64>(3)?,
+fn build_submit_requests(
+    parsed: &ParsedWorkbook,
+    item_ids: &HashMap<String, String>,
+    supplier_ids: &HashMap<String, String>,
+    department_ids: &HashMap<String, String>,
+) -> AppResult<Vec<SubmitStockDocumentRequest>> {
+    let mut requests = Vec::new();
+    for group in group_inbound_rows(&parsed.inbound_rows) {
+        let supplier_id = group
+            .supplier_name
+            .as_deref()
+            .and_then(|name| supplier_ids.get(name))
+            .cloned();
+        let mut lines = Vec::new();
+        for line in group.rows {
+            let item_id = item_ids.get(&line.item_key).cloned().ok_or_else(|| {
+                AppError::Validation(format!(
+                    "{} 第 {} 行物品未能匹配档案",
+                    line.sheet_name, line.row_number
                 ))
-            },
-        )
-        .optional()?
-        .unwrap_or((0.0, 0.0, unit_price, 0.0));
-
-    let (old_qty, old_amount, old_avg_price, old_last_price) = existing;
-    let (new_qty, new_amount, new_avg_price, new_last_price) = if direction == "in" {
-        let next_qty = old_qty + quantity;
-        let next_amount = old_amount + amount;
-        let next_avg = if next_qty.abs() < f64::EPSILON {
-            0.0
-        } else {
-            round_price(next_amount / next_qty)
-        };
-        (next_qty, round_money(next_amount), next_avg, unit_price)
-    } else {
-        let next_qty = old_qty - quantity;
-        let out_amount = if amount > 0.0 {
-            amount
-        } else {
-            quantity * old_avg_price.max(unit_price)
-        };
-        let next_amount = old_amount - out_amount;
-        let next_avg = if next_qty.abs() < f64::EPSILON {
-            0.0
-        } else {
-            round_price(next_amount / next_qty)
-        };
-        (next_qty, round_money(next_amount), next_avg, old_last_price)
-    };
-
-    tx.execute(
-        "INSERT INTO stock_balances (
-           id, item_id, quantity, amount, average_price, last_inbound_price, updated_at
-         )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP)
-         ON CONFLICT(item_id) DO UPDATE SET
-           quantity = excluded.quantity,
-           amount = excluded.amount,
-           average_price = excluded.average_price,
-           last_inbound_price = excluded.last_inbound_price,
-           updated_at = CURRENT_TIMESTAMP",
-        params![
-            new_id(),
-            item_id,
-            new_qty,
-            new_amount,
-            new_avg_price,
-            new_last_price
-        ],
-    )?;
-    Ok(())
-}
-
-fn create_document(
-    tx: &Transaction<'_>,
-    document_type: &str,
-    business_date: &str,
-    department_id: Option<&str>,
-    supplier_id: Option<&str>,
-    handler: &str,
-    remark: &str,
-) -> AppResult<String> {
-    let document_id = new_id();
-    let document_no = next_document_no(tx, document_type, business_date)?;
-    let department_name = snapshot_department_name(tx, department_id)?;
-    let supplier_name = snapshot_supplier_name(tx, supplier_id)?;
-    tx.execute(
-        "INSERT INTO stock_documents (
-           id, document_no, document_type, business_date, department_id,
-           department_name, supplier_id, supplier_name, handler, purpose, status, remark, confirmed_at
-         )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'confirmed', ?11, CURRENT_TIMESTAMP)",
-        params![
-            document_id,
-            document_no,
-            document_type,
-            business_date,
-            department_id,
-            department_name,
+            })?;
+            lines.push(SubmitStockDocumentLine {
+                item_id,
+                quantity: line.quantity,
+                unit_price: line.unit_price,
+                amount: Some(line.amount),
+                remark: line.remark.clone(),
+            });
+        }
+        requests.push(SubmitStockDocumentRequest {
+            document_type: "inbound".to_string(),
+            outbound_kind: None,
+            business_date: group.business_date,
+            department_id: None,
             supplier_id,
-            supplier_name,
-            handler,
-            if document_type == "outbound" {
-                remark
-            } else {
-                ""
-            },
-            remark
-        ],
-    )?;
-    Ok(document_id)
+            handler: group.handler,
+            purpose: None,
+            remark: group.remark.or_else(|| Some("Excel 导入入库".to_string())),
+            approval_request_id: None,
+            lines,
+        });
+    }
+    for group in group_outbound_rows(&parsed.outbound_rows) {
+        let mut lines = Vec::new();
+        for line in group.rows {
+            let item_id = item_ids.get(&line.item_key).cloned().ok_or_else(|| {
+                AppError::Validation(format!(
+                    "{} 第 {} 行物品未能匹配档案",
+                    line.sheet_name, line.row_number
+                ))
+            })?;
+            lines.push(SubmitStockDocumentLine {
+                item_id,
+                quantity: line.quantity,
+                unit_price: if line.outbound_kind == "guest_sale" {
+                    line.sale_unit_price
+                } else {
+                    0.0
+                },
+                amount: if line.outbound_kind == "guest_sale" {
+                    Some(round_money(line.quantity * line.sale_unit_price))
+                } else {
+                    None
+                },
+                remark: line.remark.clone(),
+            });
+        }
+        requests.push(SubmitStockDocumentRequest {
+            document_type: "outbound".to_string(),
+            outbound_kind: Some(group.outbound_kind),
+            business_date: group.business_date,
+            department_id: department_ids.get(&group.department_name).cloned(),
+            supplier_id: None,
+            handler: group.handler,
+            purpose: group.purpose,
+            remark: group.remark.or_else(|| Some("Excel 导入出库".to_string())),
+            approval_request_id: None,
+            lines,
+        });
+    }
+    requests.sort_by(|a, b| {
+        a.business_date
+            .cmp(&b.business_date)
+            .then_with(|| a.document_type.cmp(&b.document_type))
+    });
+    Ok(requests)
 }
 
-fn snapshot_department_name(
-    tx: &Transaction<'_>,
-    department_id: Option<&str>,
-) -> AppResult<Option<String>> {
-    let Some(department_id) = department_id else {
-        return Ok(None);
-    };
-    tx.query_row(
-        "SELECT name FROM departments WHERE id = ?1",
-        params![department_id],
-        |row| row.get(0),
-    )
-    .optional()
-    .map_err(Into::into)
+fn group_inbound_rows(rows: &[ParsedInboundLine]) -> Vec<InboundGroup<'_>> {
+    let mut groups: BTreeMap<InboundGroupKey, Vec<&ParsedInboundLine>> = BTreeMap::new();
+    for row in rows {
+        groups
+            .entry(InboundGroupKey {
+                business_date: row.business_date.clone(),
+                supplier_name: row.supplier_name.clone(),
+                handler: row.handler.clone(),
+                remark: row.remark.clone(),
+            })
+            .or_default()
+            .push(row);
+    }
+    groups
+        .into_iter()
+        .map(|(key, rows)| InboundGroup {
+            business_date: key.business_date,
+            supplier_name: key.supplier_name,
+            handler: key.handler,
+            remark: key.remark,
+            rows,
+        })
+        .collect()
 }
 
-fn snapshot_supplier_name(
-    tx: &Transaction<'_>,
-    supplier_id: Option<&str>,
-) -> AppResult<Option<String>> {
-    let Some(supplier_id) = supplier_id else {
-        return Ok(None);
-    };
-    tx.query_row(
-        "SELECT name FROM suppliers WHERE id = ?1",
-        params![supplier_id],
-        |row| row.get(0),
-    )
-    .optional()
-    .map_err(Into::into)
+fn group_outbound_rows(rows: &[ParsedOutboundLine]) -> Vec<OutboundGroup<'_>> {
+    let mut groups: BTreeMap<OutboundGroupKey, Vec<&ParsedOutboundLine>> = BTreeMap::new();
+    for row in rows {
+        groups
+            .entry(OutboundGroupKey {
+                business_date: row.business_date.clone(),
+                outbound_kind: row.outbound_kind.clone(),
+                department_name: row.department_name.clone(),
+                handler: row.handler.clone(),
+                purpose: row.purpose.clone(),
+                remark: row.remark.clone(),
+            })
+            .or_default()
+            .push(row);
+    }
+    groups
+        .into_iter()
+        .map(|(key, rows)| OutboundGroup {
+            business_date: key.business_date,
+            outbound_kind: key.outbound_kind,
+            department_name: key.department_name,
+            handler: key.handler,
+            purpose: key.purpose,
+            remark: key.remark,
+            rows,
+        })
+        .collect()
+}
+
+fn planned_document_count(parsed: &ParsedWorkbook) -> usize {
+    group_inbound_rows(&parsed.inbound_rows).len()
+        + group_outbound_rows(&parsed.outbound_rows).len()
 }
 
 fn ensure_categories(
-    tx: &Transaction<'_>,
+    conn: &Connection,
     parsed: &ParsedWorkbook,
 ) -> AppResult<HashMap<String, String>> {
     let mut map = HashMap::new();
     for name in parsed
-        .rows
+        .items
         .iter()
-        .filter_map(|row| row.category_name.as_ref())
+        .filter_map(|item| item.category_name.as_ref())
         .filter(|name| !name.trim().is_empty())
     {
         if map.contains_key(name) {
             continue;
         }
-        let id = tx
+        let id = conn
             .query_row(
                 "SELECT id FROM categories WHERE parent_id IS NULL AND name = ?1",
                 params![name],
@@ -1077,7 +979,7 @@ fn ensure_categories(
             )
             .optional()?
             .unwrap_or_else(new_id);
-        tx.execute(
+        conn.execute(
             "INSERT OR IGNORE INTO categories (id, name, enabled, sort_order)
              VALUES (?1, ?2, 1, 999)",
             params![id, name],
@@ -1087,21 +989,18 @@ fn ensure_categories(
     Ok(map)
 }
 
-fn ensure_units(
-    tx: &Transaction<'_>,
-    parsed: &ParsedWorkbook,
-) -> AppResult<HashMap<String, String>> {
+fn ensure_units(conn: &Connection, parsed: &ParsedWorkbook) -> AppResult<HashMap<String, String>> {
     let mut map = HashMap::new();
     for name in parsed
-        .rows
+        .items
         .iter()
-        .filter_map(|row| row.unit_name.as_ref())
+        .filter_map(|item| item.unit_name.as_ref())
         .filter(|name| !name.trim().is_empty())
     {
         if map.contains_key(name) {
             continue;
         }
-        let id = tx
+        let id = conn
             .query_row(
                 "SELECT id FROM units WHERE name = ?1",
                 params![name],
@@ -1109,7 +1008,7 @@ fn ensure_units(
             )
             .optional()?
             .unwrap_or_else(new_id);
-        tx.execute(
+        conn.execute(
             "INSERT OR IGNORE INTO units (id, name, enabled, sort_order)
              VALUES (?1, ?2, 1, 999)",
             params![id, name],
@@ -1119,96 +1018,100 @@ fn ensure_units(
     Ok(map)
 }
 
-fn ensure_departments(
-    tx: &Transaction<'_>,
+fn ensure_suppliers(
+    conn: &Connection,
     parsed: &ParsedWorkbook,
 ) -> AppResult<HashMap<String, String>> {
+    let mut seen = HashSet::new();
     let mut map = HashMap::new();
-    for (index, (name, _, _)) in DEPARTMENT_COLUMNS.iter().enumerate() {
-        let id = tx
-            .query_row(
-                "SELECT id FROM departments WHERE name = ?1",
-                params![name],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?
-            .unwrap_or_else(new_id);
-        tx.execute(
-            "INSERT OR IGNORE INTO departments (id, code, name, enabled, sort_order, remark)
-             VALUES (?1, ?2, ?3, 1, ?4, 'Excel 迁移默认部门')",
-            params![id, format!("D{:03}", index + 1), name, index as i64 + 1],
-        )?;
-        map.insert((*name).to_string(), id);
-    }
     for name in parsed
-        .rows
+        .inbound_rows
         .iter()
-        .flat_map(|row| &row.outbound_lines)
-        .map(|line| line.department_name.trim())
-        .filter(|name| !name.is_empty())
+        .filter_map(|row| row.supplier_name.as_ref())
+        .filter(|name| !name.trim().is_empty())
     {
-        if map.contains_key(name) {
+        if !seen.insert(name.clone()) {
             continue;
         }
-        let id = tx
+        let id = conn
+            .query_row(
+                "SELECT id FROM suppliers WHERE name = ?1",
+                params![name],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .unwrap_or_else(|| format!("supplier:{name}"));
+        conn.execute(
+            "INSERT OR IGNORE INTO suppliers (id, name, enabled, remark)
+             VALUES (?1, ?2, 1, 'Excel 导入自动创建')",
+            params![id, name],
+        )?;
+        map.insert(name.clone(), id);
+    }
+    Ok(map)
+}
+
+fn ensure_departments(
+    conn: &Connection,
+    parsed: &ParsedWorkbook,
+) -> AppResult<HashMap<String, String>> {
+    let mut seen = HashSet::new();
+    let mut map = HashMap::new();
+    for name in parsed
+        .outbound_rows
+        .iter()
+        .map(|row| row.department_name.as_str())
+        .filter(|name| !name.trim().is_empty())
+    {
+        if !seen.insert(name.to_string()) {
+            continue;
+        }
+        let id = conn
             .query_row(
                 "SELECT id FROM departments WHERE name = ?1",
                 params![name],
                 |row| row.get::<_, String>(0),
             )
             .optional()?
-            .unwrap_or_else(new_id);
-        tx.execute(
+            .unwrap_or_else(|| format!("department:{name}"));
+        conn.execute(
             "INSERT OR IGNORE INTO departments (id, code, name, enabled, sort_order, remark)
-             VALUES (?1, ?2, ?3, 1, ?4, 'Excel 通用模板导入部门')",
-            params![
-                id,
-                format!("DIMP{:03}", map.len() + 1),
-                name,
-                map.len() as i64 + 1
-            ],
+             VALUES (?1, ?2, ?3, 1, 999, 'Excel 导入自动创建')",
+            params![id, next_department_code(conn)?, name],
         )?;
         map.insert(name.to_string(), id);
     }
     Ok(map)
 }
 
-fn rows_by_month(parsed: &ParsedWorkbook) -> BTreeMap<String, Vec<&ParsedRow>> {
-    let mut map: BTreeMap<String, Vec<&ParsedRow>> = BTreeMap::new();
-    for row in &parsed.rows {
-        map.entry(row.month.clone()).or_default().push(row);
+fn existing_item_keys(conn: &Connection) -> AppResult<HashSet<String>> {
+    let mut stmt = conn.prepare("SELECT code, name FROM master_items")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut keys = HashSet::new();
+    for row in rows {
+        let (code, name) = row?;
+        keys.insert(item_lookup_key(code.as_deref(), &normalized_name(&name)));
+        keys.insert(format!("name:{}", normalized_name(&name)));
     }
-    map
+    Ok(keys)
 }
 
-fn rows_by_department<'a>(
-    rows: &'a [&'a ParsedRow],
-) -> BTreeMap<String, Vec<(&'a ParsedRow, &'a ParsedDepartmentIssue)>> {
-    let mut map: BTreeMap<String, Vec<(&ParsedRow, &ParsedDepartmentIssue)>> = BTreeMap::new();
-    for row in rows {
-        for issue in &row.outbound_lines {
-            if issue.quantity > 0.0 {
-                map.entry(issue.department_name.clone())
-                    .or_default()
-                    .push((*row, issue));
-            }
+fn find_item_id(conn: &Connection, code: Option<&str>, name: &str) -> AppResult<Option<String>> {
+    if let Some(code) = code.map(str::trim).filter(|value| !value.is_empty()) {
+        if let Some(id) = conn
+            .query_row(
+                "SELECT id FROM master_items WHERE code = ?1",
+                params![code],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        {
+            return Ok(Some(id));
         }
     }
-    map
-}
-
-fn existing_item_names(conn: &Connection) -> AppResult<HashSet<String>> {
-    let mut stmt = conn.prepare("SELECT name FROM master_items")?;
-    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-    let mut names = HashSet::new();
-    for row in rows {
-        names.insert(normalized_name(&row?));
-    }
-    Ok(names)
-}
-
-fn find_item_id(tx: &Transaction<'_>, name: &str) -> AppResult<Option<String>> {
-    Ok(tx
+    Ok(conn
         .query_row(
             "SELECT id FROM master_items WHERE name = ?1",
             params![name],
@@ -1217,33 +1120,259 @@ fn find_item_id(tx: &Transaction<'_>, name: &str) -> AppResult<Option<String>> {
         .optional()?)
 }
 
-fn next_item_code(tx: &Transaction<'_>) -> AppResult<String> {
-    let count: i64 = tx.query_row("SELECT COUNT(*) FROM master_items", [], |row| row.get(0))?;
-    Ok(format!("HC-{:04}", count + 1))
+fn next_item_code(conn: &Connection) -> AppResult<String> {
+    let mut index: i64 = conn.query_row("SELECT COUNT(*) + 1 FROM master_items", [], |row| {
+        row.get(0)
+    })?;
+    loop {
+        let code = format!("IMP-{index:04}");
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM master_items WHERE code = ?1)",
+            params![code],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Ok(code);
+        }
+        index += 1;
+    }
 }
 
-fn next_document_no(
-    tx: &Transaction<'_>,
-    document_type: &str,
-    business_date: &str,
-) -> AppResult<String> {
-    let prefix = match document_type {
-        "inbound" => "IN",
-        "outbound" => "OUT",
-        other => return Err(AppError::Validation(format!("不支持的单据类型：{other}"))),
-    };
-    let date_part = business_date
-        .chars()
-        .take(10)
-        .collect::<String>()
-        .replace('-', "");
-    let like = format!("{prefix}-{date_part}-%");
-    let count: i64 = tx.query_row(
-        "SELECT COUNT(*) FROM stock_documents WHERE document_no LIKE ?1",
-        params![like],
+fn next_department_code(conn: &Connection) -> AppResult<String> {
+    let mut index: i64 =
+        conn.query_row("SELECT COUNT(*) + 1 FROM departments", [], |row| row.get(0))?;
+    loop {
+        let code = format!("DIMP{index:03}");
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM departments WHERE code = ?1)",
+            params![code],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Ok(code);
+        }
+        index += 1;
+    }
+}
+
+fn count_document_movements(conn: &Connection, document_id: &str) -> AppResult<i64> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM stock_movements WHERE document_id = ?1",
+        params![document_id],
         |row| row.get(0),
-    )?;
-    Ok(format!("{prefix}-{date_part}-{:04}", count + 1))
+    )?)
+}
+
+fn write_import_template_workbook(path: &Path) -> AppResult<()> {
+    let mut workbook = Workbook::new();
+    let header = Format::new().set_bold().set_background_color("#DDEBF7");
+    let money = Format::new().set_num_format("#,##0.00");
+    let number = Format::new().set_num_format("#,##0.00");
+
+    {
+        let worksheet = workbook.add_worksheet();
+        worksheet.set_name(ITEM_SHEET).map_err(xlsx_error)?;
+        write_header(
+            worksheet,
+            &header,
+            &[
+                "物品编码",
+                "物品名称",
+                "分类",
+                "规格",
+                "单位",
+                "参考进价",
+                "参考售价",
+                "预警库存",
+                "备注",
+            ],
+        )?;
+        worksheet
+            .write_string(1, 0, "YCYS-001")
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_string(1, 1, "一次性牙刷")
+            .map_err(xlsx_error)?;
+        worksheet.write_string(1, 2, "客耗品").map_err(xlsx_error)?;
+        worksheet.write_string(1, 3, "软毛").map_err(xlsx_error)?;
+        worksheet.write_string(1, 4, "支").map_err(xlsx_error)?;
+        worksheet
+            .write_number_with_format(1, 5, 0.80, &money)
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_number_with_format(1, 6, 3.00, &money)
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_number_with_format(1, 7, 50.0, &number)
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_string(1, 8, "示例，可删除")
+            .map_err(xlsx_error)?;
+        set_widths(worksheet, &[16, 24, 18, 18, 10, 12, 12, 12, 28])?;
+    }
+
+    {
+        let worksheet = workbook.add_worksheet();
+        worksheet.set_name(INBOUND_SHEET).map_err(xlsx_error)?;
+        write_header(
+            worksheet,
+            &header,
+            &[
+                "业务时间",
+                "供应商",
+                "物品编码",
+                "物品名称",
+                "分类",
+                "规格",
+                "单位",
+                "数量",
+                "进货单价",
+                "进货金额",
+                "经办人",
+                "备注",
+            ],
+        )?;
+        worksheet
+            .write_string(1, 0, "2026-06-01 09:00:00")
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_string(1, 1, "默认供应商")
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_string(1, 2, "YCYS-001")
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_string(1, 3, "一次性牙刷")
+            .map_err(xlsx_error)?;
+        worksheet.write_string(1, 4, "客耗品").map_err(xlsx_error)?;
+        worksheet.write_string(1, 5, "软毛").map_err(xlsx_error)?;
+        worksheet.write_string(1, 6, "支").map_err(xlsx_error)?;
+        worksheet
+            .write_number_with_format(1, 7, 100.0, &number)
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_number_with_format(1, 8, 0.80, &money)
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_number_with_format(1, 9, 80.0, &money)
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_string(1, 10, "管理员")
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_string(1, 11, "示例，可删除")
+            .map_err(xlsx_error)?;
+        set_widths(worksheet, &[22, 20, 16, 24, 18, 18, 10, 12, 12, 12, 14, 28])?;
+    }
+
+    {
+        let worksheet = workbook.add_worksheet();
+        worksheet.set_name(OUTBOUND_SHEET).map_err(xlsx_error)?;
+        write_header(
+            worksheet,
+            &header,
+            &[
+                "业务时间",
+                "出库类型",
+                "部门",
+                "物品编码",
+                "物品名称",
+                "分类",
+                "规格",
+                "单位",
+                "数量",
+                "销售单价",
+                "经办人",
+                "用途",
+                "备注",
+            ],
+        )?;
+        worksheet
+            .write_string(1, 0, "2026-06-02 10:30:00")
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_string(1, 1, "内部领用")
+            .map_err(xlsx_error)?;
+        worksheet.write_string(1, 2, "客房").map_err(xlsx_error)?;
+        worksheet
+            .write_string(1, 3, "YCYS-001")
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_string(1, 4, "一次性牙刷")
+            .map_err(xlsx_error)?;
+        worksheet.write_string(1, 5, "客耗品").map_err(xlsx_error)?;
+        worksheet.write_string(1, 6, "软毛").map_err(xlsx_error)?;
+        worksheet.write_string(1, 7, "支").map_err(xlsx_error)?;
+        worksheet
+            .write_number_with_format(1, 8, 10.0, &number)
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_number_with_format(1, 9, 0.0, &money)
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_string(1, 10, "管理员")
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_string(1, 11, "客房消耗")
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_string(1, 12, "示例，可删除")
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_string(2, 0, "2026-06-02 15:00:00")
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_string(2, 1, "酒店客人销售")
+            .map_err(xlsx_error)?;
+        worksheet.write_string(2, 2, "前台").map_err(xlsx_error)?;
+        worksheet
+            .write_string(2, 3, "YCYS-001")
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_string(2, 4, "一次性牙刷")
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_number_with_format(2, 8, 2.0, &number)
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_number_with_format(2, 9, 3.0, &money)
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_string(2, 10, "管理员")
+            .map_err(xlsx_error)?;
+        worksheet
+            .write_string(2, 11, "客人购买")
+            .map_err(xlsx_error)?;
+        set_widths(
+            worksheet,
+            &[22, 18, 16, 16, 24, 18, 18, 10, 12, 12, 14, 18, 28],
+        )?;
+    }
+
+    workbook.save(path).map_err(xlsx_error)?;
+    Ok(())
+}
+
+fn write_header(
+    worksheet: &mut rust_xlsxwriter::Worksheet,
+    format: &Format,
+    headers: &[&str],
+) -> AppResult<()> {
+    for (index, label) in headers.iter().enumerate() {
+        worksheet
+            .write_string_with_format(0, index as u16, *label, format)
+            .map_err(xlsx_error)?;
+    }
+    Ok(())
+}
+
+fn set_widths(worksheet: &mut rust_xlsxwriter::Worksheet, widths: &[u16]) -> AppResult<()> {
+    for (index, width) in widths.iter().enumerate() {
+        worksheet
+            .set_column_width(index as u16, *width)
+            .map_err(xlsx_error)?;
+    }
+    Ok(())
 }
 
 fn write_import_source_copy(report_dir: &Path, source_file: &str) -> AppResult<Option<PathBuf>> {
@@ -1302,167 +1431,22 @@ fn write_import_report(
     Ok(path)
 }
 
-fn parse_sheet_month(name: &str) -> Option<String> {
-    let trimmed = name.trim();
-    let parts = trimmed.split('.').collect::<Vec<_>>();
-    if parts.len() != 2 {
-        return None;
-    }
-    let year = parts[0].parse::<i32>().ok()?;
-    let month = parts[1].parse::<u32>().ok()?;
-    if !(1..=12).contains(&month) {
-        return None;
-    }
-    Some(format!("{year:04}-{month:02}"))
-}
-
-fn parse_month_cell(data: Option<&Data>) -> Option<String> {
-    match data {
-        Some(Data::DateTime(value)) => {
-            let (year, month, _, _, _, _, _) = value.to_ymd_hms_milli();
-            Some(format!("{year:04}-{month:02}"))
-        }
-        Some(Data::String(value)) => parse_month_text(value),
-        Some(Data::Float(value)) => parse_month_text(&trim_number(*value)),
-        Some(Data::Int(value)) => parse_month_text(&value.to_string()),
-        _ => None,
-    }
-}
-
-fn parse_month_text(value: &str) -> Option<String> {
-    let cleaned = value
-        .trim()
-        .replace('年', "-")
-        .replace('月', "")
-        .replace('.', "-")
-        .replace('/', "-");
-    let parts = cleaned
-        .split('-')
-        .filter(|part| !part.trim().is_empty())
-        .collect::<Vec<_>>();
-    if parts.len() < 2 {
-        return None;
-    }
-    let year = parts[0].parse::<i32>().ok()?;
-    let month = parts[1].parse::<u32>().ok()?;
-    if !(1..=12).contains(&month) {
-        return None;
-    }
-    Some(format!("{year:04}-{month:02}"))
-}
-
-fn month_start_date(month: &str) -> AppResult<String> {
-    NaiveDate::parse_from_str(&format!("{month}-01"), "%Y-%m-%d")
-        .map(|date| date.to_string())
-        .map_err(|_| AppError::Validation(format!("无法解析月份：{month}")))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn validate_import_row(
+fn detect_formula_errors(
     sheet_name: &str,
     excel_row: usize,
-    month: &str,
-    item_name: &str,
-    unit_name: Option<&str>,
-    opening_quantity: f64,
-    opening_price: f64,
-    opening_amount: Option<f64>,
-    inbound_quantity: f64,
-    inbound_price: f64,
-    inbound_amount: Option<f64>,
-    outbound_quantity: Option<f64>,
-    outbound_amount: Option<f64>,
-    seen_rows: &mut HashSet<(String, String, String)>,
-    warnings: &mut Vec<ImportMessage>,
+    row: &[Data],
     errors: &mut Vec<ImportMessage>,
 ) {
-    if unit_name.map(str::trim).unwrap_or_default().is_empty() {
-        errors.push(message(
-            "error",
-            sheet_name,
-            excel_row,
-            None,
-            "单位为空，请补充单位后再导入",
-        ));
-    }
-
-    let item_key = (
-        month.to_string(),
-        normalized_name(item_name),
-        normalized_name(unit_name.unwrap_or("")),
-    );
-    if !seen_rows.insert(item_key) {
-        warnings.push(message(
-            "warning",
-            sheet_name,
-            excel_row,
-            None,
-            "检测到同一月份、物品和单位重复行，导入时会合并统计，请复核",
-        ));
-    }
-
-    if opening_quantity < 0.0 || inbound_quantity < 0.0 || outbound_quantity.unwrap_or(0.0) < 0.0 {
-        errors.push(message(
-            "error",
-            sheet_name,
-            excel_row,
-            None,
-            "数量异常：期初、入库或出库数量不能为负数",
-        ));
-    }
-
-    if opening_quantity > 0.0 && opening_price <= 0.0 {
-        errors.push(message(
-            "error",
-            sheet_name,
-            excel_row,
-            None,
-            "单价异常：期初数量大于 0 时期初单价必须大于 0",
-        ));
-    }
-    if inbound_quantity > 0.0 && inbound_price <= 0.0 {
-        errors.push(message(
-            "error",
-            sheet_name,
-            excel_row,
-            None,
-            "单价异常：入库数量大于 0 时入库单价必须大于 0",
-        ));
-    }
-
-    warn_amount_mismatch(
-        sheet_name,
-        excel_row,
-        "期初金额",
-        opening_quantity,
-        opening_price,
-        opening_amount,
-        warnings,
-    );
-    warn_amount_mismatch(
-        sheet_name,
-        excel_row,
-        "入库金额",
-        inbound_quantity,
-        inbound_price,
-        inbound_amount,
-        warnings,
-    );
-    if let (Some(quantity), Some(amount)) = (outbound_quantity, outbound_amount) {
-        let price = if quantity.abs() < f64::EPSILON {
-            0.0
-        } else {
-            amount / quantity
-        };
-        warn_amount_mismatch(
-            sheet_name,
-            excel_row,
-            "出库金额",
-            quantity,
-            price,
-            Some(amount),
-            warnings,
-        );
+    for (index, cell) in row.iter().enumerate() {
+        if let Data::Error(error) = cell {
+            errors.push(message(
+                "error",
+                sheet_name,
+                excel_row,
+                Some(&column_label(index)),
+                &format!("公式错误或单元格错误：{error:?}"),
+            ));
+        }
     }
 }
 
@@ -1493,86 +1477,62 @@ fn warn_amount_mismatch(
     }
 }
 
-fn detect_unmapped_legacy_department_columns(
-    sheet_name: &str,
-    excel_row: usize,
-    row: &[Data],
-    warnings: &mut Vec<ImportMessage>,
-) {
-    let known_columns = DEPARTMENT_COLUMNS
-        .iter()
-        .flat_map(|(_, quantity_col, amount_col)| [Some(*quantity_col), *amount_col])
-        .flatten()
-        .collect::<HashSet<_>>();
-    for index in 11..row.len() {
-        if known_columns.contains(&index) {
-            continue;
-        }
-        if number_at(row, index).unwrap_or(0.0) > 0.0 {
-            warnings.push(message(
-                "warning",
-                sheet_name,
-                excel_row,
-                Some(&column_label(index)),
-                "检测到固定部门列之外的数量/金额，可能存在未识别的部门列",
-            ));
-        }
-    }
-}
-
-fn detect_formula_errors(
-    sheet_name: &str,
-    excel_row: usize,
-    row: &[Data],
-    errors: &mut Vec<ImportMessage>,
-) {
-    for (index, cell) in row.iter().enumerate() {
-        if let Data::Error(error) = cell {
-            errors.push(message(
-                "error",
-                sheet_name,
-                excel_row,
-                Some(&column_label(index)),
-                &format!("公式错误或单元格错误：{error:?}"),
-            ));
-        }
-    }
-}
-
-fn should_skip_row(item_name: &str) -> bool {
-    let trimmed = item_name.trim();
-    trimmed.is_empty()
-        || trimmed.contains("名称")
-        || trimmed.contains("品名")
-        || trimmed.contains("合计")
-        || trimmed.contains("总计")
-        || trimmed.contains("月报")
-}
-
-fn text_at(row: &[Data], index: usize) -> String {
-    row.get(index).map(data_to_text).unwrap_or_default()
-}
-
-fn number_at(row: &[Data], index: usize) -> Option<f64> {
-    match row.get(index) {
-        Some(Data::Float(value)) => Some(*value),
-        Some(Data::Int(value)) => Some(*value as f64),
-        Some(Data::String(value)) => parse_number_text(value),
-        Some(Data::DateTime(value)) => Some(value.as_f64()),
-        _ => None,
-    }
-    .filter(|value| value.is_finite())
-}
-
 fn data_to_text(data: &Data) -> String {
     match data {
         Data::String(value) => value.trim().to_string(),
         Data::Float(value) => trim_number(*value),
         Data::Int(value) => value.to_string(),
         Data::Bool(value) => value.to_string(),
-        Data::DateTime(value) => trim_number(value.as_f64()),
+        Data::DateTime(value) => {
+            let (year, month, day, hour, minute, second, _) = value.to_ymd_hms_milli();
+            format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}")
+        }
         _ => String::new(),
     }
+}
+
+fn data_to_number(data: &Data) -> Option<f64> {
+    match data {
+        Data::Float(value) => Some(*value),
+        Data::Int(value) => Some(*value as f64),
+        Data::String(value) => parse_number_text(value),
+        _ => None,
+    }
+    .filter(|value| value.is_finite())
+}
+
+fn data_to_datetime(data: &Data) -> Result<Option<String>, String> {
+    match data {
+        Data::Empty => Ok(None),
+        Data::String(value) => parse_datetime_text(value),
+        Data::DateTime(value) => {
+            let (year, month, day, hour, minute, second, _) = value.to_ymd_hms_milli();
+            let text = format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}");
+            validate_datetime_text(&text).map(Some)
+        }
+        _ => Err("业务时间格式不支持，请填写为 2026-06-01 09:00:00".to_string()),
+    }
+}
+
+fn parse_datetime_text(value: &str) -> Result<Option<String>, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let normalized = trimmed.replace('T', " ");
+    if normalized.len() == 10 {
+        return Err("业务时间必须包含真实时间，格式示例：2026-06-01 09:00:00".to_string());
+    }
+    validate_datetime_text(&normalized).map(Some)
+}
+
+fn validate_datetime_text(value: &str) -> Result<String, String> {
+    crate::services::stock_service::validate_business_datetime(value, "业务时间")
+        .map_err(|error| error.to_string())?;
+    let mut normalized = value.to_string();
+    crate::services::stock_service::normalize_business_datetime(&mut normalized, "业务时间")
+        .map_err(|error| error.to_string())?;
+    Ok(normalized)
 }
 
 fn is_empty_cell(data: &Data) -> bool {
@@ -1581,32 +1541,6 @@ fn is_empty_cell(data: &Data) -> bool {
         Data::String(value) => value.trim().is_empty(),
         _ => false,
     }
-}
-
-fn normalized_header(value: &str) -> String {
-    value
-        .chars()
-        .filter(|ch| !ch.is_whitespace() && *ch != '_' && *ch != '-' && *ch != '/')
-        .collect::<String>()
-        .to_lowercase()
-}
-
-fn header_matches(value: &str, aliases: &[&str]) -> bool {
-    let normalized = normalized_header(value);
-    aliases
-        .iter()
-        .any(|alias| normalized == normalized_header(alias))
-}
-
-fn column_label(index: usize) -> String {
-    let mut n = index + 1;
-    let mut label = String::new();
-    while n > 0 {
-        let rem = (n - 1) % 26;
-        label.insert(0, (b'A' + rem as u8) as char);
-        n = (n - 1) / 26;
-    }
-    label
 }
 
 fn parse_number_text(value: &str) -> Option<f64> {
@@ -1633,28 +1567,42 @@ fn normalized_name(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn empty_to_none(value: String) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
+fn item_lookup_key(code: Option<&str>, name: &str) -> String {
+    code.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("code:{value}"))
+        .unwrap_or_else(|| format!("name:{}", normalized_name(name)))
+}
+
+fn parse_outbound_kind(value: &str) -> Option<&'static str> {
+    match normalized_header(value).as_str() {
+        "内部领用" | "内部员工领用" | "internal" => Some("internal"),
+        "酒店客人销售" | "客人销售" | "销售" | "guestsale" => Some("guest_sale"),
+        _ => None,
     }
 }
 
-fn positive_price(quantity: f64, amount: f64) -> Option<f64> {
-    if quantity > 0.0 && amount > 0.0 {
-        Some(round_price(amount / quantity))
-    } else {
-        None
-    }
+fn month_from_datetime(value: &str) -> String {
+    value.chars().take(7).collect()
 }
 
-fn first_positive(a: f64, b: f64, c: f64) -> f64 {
-    [a, b, c]
-        .into_iter()
-        .find(|value| *value > 0.0)
-        .unwrap_or(0.0)
+fn normalized_header(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| !ch.is_whitespace() && *ch != '_' && *ch != '-' && *ch != '/')
+        .collect::<String>()
+        .to_lowercase()
+}
+
+fn column_label(index: usize) -> String {
+    let mut n = index + 1;
+    let mut label = String::new();
+    while n > 0 {
+        let rem = (n - 1) % 26;
+        label.insert(0, (b'A' + rem as u8) as char);
+        n = (n - 1) / 26;
+    }
+    label
 }
 
 fn message(
@@ -1677,8 +1625,8 @@ fn round_money(value: f64) -> f64 {
     (value * 100.0).round() / 100.0
 }
 
-fn round_price(value: f64) -> f64 {
-    (value * 10000.0).round() / 10000.0
+fn xlsx_error(error: XlsxError) -> AppError {
+    AppError::Validation(format!("Excel 模板生成失败：{error}"))
 }
 
 fn new_id() -> String {
@@ -1687,39 +1635,97 @@ fn new_id() -> String {
 
 #[derive(Debug, Clone)]
 struct ParsedWorkbook {
-    rows: Vec<ParsedRow>,
+    items: Vec<ParsedItem>,
+    inbound_rows: Vec<ParsedInboundLine>,
+    outbound_rows: Vec<ParsedOutboundLine>,
     warnings: Vec<ImportMessage>,
     errors: Vec<ImportMessage>,
     sheet_count: usize,
 }
 
 #[derive(Debug, Clone)]
-struct ParsedRow {
+struct ParsedItem {
+    key: String,
     sheet_name: String,
     row_number: usize,
-    month: String,
-    item_name: String,
+    code: Option<String>,
+    name: String,
     category_name: Option<String>,
-    unit_name: Option<String>,
     spec: Option<String>,
-    opening_quantity: f64,
-    opening_price: f64,
-    opening_amount: f64,
-    inbound_quantity: f64,
-    inbound_price: f64,
-    inbound_amount: f64,
-    average_price: f64,
-    outbound_lines: Vec<ParsedDepartmentIssue>,
+    unit_name: Option<String>,
+    default_price: f64,
+    sale_price: f64,
+    warning_quantity: f64,
+    remark: Option<String>,
 }
 
 #[derive(Debug, Clone)]
-struct ParsedDepartmentIssue {
-    department_name: String,
+struct ParsedInboundLine {
+    sheet_name: String,
+    row_number: usize,
+    business_date: String,
+    supplier_name: Option<String>,
+    item_key: String,
     quantity: f64,
+    unit_price: f64,
     amount: f64,
+    handler: Option<String>,
+    remark: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ParsedOutboundLine {
+    sheet_name: String,
+    row_number: usize,
+    business_date: String,
+    outbound_kind: String,
+    department_name: String,
+    item_key: String,
+    quantity: f64,
+    sale_unit_price: f64,
+    handler: Option<String>,
+    purpose: Option<String>,
+    remark: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct InboundGroupKey {
+    business_date: String,
+    supplier_name: Option<String>,
+    handler: Option<String>,
+    remark: Option<String>,
+}
+
+struct InboundGroup<'a> {
+    business_date: String,
+    supplier_name: Option<String>,
+    handler: Option<String>,
+    remark: Option<String>,
+    rows: Vec<&'a ParsedInboundLine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct OutboundGroupKey {
+    business_date: String,
+    outbound_kind: String,
+    department_name: String,
+    handler: Option<String>,
+    purpose: Option<String>,
+    remark: Option<String>,
+}
+
+struct OutboundGroup<'a> {
+    business_date: String,
+    outbound_kind: String,
+    department_name: String,
+    handler: Option<String>,
+    purpose: Option<String>,
+    remark: Option<String>,
+    rows: Vec<&'a ParsedOutboundLine>,
 }
 
 struct ImportItemAccumulator {
+    name: String,
     category_name: Option<String>,
     spec: Option<String>,
     unit_name: Option<String>,
@@ -1733,7 +1739,6 @@ struct ImportItemAccumulator {
 #[derive(Default)]
 struct ImportMonthAccumulator {
     row_count: usize,
-    opening_quantity: f64,
     inbound_quantity: f64,
     outbound_quantity: f64,
     outbound_amount: f64,
@@ -1764,110 +1769,96 @@ struct ImportReportFile {
     items: Vec<ImportItemPreview>,
 }
 
-#[derive(Debug, Clone)]
-struct TemplateHeader {
-    row_index: usize,
-    month: Option<usize>,
-    business_date: Option<usize>,
-    item_name: usize,
-    category_name: Option<usize>,
-    unit_name: Option<usize>,
-    spec: Option<usize>,
-    department_name: Option<usize>,
-    opening_quantity: Option<usize>,
-    opening_price: Option<usize>,
-    opening_amount: Option<usize>,
-    inbound_quantity: Option<usize>,
-    inbound_price: Option<usize>,
-    inbound_amount: Option<usize>,
-    outbound_quantity: Option<usize>,
-    outbound_amount: Option<usize>,
-    average_price: Option<usize>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImportMode {
+    Full,
+    ItemsOnly,
 }
 
-impl TemplateHeader {
-    fn from_range(range: &calamine::Range<Data>) -> Option<Self> {
-        for (row_index, row) in range.rows().take(10).enumerate() {
-            let mut header = TemplateHeader {
-                row_index,
-                month: None,
-                business_date: None,
-                item_name: usize::MAX,
-                category_name: None,
-                unit_name: None,
-                spec: None,
-                department_name: None,
-                opening_quantity: None,
-                opening_price: None,
-                opening_amount: None,
-                inbound_quantity: None,
-                inbound_price: None,
-                inbound_amount: None,
-                outbound_quantity: None,
-                outbound_amount: None,
-                average_price: None,
-            };
+impl ImportMode {
+    fn from_request(value: Option<&str>) -> AppResult<Self> {
+        match value.unwrap_or("full") {
+            "full" => Ok(Self::Full),
+            "itemsOnly" | "items_only" => Ok(Self::ItemsOnly),
+            other => Err(AppError::Validation(format!("不支持的导入模式：{other}"))),
+        }
+    }
 
+    fn import_movements(self) -> bool {
+        self == Self::Full
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Full => "完整导入",
+            Self::ItemsOnly => "只导入物品档案",
+        }
+    }
+}
+
+struct SheetHeader {
+    row_index: usize,
+    columns: HashMap<String, usize>,
+}
+
+impl SheetHeader {
+    fn from_range(
+        range: &calamine::Range<Data>,
+        sheet_name: &str,
+        required: &[&str],
+    ) -> AppResult<Self> {
+        for (row_index, row) in range.rows().take(10).enumerate() {
+            let mut columns = HashMap::new();
             for (index, cell) in row.iter().enumerate() {
-                let label = data_to_text(cell);
-                if label.trim().is_empty() {
+                let text = data_to_text(cell);
+                if text.trim().is_empty() {
                     continue;
                 }
-                if header_matches(&label, &["月份", "账期", "期间", "month"]) {
-                    header.month = Some(index);
-                } else if header_matches(&label, &["日期", "业务日期", "单据日期", "date"])
-                {
-                    header.business_date = Some(index);
-                } else if header_matches(&label, &["物品名称", "物品", "品名", "名称", "itemname"])
-                {
-                    header.item_name = index;
-                } else if header_matches(&label, &["分类", "物品分类", "大类", "category"])
-                {
-                    header.category_name = Some(index);
-                } else if header_matches(&label, &["单位", "unit"]) {
-                    header.unit_name = Some(index);
-                } else if header_matches(&label, &["规格", "型号", "spec"]) {
-                    header.spec = Some(index);
-                } else if header_matches(&label, &["部门", "出库部门", "领用部门", "department"])
-                {
-                    header.department_name = Some(index);
-                } else if header_matches(&label, &["期初数量", "期初", "openingquantity"]) {
-                    header.opening_quantity = Some(index);
-                } else if header_matches(&label, &["期初单价", "openingprice"]) {
-                    header.opening_price = Some(index);
-                } else if header_matches(&label, &["期初金额", "openingamount"]) {
-                    header.opening_amount = Some(index);
-                } else if header_matches(&label, &["入库数量", "采购数量", "inboundquantity"])
-                {
-                    header.inbound_quantity = Some(index);
-                } else if header_matches(&label, &["入库单价", "采购单价", "inboundprice"])
-                {
-                    header.inbound_price = Some(index);
-                } else if header_matches(&label, &["入库金额", "采购金额", "inboundamount"])
-                {
-                    header.inbound_amount = Some(index);
-                } else if header_matches(&label, &["出库数量", "领用数量", "outboundquantity"])
-                {
-                    header.outbound_quantity = Some(index);
-                } else if header_matches(&label, &["出库金额", "领用金额", "outboundamount"])
-                {
-                    header.outbound_amount = Some(index);
-                } else if header_matches(&label, &["平均单价", "移动均价", "均价", "averageprice"])
-                {
-                    header.average_price = Some(index);
-                }
+                columns.insert(normalized_header(&text), index);
             }
-
-            if header.item_name != usize::MAX
-                && (header.month.is_some() || header.business_date.is_some())
-                && (header.opening_quantity.is_some()
-                    || header.inbound_quantity.is_some()
-                    || header.outbound_quantity.is_some())
+            if required
+                .iter()
+                .all(|label| columns.contains_key(&normalized_header(label)))
             {
-                return Some(header);
+                return Ok(Self { row_index, columns });
             }
         }
-        None
+        Err(AppError::Validation(format!(
+            "{sheet_name} 表头不匹配，缺少必填列：{}",
+            required.join("、")
+        )))
+    }
+
+    fn text(&self, row: &[Data], label: &str) -> String {
+        self.columns
+            .get(&normalized_header(label))
+            .and_then(|index| row.get(*index))
+            .map(data_to_text)
+            .unwrap_or_default()
+    }
+
+    fn optional_text(&self, row: &[Data], label: &str) -> Option<String> {
+        let value = self.text(row, label);
+        if value.trim().is_empty() {
+            None
+        } else {
+            Some(value)
+        }
+    }
+
+    fn optional_number(&self, row: &[Data], label: &str) -> Option<f64> {
+        self.columns
+            .get(&normalized_header(label))
+            .and_then(|index| row.get(*index))
+            .and_then(data_to_number)
+    }
+
+    fn datetime(&self, row: &[Data], label: &str) -> Result<Option<String>, String> {
+        self.columns
+            .get(&normalized_header(label))
+            .and_then(|index| row.get(*index))
+            .map(data_to_datetime)
+            .unwrap_or(Ok(None))
     }
 }
 
@@ -1888,8 +1879,137 @@ mod tests {
     use crate::db::migrations;
     use crate::db::repository;
 
+    fn write_template_workbook(path: &Path) {
+        let mut workbook = Workbook::new();
+        {
+            let worksheet = workbook.add_worksheet();
+            worksheet.set_name(ITEM_SHEET).unwrap();
+            for (index, label) in [
+                "物品编码",
+                "物品名称",
+                "分类",
+                "规格",
+                "单位",
+                "参考进价",
+                "参考售价",
+                "预警库存",
+                "备注",
+            ]
+            .iter()
+            .enumerate()
+            {
+                worksheet.write_string(0, index as u16, *label).unwrap();
+            }
+            worksheet.write_string(1, 0, "ITEM-001").unwrap();
+            worksheet.write_string(1, 1, "一次性牙刷").unwrap();
+            worksheet.write_string(1, 2, "客耗").unwrap();
+            worksheet.write_string(1, 3, "软毛").unwrap();
+            worksheet.write_string(1, 4, "支").unwrap();
+            worksheet.write_number(1, 5, 3.0).unwrap();
+            worksheet.write_number(1, 6, 10.0).unwrap();
+        }
+        {
+            let worksheet = workbook.add_worksheet();
+            worksheet.set_name(INBOUND_SHEET).unwrap();
+            for (index, label) in [
+                "业务时间",
+                "供应商",
+                "物品编码",
+                "物品名称",
+                "分类",
+                "规格",
+                "单位",
+                "数量",
+                "进货单价",
+                "进货金额",
+                "经办人",
+                "备注",
+            ]
+            .iter()
+            .enumerate()
+            {
+                worksheet.write_string(0, index as u16, *label).unwrap();
+            }
+            worksheet.write_string(1, 0, "2026-06-01 09:00:00").unwrap();
+            worksheet.write_string(1, 1, "供应商A").unwrap();
+            worksheet.write_string(1, 2, "ITEM-001").unwrap();
+            worksheet.write_string(1, 3, "一次性牙刷").unwrap();
+            worksheet.write_string(1, 4, "客耗").unwrap();
+            worksheet.write_string(1, 5, "软毛").unwrap();
+            worksheet.write_string(1, 6, "支").unwrap();
+            worksheet.write_number(1, 7, 10.0).unwrap();
+            worksheet.write_number(1, 8, 3.0).unwrap();
+            worksheet.write_number(1, 9, 30.0).unwrap();
+        }
+        {
+            let worksheet = workbook.add_worksheet();
+            worksheet.set_name(OUTBOUND_SHEET).unwrap();
+            for (index, label) in [
+                "业务时间",
+                "出库类型",
+                "部门",
+                "物品编码",
+                "物品名称",
+                "分类",
+                "规格",
+                "单位",
+                "数量",
+                "销售单价",
+                "经办人",
+                "用途",
+                "备注",
+            ]
+            .iter()
+            .enumerate()
+            {
+                worksheet.write_string(0, index as u16, *label).unwrap();
+            }
+            worksheet.write_string(1, 0, "2026-06-02 10:00:00").unwrap();
+            worksheet.write_string(1, 1, "酒店客人销售").unwrap();
+            worksheet.write_string(1, 2, "前台").unwrap();
+            worksheet.write_string(1, 3, "ITEM-001").unwrap();
+            worksheet.write_string(1, 4, "一次性牙刷").unwrap();
+            worksheet.write_number(1, 8, 2.0).unwrap();
+            worksheet.write_number(1, 9, 10.0).unwrap();
+        }
+        workbook.save(path).unwrap();
+    }
+
     #[test]
-    fn preview_legacy_workbook_extracts_month_items_and_department_issues() {
+    fn export_import_template_creates_three_sheet_workbook() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("template.xlsx");
+        write_import_template_workbook(&path).unwrap();
+        let parsed = parse_import_template_workbook(path.to_str().unwrap()).unwrap();
+        assert_eq!(parsed.sheet_count, 3);
+        assert!(!parsed.items.is_empty());
+        assert!(!parsed.inbound_rows.is_empty());
+        assert!(!parsed.outbound_rows.is_empty());
+    }
+
+    #[test]
+    fn preview_import_template_reads_item_inbound_outbound_sheets() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("template.xlsx");
+        write_template_workbook(&path);
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrations::run(&conn).unwrap();
+
+        let parsed = parse_import_template_workbook(path.to_str().unwrap()).unwrap();
+        let preview = build_preview(&conn, path.to_str().unwrap(), parsed).unwrap();
+        assert_eq!(preview.sheet_count, 3);
+        assert_eq!(preview.item_count, 1);
+        assert_eq!(preview.inbound_quantity, 10.0);
+        assert_eq!(preview.inbound_amount, 30.0);
+        assert_eq!(preview.outbound_quantity, 2.0);
+        assert_eq!(preview.outbound_amount, 20.0);
+        assert_eq!(preview.document_count, 2);
+        assert!(preview.errors.is_empty());
+    }
+
+    #[test]
+    fn preview_import_template_rejects_old_monthly_workbook() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("legacy.xlsx");
         let mut workbook = Workbook::new();
@@ -1897,196 +2017,82 @@ mod tests {
         worksheet.set_name("2026.1").unwrap();
         worksheet.write_string(0, 0, "名称").unwrap();
         worksheet.write_string(1, 0, "一次性牙刷").unwrap();
-        worksheet.write_string(1, 1, "客耗").unwrap();
-        worksheet.write_number(1, 2, 10.0).unwrap();
-        worksheet.write_number(1, 3, 1.2).unwrap();
-        worksheet.write_number(1, 4, 12.0).unwrap();
-        worksheet.write_string(1, 5, "支").unwrap();
-        worksheet.write_string(1, 6, "普通").unwrap();
-        worksheet.write_number(1, 7, 20.0).unwrap();
-        worksheet.write_number(1, 8, 1.1).unwrap();
-        worksheet.write_number(1, 9, 22.0).unwrap();
-        worksheet.write_number(1, 10, 1.13).unwrap();
-        worksheet.write_number(1, 17, 5.0).unwrap();
-        worksheet.write_number(1, 18, 5.65).unwrap();
         workbook.save(&path).unwrap();
 
-        let conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        migrations::run(&conn).unwrap();
-
-        let parsed = parse_legacy_workbook(path.to_str().unwrap()).unwrap();
-        let preview = build_preview(&conn, path.to_str().unwrap(), parsed).unwrap();
-        assert_eq!(preview.sheet_count, 1);
-        assert_eq!(preview.item_count, 1);
-        assert_eq!(preview.opening_quantity, 10.0);
-        assert_eq!(preview.inbound_quantity, 20.0);
-        assert_eq!(preview.outbound_quantity, 5.0);
-        assert_eq!(preview.months[0].month, "2026-01");
-    }
-
-    #[test]
-    fn preview_template_workbook_extracts_generic_columns() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("template.xlsx");
-        let mut workbook = Workbook::new();
-        let worksheet = workbook.add_worksheet();
-        worksheet.set_name("通用模板").unwrap();
-        for (index, label) in [
-            "月份",
-            "物品名称",
-            "分类",
-            "规格",
-            "单位",
-            "期初数量",
-            "期初单价",
-            "入库数量",
-            "入库单价",
-            "出库部门",
-            "出库数量",
-            "出库金额",
-        ]
-        .iter()
-        .enumerate()
-        {
-            worksheet.write_string(0, index as u16, *label).unwrap();
-        }
-        worksheet.write_string(1, 0, "2026-06").unwrap();
-        worksheet.write_string(1, 1, "洗发水").unwrap();
-        worksheet.write_string(1, 2, "客耗").unwrap();
-        worksheet.write_string(1, 3, "300ml").unwrap();
-        worksheet.write_string(1, 4, "瓶").unwrap();
-        worksheet.write_number(1, 5, 8.0).unwrap();
-        worksheet.write_number(1, 6, 12.5).unwrap();
-        worksheet.write_number(1, 7, 10.0).unwrap();
-        worksheet.write_number(1, 8, 11.0).unwrap();
-        worksheet.write_string(1, 9, "客房").unwrap();
-        worksheet.write_number(1, 10, 3.0).unwrap();
-        worksheet.write_number(1, 11, 36.0).unwrap();
-        workbook.save(&path).unwrap();
-
-        let conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        migrations::run(&conn).unwrap();
-
-        let parsed = parse_legacy_workbook(path.to_str().unwrap()).unwrap();
-        let preview = build_preview(&conn, path.to_str().unwrap(), parsed).unwrap();
-        assert_eq!(preview.sheet_count, 1);
-        assert_eq!(preview.row_count, 1);
-        assert_eq!(preview.item_count, 1);
-        assert_eq!(preview.months[0].month, "2026-06");
-        assert_eq!(preview.opening_quantity, 8.0);
-        assert_eq!(preview.inbound_quantity, 10.0);
-        assert_eq!(preview.outbound_quantity, 3.0);
-        assert_eq!(preview.outbound_amount, 36.0);
-        assert!(preview.errors.is_empty());
+        let error = parse_import_template_workbook(path.to_str().unwrap()).unwrap_err();
+        assert!(error.to_string().contains("缺少工作表"));
     }
 
     #[test]
     fn preview_template_workbook_reports_validation_messages() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("template-invalid.xlsx");
+        let path = dir.path().join("invalid.xlsx");
         let mut workbook = Workbook::new();
-        let worksheet = workbook.add_worksheet();
-        worksheet.set_name("通用模板").unwrap();
-        for (index, label) in [
-            "月份",
-            "物品名称",
-            "单位",
-            "入库数量",
-            "入库单价",
-            "入库金额",
-            "出库部门",
-            "出库数量",
-            "出库金额",
-        ]
-        .iter()
-        .enumerate()
         {
-            worksheet.write_string(0, index as u16, *label).unwrap();
+            let worksheet = workbook.add_worksheet();
+            worksheet.set_name(ITEM_SHEET).unwrap();
+            for (index, label) in ["物品名称", "单位"].iter().enumerate() {
+                worksheet.write_string(0, index as u16, *label).unwrap();
+            }
+            worksheet.write_string(1, 0, "问题物品").unwrap();
+            worksheet.write_string(1, 1, "").unwrap();
         }
-        worksheet.write_string(1, 0, "2026-06").unwrap();
-        worksheet.write_string(1, 1, "问题物品").unwrap();
-        worksheet.write_string(1, 2, "").unwrap();
-        worksheet.write_number(1, 3, -2.0).unwrap();
-        worksheet.write_number(1, 4, 0.0).unwrap();
-        worksheet.write_number(1, 5, 9.0).unwrap();
-        worksheet.write_string(1, 6, "客房").unwrap();
-        worksheet.write_number(1, 7, 1.0).unwrap();
-        worksheet.write_number(1, 8, 3.0).unwrap();
-        worksheet.write_string(2, 0, "2026-06").unwrap();
-        worksheet.write_string(2, 1, "问题物品").unwrap();
-        worksheet.write_string(2, 2, "").unwrap();
-        worksheet.write_string(3, 0, "2026-06").unwrap();
-        worksheet.write_string(3, 1, "单价异常物品").unwrap();
-        worksheet.write_string(3, 2, "件").unwrap();
-        worksheet.write_number(3, 3, 2.0).unwrap();
-        worksheet.write_number(3, 4, 0.0).unwrap();
-        worksheet.write_number(3, 5, 9.0).unwrap();
-        worksheet.write_string(4, 0, "2026-06").unwrap();
-        worksheet.write_string(4, 1, "金额不平物品").unwrap();
-        worksheet.write_string(4, 2, "件").unwrap();
-        worksheet.write_number(4, 3, 2.0).unwrap();
-        worksheet.write_number(4, 4, 3.0).unwrap();
-        worksheet.write_number(4, 5, 9.0).unwrap();
+        {
+            let worksheet = workbook.add_worksheet();
+            worksheet.set_name(INBOUND_SHEET).unwrap();
+            for (index, label) in ["业务时间", "物品名称", "数量", "进货单价", "进货金额"]
+                .iter()
+                .enumerate()
+            {
+                worksheet.write_string(0, index as u16, *label).unwrap();
+            }
+            worksheet.write_string(1, 0, "2026-06-01").unwrap();
+            worksheet.write_string(1, 1, "问题物品").unwrap();
+            worksheet.write_number(1, 2, -2.0).unwrap();
+            worksheet.write_number(1, 3, 3.0).unwrap();
+            worksheet.write_number(1, 4, 9.0).unwrap();
+            worksheet.write_string(2, 0, "2026-06-01 09:00:00").unwrap();
+            worksheet.write_string(2, 1, "金额不平物品").unwrap();
+            worksheet.write_number(2, 2, 2.0).unwrap();
+            worksheet.write_number(2, 3, 3.0).unwrap();
+            worksheet.write_number(2, 4, 9.0).unwrap();
+        }
+        {
+            let worksheet = workbook.add_worksheet();
+            worksheet.set_name(OUTBOUND_SHEET).unwrap();
+            for (index, label) in ["业务时间", "出库类型", "部门", "物品名称", "数量"]
+                .iter()
+                .enumerate()
+            {
+                worksheet.write_string(0, index as u16, *label).unwrap();
+            }
+        }
         workbook.save(&path).unwrap();
 
-        let conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        migrations::run(&conn).unwrap();
-
-        let parsed = parse_legacy_workbook(path.to_str().unwrap()).unwrap();
-        let preview = build_preview(&conn, path.to_str().unwrap(), parsed).unwrap();
-        let error_text = preview
+        let parsed = parse_import_template_workbook(path.to_str().unwrap()).unwrap();
+        let error_text = parsed
             .errors
             .iter()
             .map(|message| message.message.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        let warning_text = preview
+        let warning_text = parsed
             .warnings
             .iter()
             .map(|message| message.message.as_str())
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(error_text.contains("单位为空"));
-        assert!(error_text.contains("数量异常"));
-        assert!(error_text.contains("单价异常"));
-        assert!(warning_text.contains("入库金额不平"));
-        assert!(warning_text.contains("重复行"));
-    }
-
-    #[test]
-    fn preview_legacy_workbook_reports_blank_item_name() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("legacy-blank-item.xlsx");
-        let mut workbook = Workbook::new();
-        let worksheet = workbook.add_worksheet();
-        worksheet.set_name("2026.1").unwrap();
-        worksheet.write_string(0, 0, "名称").unwrap();
-        worksheet.write_string(1, 5, "支").unwrap();
-        worksheet.write_number(1, 7, 10.0).unwrap();
-        workbook.save(&path).unwrap();
-
-        let conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        migrations::run(&conn).unwrap();
-
-        let parsed = parse_legacy_workbook(path.to_str().unwrap()).unwrap();
-        let preview = build_preview(&conn, path.to_str().unwrap(), parsed).unwrap();
-        assert!(preview
-            .errors
-            .iter()
-            .any(|message| message.message.contains("物品名称不能为空")));
-        assert_eq!(preview.row_count, 0);
+        assert!(error_text.contains("单位不能为空"));
+        assert!(error_text.contains("必须包含真实时间"));
+        assert!(warning_text.contains("进货金额不平"));
     }
 
     #[test]
     fn detect_formula_errors_reports_cell_errors() {
         let mut errors = Vec::new();
         detect_formula_errors(
-            "通用模板",
+            "导入模板",
             3,
             &[
                 Data::String("2026-06".to_string()),
@@ -2098,164 +2104,138 @@ mod tests {
 
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].level, "error");
-        assert_eq!(errors[0].sheet, "通用模板");
         assert_eq!(errors[0].row, 3);
         assert_eq!(errors[0].column.as_deref(), Some("C"));
         assert!(errors[0].message.contains("公式错误"));
     }
 
     #[test]
-    fn preview_legacy_workbook_warns_unmapped_department_columns() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("legacy-extra-department.xlsx");
-        let mut workbook = Workbook::new();
-        let worksheet = workbook.add_worksheet();
-        worksheet.set_name("2026.1").unwrap();
-        worksheet.write_string(0, 0, "名称").unwrap();
-        worksheet.write_string(1, 0, "一次性拖鞋").unwrap();
-        worksheet.write_string(1, 5, "双").unwrap();
-        worksheet.write_number(1, 7, 10.0).unwrap();
-        worksheet.write_number(1, 8, 2.0).unwrap();
-        worksheet.write_number(1, 27, 5.0).unwrap();
-        workbook.save(&path).unwrap();
-
-        let conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        migrations::run(&conn).unwrap();
-
-        let parsed = parse_legacy_workbook(path.to_str().unwrap()).unwrap();
-        let preview = build_preview(&conn, path.to_str().unwrap(), parsed).unwrap();
-        assert!(preview
-            .warnings
-            .iter()
-            .any(|message| message.message.contains("未识别的部门列")));
-    }
-
-    #[test]
-    fn import_template_workbook_creates_missing_department_and_movements() {
+    fn import_template_creates_batches_and_guest_sale_costs() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("template-import.xlsx");
-        let mut workbook = Workbook::new();
-        let worksheet = workbook.add_worksheet();
-        worksheet.set_name("导入模板").unwrap();
-        for (index, label) in [
-            "月份",
-            "物品名称",
-            "单位",
-            "入库数量",
-            "入库单价",
-            "出库部门",
-            "出库数量",
-            "出库金额",
-        ]
-        .iter()
-        .enumerate()
-        {
-            worksheet.write_string(0, index as u16, *label).unwrap();
-        }
-        worksheet.write_string(1, 0, "2026.06").unwrap();
-        worksheet.write_string(1, 1, "定制拖鞋").unwrap();
-        worksheet.write_string(1, 2, "双").unwrap();
-        worksheet.write_number(1, 3, 20.0).unwrap();
-        worksheet.write_number(1, 4, 2.5).unwrap();
-        worksheet.write_string(1, 5, "新部门").unwrap();
-        worksheet.write_number(1, 6, 4.0).unwrap();
-        worksheet.write_number(1, 7, 10.0).unwrap();
-        workbook.save(&path).unwrap();
+        write_template_workbook(&path);
 
-        let conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         migrations::run(&conn).unwrap();
-        let parsed = parse_legacy_workbook(path.to_str().unwrap()).unwrap();
+        let parsed = parse_import_template_workbook(path.to_str().unwrap()).unwrap();
         let preview = build_preview(&conn, path.to_str().unwrap(), parsed.clone()).unwrap();
 
-        let mut conn = conn;
-        let mut tx = conn.transaction().unwrap();
         let result = import_parsed_workbook(
-            &mut tx,
+            &mut conn,
             path.to_str().unwrap(),
             "job-template",
             &parsed,
             &preview,
             ImportMode::Full,
+            false,
         )
         .unwrap();
-        tx.commit().unwrap();
 
         assert_eq!(result.imported_items, 1);
-        assert_eq!(result.movement_count, 2);
-        let department_count: i64 = conn
+        assert_eq!(result.document_count, 2);
+        let batch_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM stock_batches", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(batch_count, 1);
+        let (sale_amount, cost_amount): (f64, f64) = conn
             .query_row(
-                "SELECT COUNT(*) FROM departments WHERE name = '新部门'",
+                "SELECT sale_amount, cost_amount
+                 FROM stock_document_lines
+                 WHERE sale_amount IS NOT NULL",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(sale_amount, 20.0);
+        assert_eq!(cost_amount, 6.0);
+    }
+
+    #[test]
+    fn import_template_uses_existing_supplier_and_department_ids() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("template-existing-party.xlsx");
+        write_template_workbook(&path);
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrations::run(&conn).unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO suppliers (id, name, enabled) VALUES ('supplier-existing', '供应商A', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO departments (id, code, name, enabled) VALUES ('dept-existing-front', 'D900', '前台', 1)",
+            [],
+        )
+        .unwrap();
+        let parsed = parse_import_template_workbook(path.to_str().unwrap()).unwrap();
+        let preview = build_preview(&conn, path.to_str().unwrap(), parsed.clone()).unwrap();
+
+        import_parsed_workbook(
+            &mut conn,
+            path.to_str().unwrap(),
+            "job-existing-party",
+            &parsed,
+            &preview,
+            ImportMode::Full,
+            false,
+        )
+        .unwrap();
+
+        let supplier_id: String = conn
+            .query_row(
+                "SELECT supplier_id FROM stock_documents WHERE document_type = 'inbound'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(department_count, 1);
-        let outbound_count: i64 = conn
+        let department_id: String = conn
             .query_row(
-                "SELECT COUNT(*) FROM stock_movements m
-                 JOIN departments d ON d.id = m.department_id
-                 WHERE d.name = '新部门' AND m.direction = 'out'",
+                "SELECT department_id FROM stock_documents WHERE document_type = 'outbound'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(outbound_count, 1);
+        assert_eq!(supplier_id, "supplier-existing");
+        assert_eq!(department_id, "dept-existing-front");
     }
 
     #[test]
     fn import_items_only_creates_items_without_documents_or_movements() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("items-only.xlsx");
-        let mut workbook = Workbook::new();
-        let worksheet = workbook.add_worksheet();
-        worksheet.set_name("2026.6").unwrap();
-        worksheet.write_string(0, 0, "名称").unwrap();
-        worksheet.write_string(1, 0, "一次性梳子").unwrap();
-        worksheet.write_string(1, 1, "客耗").unwrap();
-        worksheet.write_number(1, 2, 12.0).unwrap();
-        worksheet.write_number(1, 3, 0.8).unwrap();
-        worksheet.write_string(1, 5, "把").unwrap();
-        worksheet.write_number(1, 7, 6.0).unwrap();
-        worksheet.write_number(1, 8, 0.7).unwrap();
-        worksheet.write_number(1, 17, 3.0).unwrap();
-        workbook.save(&path).unwrap();
+        write_template_workbook(&path);
 
-        let conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         migrations::run(&conn).unwrap();
-        let parsed = parse_legacy_workbook(path.to_str().unwrap()).unwrap();
+        let parsed = parse_import_template_workbook(path.to_str().unwrap()).unwrap();
         let preview = build_preview(&conn, path.to_str().unwrap(), parsed.clone()).unwrap();
 
-        let mut conn = conn;
-        let mut tx = conn.transaction().unwrap();
         let result = import_parsed_workbook(
-            &mut tx,
+            &mut conn,
             path.to_str().unwrap(),
             "job-items-only",
             &parsed,
             &preview,
             ImportMode::ItemsOnly,
+            false,
         )
         .unwrap();
-        tx.commit().unwrap();
 
         assert_eq!(result.imported_items, 1);
         assert_eq!(result.document_count, 0);
         assert_eq!(result.movement_count, 0);
         let item_count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM master_items WHERE name = '一次性梳子'",
+                "SELECT COUNT(*) FROM master_items WHERE name = '一次性牙刷'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
         assert_eq!(item_count, 1);
-        let movement_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM stock_movements", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(movement_count, 0);
     }
 
     #[test]
@@ -2275,7 +2255,7 @@ mod tests {
         };
         let preview = ImportPreview {
             source_file: result.source_file.clone(),
-            sheet_count: 1,
+            sheet_count: 3,
             row_count: 2,
             item_count: 3,
             new_item_count: 1,
@@ -2299,27 +2279,6 @@ mod tests {
         assert!(report_text.contains("\"jobId\": \"job-report\""));
         assert!(report_text.contains("\"mode\": \"完整导入\""));
         assert!(report_text.contains("\"movementCount\": 4"));
-    }
-
-    #[test]
-    fn preview_existing_hotel_workbook_when_available() {
-        let Ok(workbook_path) = std::env::var("ASTER_TEST_LEGACY_WORKBOOK") else {
-            return;
-        };
-        let path = Path::new(&workbook_path);
-        if !path.exists() {
-            return;
-        }
-
-        let conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        migrations::run(&conn).unwrap();
-
-        let parsed = parse_legacy_workbook(path.to_str().unwrap()).unwrap();
-        let preview = build_preview(&conn, path.to_str().unwrap(), parsed).unwrap();
-        assert!(preview.sheet_count >= 1);
-        assert!(preview.row_count >= 1);
-        assert!(preview.item_count >= 1);
     }
 
     #[test]
@@ -2375,61 +2334,37 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("invalid-import.xlsx");
         let mut workbook = Workbook::new();
-        let worksheet = workbook.add_worksheet();
-        worksheet.set_name("导入模板").unwrap();
-        for (index, label) in ["月份", "物品名称", "单位", "入库数量", "入库单价"]
-            .iter()
-            .enumerate()
         {
-            worksheet.write_string(0, index as u16, *label).unwrap();
+            let worksheet = workbook.add_worksheet();
+            worksheet.set_name(ITEM_SHEET).unwrap();
+            worksheet.write_string(0, 0, "物品名称").unwrap();
+            worksheet.write_string(0, 1, "单位").unwrap();
+            worksheet.write_string(1, 0, "缺单位物品").unwrap();
         }
-        worksheet.write_string(1, 0, "2026-06").unwrap();
-        worksheet.write_string(1, 1, "缺单位物品").unwrap();
-        worksheet.write_string(1, 2, "").unwrap();
-        worksheet.write_number(1, 3, 2.0).unwrap();
-        worksheet.write_number(1, 4, 3.0).unwrap();
+        {
+            let worksheet = workbook.add_worksheet();
+            worksheet.set_name(INBOUND_SHEET).unwrap();
+            for (index, label) in ["业务时间", "物品名称", "数量", "进货单价"]
+                .iter()
+                .enumerate()
+            {
+                worksheet.write_string(0, index as u16, *label).unwrap();
+            }
+        }
+        {
+            let worksheet = workbook.add_worksheet();
+            worksheet.set_name(OUTBOUND_SHEET).unwrap();
+            for (index, label) in ["业务时间", "出库类型", "部门", "物品名称", "数量"]
+                .iter()
+                .enumerate()
+            {
+                worksheet.write_string(0, index as u16, *label).unwrap();
+            }
+        }
         workbook.save(&path).unwrap();
 
-        let paths = AppPaths {
-            data_dir: dir.path().join("app-data"),
-            database_path: dir.path().join("app-data").join("aster.sqlite"),
-            backup_dir: dir.path().join("backups"),
-            export_dir: dir.path().join("exports"),
-            import_report_dir: dir.path().join("import-reports"),
-        };
-        fs::create_dir_all(&paths.data_dir).unwrap();
-        fs::create_dir_all(&paths.backup_dir).unwrap();
-        fs::create_dir_all(&paths.export_dir).unwrap();
-        fs::create_dir_all(&paths.import_report_dir).unwrap();
-        let state = AppState {
-            db: Db::initialize(&paths).unwrap(),
-            paths,
-            session: std::sync::Arc::new(std::sync::Mutex::new(Some(
-                crate::domain::users::CurrentUser {
-                    id: "user-admin".to_string(),
-                    username: "admin".to_string(),
-                    display_name: "管理员".to_string(),
-                    department_id: None,
-                    department_name: None,
-                    roles: vec![crate::domain::users::Role {
-                        id: "role-admin".to_string(),
-                        code: "admin".to_string(),
-                        name: "管理员".to_string(),
-                    }],
-                    permissions: vec![
-                        "manage_users".to_string(),
-                        "manage_settings".to_string(),
-                        "write_stock".to_string(),
-                        "view_reports".to_string(),
-                        "dangerous_operations".to_string(),
-                    ],
-                },
-            ))),
-            host_service: std::sync::Arc::new(std::sync::Mutex::new(
-                crate::services::host_service::HostServiceRuntime::default(),
-            )),
-        };
-
+        let paths = test_paths(dir.path());
+        let state = admin_state(paths);
         let error = run_excel_import(
             &state,
             RunImportRequest {
@@ -2450,11 +2385,8 @@ mod tests {
                     [],
                     |row| row.get(0),
                 )?;
-                let movement_count: i64 =
-                    conn.query_row("SELECT COUNT(*) FROM stock_movements", [], |row| row.get(0))?;
                 assert_eq!(backup_count, 0);
                 assert_eq!(item_count, 0);
-                assert_eq!(movement_count, 0);
                 Ok(())
             })
             .unwrap();
@@ -2464,67 +2396,15 @@ mod tests {
     fn run_excel_import_creates_before_import_backup_before_writes() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("valid-import.xlsx");
-        let mut workbook = Workbook::new();
-        let worksheet = workbook.add_worksheet();
-        worksheet.set_name("导入模板").unwrap();
-        for (index, label) in ["月份", "物品名称", "单位", "入库数量", "入库单价"]
-            .iter()
-            .enumerate()
-        {
-            worksheet.write_string(0, index as u16, *label).unwrap();
-        }
-        worksheet.write_string(1, 0, "2026-06").unwrap();
-        worksheet.write_string(1, 1, "导入前备份物品").unwrap();
-        worksheet.write_string(1, 2, "件").unwrap();
-        worksheet.write_number(1, 3, 2.0).unwrap();
-        worksheet.write_number(1, 4, 3.0).unwrap();
-        workbook.save(&path).unwrap();
-
-        let paths = AppPaths {
-            data_dir: dir.path().join("app-data"),
-            database_path: dir.path().join("app-data").join("aster.sqlite"),
-            backup_dir: dir.path().join("backups"),
-            export_dir: dir.path().join("exports"),
-            import_report_dir: dir.path().join("import-reports"),
-        };
-        fs::create_dir_all(&paths.data_dir).unwrap();
-        fs::create_dir_all(&paths.backup_dir).unwrap();
-        fs::create_dir_all(&paths.export_dir).unwrap();
-        fs::create_dir_all(&paths.import_report_dir).unwrap();
-        let state = AppState {
-            db: Db::initialize(&paths).unwrap(),
-            paths,
-            session: std::sync::Arc::new(std::sync::Mutex::new(Some(
-                crate::domain::users::CurrentUser {
-                    id: "user-admin".to_string(),
-                    username: "admin".to_string(),
-                    display_name: "管理员".to_string(),
-                    department_id: None,
-                    department_name: None,
-                    roles: vec![crate::domain::users::Role {
-                        id: "role-admin".to_string(),
-                        code: "admin".to_string(),
-                        name: "管理员".to_string(),
-                    }],
-                    permissions: vec![
-                        "manage_users".to_string(),
-                        "manage_settings".to_string(),
-                        "write_stock".to_string(),
-                        "view_reports".to_string(),
-                        "dangerous_operations".to_string(),
-                    ],
-                },
-            ))),
-            host_service: std::sync::Arc::new(std::sync::Mutex::new(
-                crate::services::host_service::HostServiceRuntime::default(),
-            )),
-        };
+        write_template_workbook(&path);
+        let paths = test_paths(dir.path());
+        let state = admin_state(paths);
 
         let result = run_excel_import(
             &state,
             RunImportRequest {
                 path: path.display().to_string(),
-                mode: None,
+                mode: Some("itemsOnly".to_string()),
             },
         )
         .unwrap();
@@ -2548,7 +2428,7 @@ mod tests {
                     |row| row.get(0),
                 )?;
                 let imported_count: i64 = conn.query_row(
-                    "SELECT COUNT(*) FROM master_items WHERE name = '导入前备份物品'",
+                    "SELECT COUNT(*) FROM master_items WHERE name = '一次性牙刷'",
                     [],
                     |row| row.get(0),
                 )?;
@@ -2572,7 +2452,7 @@ mod tests {
         let backup_conn = Connection::open(&backup_database).unwrap();
         let item_count_in_backup: i64 = backup_conn
             .query_row(
-                "SELECT COUNT(*) FROM master_items WHERE name = '导入前备份物品'",
+                "SELECT COUNT(*) FROM master_items WHERE name = '一次性牙刷'",
                 [],
                 |row| row.get(0),
             )
@@ -2583,16 +2463,7 @@ mod tests {
     #[test]
     fn preview_excel_import_rejects_client_mode_before_parsing_workbook() {
         let dir = tempdir().unwrap();
-        let paths = AppPaths {
-            data_dir: dir.path().to_path_buf(),
-            database_path: dir.path().join("aster.sqlite"),
-            backup_dir: dir.path().join("backups"),
-            export_dir: dir.path().join("exports"),
-            import_report_dir: dir.path().join("import-reports"),
-        };
-        fs::create_dir_all(&paths.backup_dir).unwrap();
-        fs::create_dir_all(&paths.export_dir).unwrap();
-        fs::create_dir_all(&paths.import_report_dir).unwrap();
+        let paths = test_paths(dir.path());
         let state = AppState {
             db: Db::initialize(&paths).unwrap(),
             paths,
@@ -2613,7 +2484,52 @@ mod tests {
             },
         )
         .unwrap_err();
-
         assert!(error.to_string().contains("客户端模式不能操作正式数据库"));
+    }
+
+    fn test_paths(root: &Path) -> AppPaths {
+        let paths = AppPaths {
+            data_dir: root.join("app-data"),
+            database_path: root.join("app-data").join("aster.sqlite"),
+            backup_dir: root.join("backups"),
+            export_dir: root.join("exports"),
+            import_report_dir: root.join("import-reports"),
+        };
+        fs::create_dir_all(&paths.data_dir).unwrap();
+        fs::create_dir_all(&paths.backup_dir).unwrap();
+        fs::create_dir_all(&paths.export_dir).unwrap();
+        fs::create_dir_all(&paths.import_report_dir).unwrap();
+        paths
+    }
+
+    fn admin_state(paths: AppPaths) -> AppState {
+        AppState {
+            db: Db::initialize(&paths).unwrap(),
+            paths,
+            session: std::sync::Arc::new(std::sync::Mutex::new(Some(
+                crate::domain::users::CurrentUser {
+                    id: "user-admin".to_string(),
+                    username: "admin".to_string(),
+                    display_name: "管理员".to_string(),
+                    department_id: None,
+                    department_name: None,
+                    roles: vec![crate::domain::users::Role {
+                        id: "role-admin".to_string(),
+                        code: "admin".to_string(),
+                        name: "管理员".to_string(),
+                    }],
+                    permissions: vec![
+                        "manage_users".to_string(),
+                        "manage_settings".to_string(),
+                        "write_stock".to_string(),
+                        "view_reports".to_string(),
+                        "dangerous_operations".to_string(),
+                    ],
+                },
+            ))),
+            host_service: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::services::host_service::HostServiceRuntime::default(),
+            )),
+        }
     }
 }

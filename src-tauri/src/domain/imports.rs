@@ -15,6 +15,12 @@ pub struct RunImportRequest {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ExportImportTemplateResult {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ImportPreview {
     pub source_file: String,
     pub sheet_count: usize,

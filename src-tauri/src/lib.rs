@@ -21,7 +21,7 @@ use commands::host_commands::{
     discover_hosts, get_host_service_status, list_client_connections, pair_with_host,
     remove_client_connection, save_client_config, start_host_service, test_host_connection,
 };
-use commands::import_commands::{preview_excel_import, run_excel_import};
+use commands::import_commands::{export_import_template, preview_excel_import, run_excel_import};
 use commands::master_data_commands::{
     list_budget_rules, list_categories, list_departments, list_items,
     list_supplier_purchase_records, list_suppliers, list_units, save_budget_rule, save_category,
@@ -100,6 +100,7 @@ pub fn run() {
             list_stock_movements,
             get_report_bundle,
             export_monthly_report,
+            export_import_template,
             preview_excel_import,
             run_excel_import,
             create_backup,

@@ -2492,6 +2492,20 @@ function MainApp() {
     }
   }
 
+  async function exportImportTemplate() {
+    try {
+      setError(null);
+      setNotice(null);
+      setIsImporting(true);
+      const result = await invoke<{ path: string }>("export_import_template");
+      setNotice(`新版 Excel 导入模板已生成：${result.path}`);
+    } catch (err) {
+      setError(formatError(err));
+    } finally {
+      setIsImporting(false);
+    }
+  }
+
   async function runImport(path: string, mode: "full" | "itemsOnly") {
     try {
       setError(null);
@@ -3180,6 +3194,7 @@ function MainApp() {
             canPreviewImport={canUseLocalImport}
             canRunImport={canWriteStock && canUseLocalImport}
             isWorking={isImporting}
+            onExportTemplate={exportImportTemplate}
             onPreview={previewImport}
             onRun={runImport}
             preview={importPreview}
@@ -9790,6 +9805,7 @@ function ImportPage({
   canPreviewImport,
   canRunImport,
   isWorking,
+  onExportTemplate,
   onPreview,
   onRun,
   preview,
@@ -9798,6 +9814,7 @@ function ImportPage({
   canPreviewImport: boolean;
   canRunImport: boolean;
   isWorking: boolean;
+  onExportTemplate: () => Promise<void>;
   onPreview: (path: string) => Promise<void>;
   onRun: (path: string, mode: "full" | "itemsOnly") => Promise<void>;
   preview: ImportPreview | null;
@@ -9843,11 +9860,18 @@ function ImportPage({
       <div className="module-panel import-toolbar">
         <div>
           <p>
-            支持旧酒店月报和通用模板，预览不会写入数据库；确认导入后生成物品档案、入库单、出库单、库存流水和余额。
+            请使用新版三表模板：物品档案、入库明细、出库明细。预览不会写入数据库；确认导入后按真实单据生成批次、流水、库存和销售成本。
           </p>
         </div>
         <div className="import-path-row">
           <input readOnly value={path} placeholder="请选择 .xlsx 文件" />
+          <button
+            className="ghost-button"
+            disabled={isWorking || !canPreviewImport}
+            onClick={onExportTemplate}
+          >
+            生成导入模板
+          </button>
           <button
             className="ghost-button"
             disabled={isWorking || !canPreviewImport}
