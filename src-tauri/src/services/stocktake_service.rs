@@ -84,7 +84,8 @@ pub fn export_stocktake_sheet(
     let detail = get_stocktake_detail(state, request.stocktake_id)?;
     let file_name = format!(
         "Aster-盘点表-{}-{}.xlsx",
-        detail.document.business_date, detail.document.document_no
+        safe_file_part(&detail.document.business_date),
+        safe_file_part(&detail.document.document_no)
     );
     let export_dir = crate::services::status_service::effective_export_dir(state)?;
     std::fs::create_dir_all(&export_dir)?;
@@ -228,6 +229,27 @@ fn xlsx_error(error: rust_xlsxwriter::XlsxError) -> AppError {
     AppError::Validation(format!("盘点表导出失败：{error}"))
 }
 
+fn safe_file_part(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| {
+            if matches!(
+                ch,
+                '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' | ' '
+            ) {
+                '-'
+            } else {
+                ch
+            }
+        })
+        .collect::<String>();
+    sanitized
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -272,6 +294,12 @@ mod tests {
             )),
         };
         (dir, state)
+    }
+
+    #[test]
+    fn stocktake_export_file_name_is_windows_safe() {
+        assert_eq!(safe_file_part("2026-06-30 09:10:11"), "2026-06-30-09-10-11");
+        assert_eq!(safe_file_part("STK:2026/06|30"), "STK-2026-06-30");
     }
 
     #[test]
