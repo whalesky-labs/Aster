@@ -979,7 +979,8 @@ mod tests {
         assert_eq!(status.runtime.mode, RuntimeMode::Client);
         assert_eq!(status.runtime.host_address.as_deref(), Some("127.0.0.1"));
         assert_eq!(status.metrics.item_count, 0);
-        assert!(status.health.message.contains("客户端未登录"));
+        assert!(status.health.message.contains("未登录"));
+        assert!(status.health.message.contains("本机连接配置"));
     }
 
     #[test]
