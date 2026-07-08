@@ -144,7 +144,7 @@ pub fn list_audit_logs(conn: &Connection, limit: i64) -> AppResult<Vec<AuditLogR
             id: row.get(0)?,
             action: row.get(1)?,
             entity_type: row.get(2)?,
-            entity_id: row.get(3)?,
+            entity_id: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
             summary: row.get(4)?,
             operator: row.get(5)?,
             created_at: row.get(6)?,
@@ -279,6 +279,24 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "audit-new");
         assert_eq!(rows[0].summary, "新记录");
+    }
+
+    #[test]
+    fn list_audit_logs_handles_null_entity_id() {
+        let conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrations::run(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO audit_logs (id, action, entity_type, entity_id, summary, operator, created_at)
+             VALUES ('audit-null-entity', 'rebuild_stock_balances', 'stock_balances', NULL, '重建库存余额', 'system', '2026-07-08T15:08:08+08:00')",
+            [],
+        )
+        .unwrap();
+
+        let rows = list_audit_logs(&conn, 20).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "audit-null-entity");
+        assert_eq!(rows[0].entity_id, "");
     }
 
     #[test]

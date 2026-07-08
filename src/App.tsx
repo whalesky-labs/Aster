@@ -882,6 +882,7 @@ type EditorKind =
   | "budget"
   | "user"
   | "changePassword"
+  | "passwordReset"
   | "businessSettings"
   | "clientConnection"
   | "clientPairing"
@@ -1244,6 +1245,7 @@ const loginExpressionItems = [
 
 const APPEARANCE_STORAGE_KEY = "aster.appearance";
 const APPEARANCE_CHANGED_EVENT = "appearance:changed";
+const REMEMBERED_LOGIN_STORAGE_KEY = "aster.rememberedLogin";
 
 declare global {
   interface Window {
@@ -1405,6 +1407,26 @@ function loadAppearanceSettings() {
     );
   } catch {
     return defaultAppearanceSettings;
+  }
+}
+
+function loadRememberedLogin() {
+  try {
+    const raw = window.localStorage.getItem(REMEMBERED_LOGIN_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { password?: unknown; username?: unknown };
+    if (
+      typeof parsed.username !== "string" ||
+      typeof parsed.password !== "string"
+    ) {
+      return null;
+    }
+    return {
+      password: parsed.password,
+      username: parsed.username,
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -1705,6 +1727,7 @@ function editorTitle(
     businessSettings: "业务与目录设置",
     category: "分类",
     changePassword: "修改密码",
+    passwordReset: "找回密码",
     clientConnection: "客户端连接",
     clientPairing: "客户端配对",
     connectionWizard: "多电脑连接",
@@ -1724,6 +1747,7 @@ function editorTitle(
   if (editor === "adjustment") return "新建调整单";
   if (
     editor === "changePassword" ||
+    editor === "passwordReset" ||
     editor === "businessSettings" ||
     editor === "clientConnection" ||
     editor === "clientPairing" ||
@@ -1757,6 +1781,9 @@ function editorWindowSize(editor: EditorKind) {
   if (compactEditors.includes(editor)) {
     return { width: 620, height: 380, minWidth: 520, minHeight: 320 };
   }
+  if (editor === "passwordReset") {
+    return { width: 460, height: 420, minWidth: 420, minHeight: 360 };
+  }
   if (editor === "item" || editor === "user" || editor === "businessSettings") {
     return { width: 760, height: 560, minWidth: 640, minHeight: 420 };
   }
@@ -1772,6 +1799,9 @@ function editorWindowSize(editor: EditorKind) {
   }
   if (editor === "clientPairing") {
     return { width: 620, height: 420, minWidth: 520, minHeight: 340 };
+  }
+  if (editor === "connectionWizard") {
+    return { width: 680, height: 560, minWidth: 560, minHeight: 460 };
   }
   return { width: 860, height: 720, minWidth: 680, minHeight: 560 };
 }
@@ -2473,6 +2503,20 @@ function MainApp() {
     });
   }
 
+  async function exportItems(search = itemSearch) {
+    try {
+      setError(null);
+      setNotice(null);
+      const result = await invoke<{ path: string }>("export_items", {
+        search,
+      });
+      await refreshAll();
+      setNotice(`物品档案已导出：${result.path}`);
+    } catch (err) {
+      setError(formatError(err));
+    }
+  }
+
   async function previewImport(path: string) {
     try {
       setError(null);
@@ -2528,6 +2572,15 @@ function MainApp() {
     }
   }
 
+  async function importItemsFromToolbar() {
+    const selected = await chooseSinglePath({
+      title: "选择物品档案导入 Excel",
+      filters: [{ name: "Excel 工作簿", extensions: ["xlsx"] }],
+    });
+    if (!selected) return;
+    await runImport(selected, "itemsOnly");
+  }
+
   async function createManualBackup() {
     try {
       setError(null);
@@ -2546,7 +2599,11 @@ function MainApp() {
     }
   }
 
-  async function loginUser(username: string, password: string) {
+  async function loginUser(
+    username: string,
+    password: string,
+    rememberLogin: boolean,
+  ) {
     try {
       setIsLoginPending(true);
       setError(null);
@@ -2557,52 +2614,19 @@ function MainApp() {
       const user = await invoke<CurrentUser>("login", {
         request: { username, password },
       });
+      if (rememberLogin) {
+        window.localStorage.setItem(
+          REMEMBERED_LOGIN_STORAGE_KEY,
+          JSON.stringify({ password, username }),
+        );
+      } else {
+        window.localStorage.removeItem(REMEMBERED_LOGIN_STORAGE_KEY);
+      }
       setCurrentUser(user);
       setNotice(`已登录：${user.displayName}`);
       scheduleRefreshAll();
     } catch (err) {
       setError(formatError(err));
-    } finally {
-      setIsLoginPending(false);
-    }
-  }
-
-  async function requestPasswordResetCode(username: string) {
-    try {
-      setIsLoginPending(true);
-      setError(null);
-      setNotice(null);
-      const result = await invoke<{ maskedEmail: string; expiresMinutes: number }>(
-        "request_password_reset_code",
-        { request: { username } },
-      );
-      setNotice(
-        `验证码已发送至 ${result.maskedEmail}，${result.expiresMinutes} 分钟内有效。`,
-      );
-    } catch (err) {
-      setError(formatError(err));
-      throw err;
-    } finally {
-      setIsLoginPending(false);
-    }
-  }
-
-  async function resetPasswordWithCode(
-    username: string,
-    code: string,
-    newPassword: string,
-  ) {
-    try {
-      setIsLoginPending(true);
-      setError(null);
-      setNotice(null);
-      await invoke("reset_password_with_code", {
-        request: { username, code, newPassword },
-      });
-      setNotice("密码已重置，请使用新密码登录。");
-    } catch (err) {
-      setError(formatError(err));
-      throw err;
     } finally {
       setIsLoginPending(false);
     }
@@ -2800,9 +2824,20 @@ function MainApp() {
         i18n={i18n}
         isLoginPending={isLoginPending}
         notice={notice}
+        onOpenConnectionWizard={() =>
+          void openEditorWindow("connectionWizard", {
+            extra: { clientOnly: "1" },
+            width: 760,
+            height: 640,
+          })
+        }
+        onOpenPasswordReset={() =>
+          void openEditorWindow("passwordReset", {
+            width: 520,
+            height: 460,
+          })
+        }
         onLogin={loginUser}
-        onRequestPasswordResetCode={requestPasswordResetCode}
-        onResetPasswordWithCode={resetPasswordWithCode}
       />
     );
   }
@@ -2934,6 +2969,7 @@ function MainApp() {
 
           {activeNav === "items" ? (
             <ItemsPage
+              canImportItems={canWriteStock && canUseLocalImport}
               canWrite={canWriteStock}
               categories={enabledCategories}
               itemSearch={itemSearch}
@@ -2942,6 +2978,8 @@ function MainApp() {
                 setItemSearch(search);
                 await refreshAll(search);
               }}
+              onImportItems={importItemsFromToolbar}
+              onExportItems={() => exportItems(itemSearch)}
               onToggle={(id, enabled, expectedUpdatedAt) =>
                 runAction("物品状态已更新", () =>
                   invoke("set_item_enabled", {
@@ -3437,48 +3475,30 @@ function LoginScreen({
   i18n = defaultI18n,
   isLoginPending,
   notice,
+  onOpenConnectionWizard,
+  onOpenPasswordReset,
   onLogin,
-  onRequestPasswordResetCode,
-  onResetPasswordWithCode,
 }: {
   error: string | null;
   i18n?: I18n;
   isLoginPending: boolean;
   notice: string | null;
-  onLogin: (username: string, password: string) => Promise<void>;
-  onRequestPasswordResetCode: (username: string) => Promise<void>;
-  onResetPasswordWithCode: (
+  onOpenConnectionWizard: () => void;
+  onOpenPasswordReset: () => void;
+  onLogin: (
     username: string,
-    code: string,
-    newPassword: string,
+    password: string,
+    rememberLogin: boolean,
   ) => Promise<void>;
 }) {
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("");
-  const [isResetOpen, setIsResetOpen] = useState(false);
-  const [resetCode, setResetCode] = useState("");
-  const [resetPassword, setResetPassword] = useState("");
-  const canResetPassword =
-    username.trim() && resetCode.trim().length === 6 && resetPassword.length >= 6;
+  const rememberedLogin = useMemo(() => loadRememberedLogin(), []);
+  const [username, setUsername] = useState(rememberedLogin?.username ?? "admin");
+  const [password, setPassword] = useState(rememberedLogin?.password ?? "");
+  const [rememberLogin, setRememberLogin] = useState(Boolean(rememberedLogin));
 
   function submitLogin(event: React.FormEvent) {
     event.preventDefault();
-    void onLogin(username, password);
-  }
-
-  async function submitResetCode() {
-    await onRequestPasswordResetCode(username);
-    setResetCode("");
-    setResetPassword("");
-  }
-
-  async function submitResetPassword(event: React.FormEvent) {
-    event.preventDefault();
-    await onResetPasswordWithCode(username, resetCode, resetPassword);
-    setIsResetOpen(false);
-    setPassword("");
-    setResetCode("");
-    setResetPassword("");
+    void onLogin(username, password, rememberLogin);
   }
 
   return (
@@ -3540,6 +3560,32 @@ function LoginScreen({
               onChange={(event) => setPassword(event.target.value)}
             />
           </Field>
+          <div className="login-options-row">
+            <label className="login-remember-check">
+              <input
+                checked={rememberLogin}
+                disabled={isLoginPending}
+                type="checkbox"
+                onChange={(event) => {
+                  setRememberLogin(event.target.checked);
+                  if (!event.target.checked) {
+                    window.localStorage.removeItem(
+                      REMEMBERED_LOGIN_STORAGE_KEY,
+                    );
+                  }
+                }}
+              />
+              <span>记住账号密码</span>
+            </label>
+            <button
+              className="login-reset-toggle"
+              disabled={isLoginPending}
+              onClick={onOpenPasswordReset}
+              type="button"
+            >
+              {i18n.t("login.forgotPassword")}
+            </button>
+          </div>
           <button
             className="primary-button login-submit"
             disabled={isLoginPending}
@@ -3550,54 +3596,13 @@ function LoginScreen({
         </form>
         <div className="login-reset-panel">
           <button
-            className="link-button login-reset-toggle"
+            className="ghost-button login-connect-button"
             disabled={isLoginPending}
-            onClick={() => setIsResetOpen((value) => !value)}
+            onClick={onOpenConnectionWizard}
             type="button"
           >
-            {isResetOpen ? i18n.t("login.backToLogin") : i18n.t("login.forgotPassword")}
+            连接主电脑
           </button>
-          {isResetOpen ? (
-            <form className="login-form" onSubmit={submitResetPassword}>
-              <p className="login-reset-hint">{i18n.t("login.resetHint")}</p>
-              <button
-                className="ghost-button"
-                disabled={isLoginPending || !username.trim()}
-                onClick={() => void submitResetCode()}
-                type="button"
-              >
-                {i18n.t("login.sendCode")}
-              </button>
-              <Field label={i18n.t("login.resetCode")}>
-                <input
-                  autoComplete="one-time-code"
-                  disabled={isLoginPending}
-                  inputMode="numeric"
-                  maxLength={6}
-                  value={resetCode}
-                  onChange={(event) =>
-                    setResetCode(event.target.value.replace(/\D/g, "").slice(0, 6))
-                  }
-                />
-              </Field>
-              <Field label={i18n.t("login.newPassword")}>
-                <input
-                  autoComplete="new-password"
-                  disabled={isLoginPending}
-                  type="password"
-                  value={resetPassword}
-                  onChange={(event) => setResetPassword(event.target.value)}
-                />
-              </Field>
-              <button
-                className="primary-button login-submit"
-                disabled={isLoginPending || !canResetPassword}
-                type="submit"
-              >
-                {i18n.t("login.resetPassword")}
-              </button>
-            </form>
-          ) : null}
         </div>
       </section>
     </main>
@@ -3751,7 +3756,10 @@ function EditorWindowApp({
         ]);
         setStatus(nextStatus);
         setHostStatus(nextHostStatus);
-        if (nextStatus.runtime.mode === "host") {
+        if (
+          nextStatus.runtime.mode === "host" &&
+          params.get("clientOnly") !== "1"
+        ) {
           setClientConnections(
             await invoke<ClientConnectionInfo[]>("list_client_connections"),
           );
@@ -3934,6 +3942,38 @@ function EditorWindowApp({
         }
       />
     );
+  } else if (editor === "passwordReset") {
+    content = (
+      <PasswordResetEditor
+        disabled={isSaving || isLoading}
+        i18n={createI18n(loadAppearanceSettings().locale)}
+        onRequestCode={async (username) => {
+          setIsSaving(true);
+          try {
+            setError(null);
+            const result = await invoke<{
+              maskedEmail: string;
+              expiresMinutes: number;
+            }>("request_password_reset_code", {
+              request: { username },
+            });
+            setNotice(
+              `验证码已发送至 ${result.maskedEmail}，${result.expiresMinutes} 分钟内有效。`,
+            );
+          } catch (err) {
+            setError(formatError(err));
+            throw err;
+          } finally {
+            setIsSaving(false);
+          }
+        }}
+        onReset={(request) =>
+          runEditorAction({ editor, message: "密码已重置，请使用新密码登录" }, () =>
+            invoke("reset_password_with_code", { request }),
+          )
+        }
+      />
+    );
   } else if (editor === "businessSettings") {
     content = (
       <BusinessSettingsEditor
@@ -3982,6 +4022,7 @@ function EditorWindowApp({
   } else if (editor === "connectionWizard") {
     content = (
       <ConnectionWizard
+        clientOnly={params.get("clientOnly") === "1"}
         clientConnections={clientConnections}
         disabled={isSaving || isLoading || !status}
         hostStatus={hostStatus}
@@ -4007,7 +4048,12 @@ function EditorWindowApp({
           }
         }}
         onFinish={(message) =>
-          runSettingsEditorAction(message, () => Promise.resolve())
+          runSettingsEditorAction(
+            params.get("clientOnly") === "1"
+              ? "已连接主电脑，请使用主机账号登录"
+              : message,
+            () => Promise.resolve(),
+          )
         }
         onPair={async (request) => {
           setIsSaving(true);
@@ -5000,6 +5046,86 @@ function ChangePasswordEditor({
   );
 }
 
+function PasswordResetEditor({
+  disabled,
+  i18n,
+  onRequestCode,
+  onReset,
+}: {
+  disabled: boolean;
+  i18n: I18n;
+  onRequestCode: (username: string) => Promise<void>;
+  onReset: (request: {
+    username: string;
+    code: string;
+    newPassword: string;
+  }) => Promise<void>;
+}) {
+  const [username, setUsername] = useState("");
+  const [code, setCode] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const canRequestCode = username.trim().length > 0;
+  const canReset =
+    username.trim().length > 0 && code.length === 6 && newPassword.length >= 6;
+
+  return (
+    <EditorForm
+      contentClassName="password-reset-grid"
+      disabled={disabled || !canReset}
+      saveLabel={i18n.t("login.resetPassword")}
+      onSave={() =>
+        onReset({
+          username: username.trim(),
+          code,
+          newPassword,
+        })
+      }
+    >
+      <p className="editor-form-note">{i18n.t("login.resetHint")}</p>
+      <Field label={i18n.t("login.username")}>
+        <input
+          autoComplete="username"
+          autoFocus
+          disabled={disabled}
+          value={username}
+          onChange={(event) => setUsername(event.target.value)}
+        />
+      </Field>
+      <div className="editor-inline-actions">
+        <button
+          className="ghost-button"
+          disabled={disabled || !canRequestCode}
+          onClick={() => void onRequestCode(username.trim())}
+          type="button"
+        >
+          {i18n.t("login.sendCode")}
+        </button>
+      </div>
+      <Field label={i18n.t("login.resetCode")}>
+        <input
+          autoComplete="one-time-code"
+          disabled={disabled}
+          inputMode="numeric"
+          maxLength={6}
+          value={code}
+          onChange={(event) =>
+            setCode(event.target.value.replace(/\D/g, "").slice(0, 6))
+          }
+        />
+      </Field>
+      <Field label={i18n.t("login.newPassword")}>
+        <input
+          autoComplete="new-password"
+          disabled={disabled}
+          type="password"
+          value={newPassword}
+          onChange={(event) => setNewPassword(event.target.value)}
+        />
+      </Field>
+    </EditorForm>
+  );
+}
+
 function BusinessSettingsEditor({
   disabled,
   localDirectoriesOnly = false,
@@ -5256,6 +5382,7 @@ type ConnectionWizardStep =
   | "clientReady";
 
 function ConnectionWizard({
+  clientOnly = false,
   clientConnections,
   disabled,
   hostStatus,
@@ -5267,6 +5394,7 @@ function ConnectionWizard({
   onTest,
   status,
 }: {
+  clientOnly?: boolean;
   clientConnections: ClientConnectionInfo[];
   disabled: boolean;
   hostStatus: HostServiceStatus | null;
@@ -5287,7 +5415,9 @@ function ConnectionWizard({
   ) => Promise<HostConnectionTestResult>;
   status: AppStatus | null;
 }) {
-  const [step, setStep] = useState<ConnectionWizardStep>("role");
+  const [step, setStep] = useState<ConnectionWizardStep>(
+    clientOnly ? "discover" : "role",
+  );
   const [hosts, setHosts] = useState<HostDiscoveryResult[]>([]);
   const [selectedHost, setSelectedHost] = useState<HostDiscoveryResult | null>(
     null,
@@ -5330,6 +5460,11 @@ function ConnectionWizard({
       setIsBusy(false);
     }
   }
+
+  useEffect(() => {
+    if (!clientOnly) return;
+    void discover();
+  }, [clientOnly]);
 
   async function enableHost() {
     setIsBusy(true);
@@ -5400,13 +5535,13 @@ function ConnectionWizard({
   return (
     <div className="connection-wizard">
       <div className="wizard-header">
-        <span>多电脑连接</span>
+        <span>连接向导</span>
         <h2>{wizardStepTitle(step)}</h2>
       </div>
 
       {localError ? <div className="error-banner">{localError}</div> : null}
 
-      {step === "role" ? (
+      {step === "role" && !clientOnly ? (
         <div className="wizard-choice-grid">
           <button
             className="wizard-choice"
@@ -5429,7 +5564,7 @@ function ConnectionWizard({
         </div>
       ) : null}
 
-      {step === "hostConfirm" ? (
+      {step === "hostConfirm" && !clientOnly ? (
         <div className="wizard-panel">
           <p>
             正式库存数据将保存在这台电脑。其他电脑需要输入这台电脑显示的配对码后才能连接。
@@ -5455,7 +5590,7 @@ function ConnectionWizard({
         </div>
       ) : null}
 
-      {step === "hostReady" ? (
+      {step === "hostReady" && !clientOnly ? (
         <div className="wizard-panel">
           <div className="pair-code-card">
             <span>给其他电脑输入的配对码</span>
@@ -5503,13 +5638,16 @@ function ConnectionWizard({
       {step === "discover" ? (
         <div className="wizard-panel">
           <div className="wizard-toolbar">
-            <p>
-              {isBusy
-                ? "正在搜索局域网内的主电脑..."
-                : hosts.length > 0
-                  ? "选择要连接的主电脑。"
-                  : "没有找到主电脑。请确认主电脑已开启共享。"}
-            </p>
+            <div>
+              <strong>局域网主电脑</strong>
+              <p>
+                {isBusy
+                  ? "正在搜索局域网内的主电脑..."
+                  : hosts.length > 0
+                    ? "选择要连接的主电脑，然后输入主机上的配对码。"
+                    : "没有找到主电脑，请确认主电脑已开启共享。"}
+              </p>
+            </div>
             <button
               className="ghost-button"
               disabled={disabled || isBusy}
@@ -5538,12 +5676,15 @@ function ConnectionWizard({
                     setStep("pair");
                   }}
                 >
-                  <strong>{host.hostAddress}</strong>
-                  <span>
+                  <span className="discovery-host-main">
+                    <strong>{host.hostAddress}</strong>
+                    <em>{host.hostPort}</em>
+                  </span>
+                  <span className="discovery-host-meta">
                     {host.appName} {host.appVersion} · Schema{" "}
                     {host.schemaVersion}
                   </span>
-                  <span>{host.message}</span>
+                  <span className="discovery-host-status">{host.message}</span>
                 </button>
               ))}
             </div>
@@ -5553,7 +5694,7 @@ function ConnectionWizard({
               className="ghost-button"
               disabled={isBusy}
               type="button"
-              onClick={() => setStep("role")}
+              onClick={() => setStep(clientOnly ? "manual" : "role")}
             >
               返回
             </button>
@@ -7234,18 +7375,28 @@ function StocktakeCountsEditor({
 
 function EditorForm({
   children,
+  contentClassName,
   disabled,
   onSave,
   saveLabel,
 }: {
   children: React.ReactNode;
+  contentClassName?: string;
   disabled: boolean;
   onSave: () => Promise<void>;
   saveLabel: string;
 }) {
   return (
     <div className="editor-form">
-      <div className="editor-form-grid">{children}</div>
+      <div
+        className={
+          contentClassName
+            ? `editor-form-grid ${contentClassName}`
+            : "editor-form-grid"
+        }
+      >
+        {children}
+      </div>
       <div className="editor-actions">
         <button
           className="ghost-button"
@@ -7340,19 +7491,25 @@ function UsersPage({
 }
 
 function ItemsPage({
+  canImportItems,
   canWrite,
   categories,
   itemSearch,
   items,
+  onExportItems,
+  onImportItems,
   onSearch,
   onToggle,
   suppliers,
   units,
 }: {
+  canImportItems: boolean;
   canWrite: boolean;
   categories: OptionRecord[];
   itemSearch: string;
   items: Item[];
+  onExportItems: () => Promise<void>;
+  onImportItems: () => Promise<void>;
   onSearch: (search: string) => Promise<void>;
   onToggle: (
     id: string,
@@ -7366,27 +7523,54 @@ function ItemsPage({
 
   return (
     <section className="table-panel">
-      <div className="table-toolbar">
+      <div className="table-toolbar table-filter-toolbar">
         <form
+          className="filter-shell"
           onSubmit={(e) => {
             e.preventDefault();
             onSearch(search);
           }}
         >
-          <input
-            placeholder="搜索编码、名称、规格"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          <button className="ghost-button">搜索</button>
+          <div className="filter-fields">
+            <Field label="关键字">
+              <input
+                placeholder="搜索编码、名称、规格"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </Field>
+          </div>
+          <div className="filter-actions">
+            <button className="ghost-button">搜索</button>
+            <button
+              className="primary-button"
+              disabled={!canWrite}
+              onClick={() => openEditorWindow("item")}
+              type="button"
+            >
+              新增物品
+            </button>
+          </div>
         </form>
-        <button
-          className="primary-button"
-          disabled={!canWrite}
-          onClick={() => openEditorWindow("item")}
-        >
-          新增物品
-        </button>
+      </div>
+      <div className="table-utility-toolbar">
+        <div className="table-utility-info">
+          <span>物品档案</span>
+          <em>{items.length} 条记录</em>
+        </div>
+        <div className="table-utility-actions">
+          <button
+            className="ghost-button"
+            disabled={!canImportItems}
+            onClick={onImportItems}
+            type="button"
+          >
+            导入
+          </button>
+          <button className="ghost-button" onClick={onExportItems} type="button">
+            导出
+          </button>
+        </div>
       </div>
       <table>
         <thead>
@@ -8252,66 +8436,68 @@ function DocumentList({
       ) : null}
       {query && onQueryChange ? (
         <div className="document-filters">
-          <Field label="月份">
-            <MonthSelect
-              value={filterDraft.month ?? currentMonthString()}
-              onChange={(month) => updateFilter({ month })}
-            />
-          </Field>
-          <Field label={partyLabel}>
-            <select
-              value={partyValue}
-              onChange={(e) =>
-                isOutbound
-                  ? updateFilter({ departmentId: e.target.value })
-                  : updateFilter({ supplierId: e.target.value })
-              }
-            >
-              <option value="">全部</option>
-              {partyOptions.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-          {isOutbound ? (
-            <Field label="出库类型">
+          <div className="filter-fields">
+            <Field label="月份">
+              <MonthSelect
+                value={filterDraft.month ?? currentMonthString()}
+                onChange={(month) => updateFilter({ month })}
+              />
+            </Field>
+            <Field label={partyLabel}>
               <select
-                value={filterDraft.outboundKind ?? ""}
+                value={partyValue}
                 onChange={(e) =>
-                  updateFilter({
-                    outboundKind:
-                      e.target.value === ""
-                        ? null
-                        : (e.target.value as "internal" | "guest_sale"),
-                  })
+                  isOutbound
+                    ? updateFilter({ departmentId: e.target.value })
+                    : updateFilter({ supplierId: e.target.value })
                 }
               >
                 <option value="">全部</option>
-                <option value="internal">内部员工领用</option>
-                <option value="guest_sale">酒店客人销售</option>
+                {partyOptions.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
               </select>
             </Field>
-          ) : null}
-          <Field label="物品">
-            <ItemSearchSelect
-              allowEmpty
-              disabled={false}
-              emptyLabel="全部物品"
-              items={items}
-              value={filterDraft.itemId ?? ""}
-              onChange={(itemId) => updateFilter({ itemId })}
-            />
-          </Field>
-          <Field label="关键字">
-            <input
-              placeholder="单号/物品/经办人/备注"
-              value={filterDraft.search ?? ""}
-              onChange={(e) => updateFilter({ search: e.target.value })}
-            />
-          </Field>
-          <div className="document-filter-actions">
+            {isOutbound ? (
+              <Field label="出库类型">
+                <select
+                  value={filterDraft.outboundKind ?? ""}
+                  onChange={(e) =>
+                    updateFilter({
+                      outboundKind:
+                        e.target.value === ""
+                          ? null
+                          : (e.target.value as "internal" | "guest_sale"),
+                    })
+                  }
+                >
+                  <option value="">全部</option>
+                  <option value="internal">内部员工领用</option>
+                  <option value="guest_sale">酒店客人销售</option>
+                </select>
+              </Field>
+            ) : null}
+            <Field label="物品">
+              <ItemSearchSelect
+                allowEmpty
+                disabled={false}
+                emptyLabel="全部物品"
+                items={items}
+                value={filterDraft.itemId ?? ""}
+                onChange={(itemId) => updateFilter({ itemId })}
+              />
+            </Field>
+            <Field label="关键字">
+              <input
+                placeholder="单号/物品/经办人/备注"
+                value={filterDraft.search ?? ""}
+                onChange={(e) => updateFilter({ search: e.target.value })}
+              />
+            </Field>
+          </div>
+          <div className="filter-actions document-filter-actions">
             <button className="ghost-button" onClick={resetFilters}>
               清空
             </button>
@@ -8446,7 +8632,11 @@ function StockDocumentDetailViewer({
     : (document.supplierName ?? "-");
 
   return (
-    <div className="document-detail-viewer">
+    <div
+      className={`document-detail-viewer ${
+        batchLines.length > 0 ? "has-batches" : "single-lines"
+      }`}
+    >
       <div className="detail-summary-grid">
         <InfoTile label="单号" value={document.documentNo} />
         <InfoTile label="日期" value={formatDateTime(document.businessDate)} />
@@ -8487,72 +8677,76 @@ function StockDocumentDetailViewer({
           <h3>商品明细</h3>
           <span>{lines.length} 项</span>
         </div>
-        <table>
-          <thead>
-            <tr>
-              <th>商品</th>
-              <th>规格</th>
-              <th>单位</th>
-              <th>数量</th>
-              <th>{isOutbound ? "成本单价" : "采购单价"}</th>
-              <th>{isOutbound ? "成本金额" : "采购金额"}</th>
-              {isOutbound && document.outboundKind === "guest_sale" ? (
-                <>
-                  <th>销售单价</th>
-                  <th>销售金额</th>
-                  <th>毛利</th>
-                </>
-              ) : null}
-              <th>备注</th>
-            </tr>
-          </thead>
-          <tbody>
-            {lines.map((line) => (
-              <tr key={line.id}>
-                <td>
-                  <strong>{line.itemName}</strong>
-                  <span className="muted-inline">{line.itemCode}</span>
-                </td>
-                <td>{line.spec ?? "-"}</td>
-                <td>{line.unitName ?? "-"}</td>
-                <td>{line.quantity}</td>
-                <td>
-                  {formatMoney(
-                    isOutbound
-                      ? (line.costUnitPrice ?? line.unitPrice)
-                      : (line.purchaseUnitPrice ?? line.unitPrice),
-                  )}
-                </td>
-                <td>
-                  {formatMoney(
-                    isOutbound
-                      ? (line.costAmount ?? line.amount)
-                      : (line.purchaseAmount ?? line.amount),
-                  )}
-                </td>
+        <div className="document-detail-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>商品</th>
+                <th>规格</th>
+                <th>单位</th>
+                <th>数量</th>
+                <th>{isOutbound ? "成本单价" : "采购单价"}</th>
+                <th>{isOutbound ? "成本金额" : "采购金额"}</th>
                 {isOutbound && document.outboundKind === "guest_sale" ? (
                   <>
-                    <td>{formatMoney(line.saleUnitPrice ?? 0)}</td>
-                    <td>{formatMoney(line.saleAmount ?? 0)}</td>
-                    <td>{formatMoney(line.grossProfit ?? 0)}</td>
+                    <th>销售单价</th>
+                    <th>销售金额</th>
+                    <th>毛利</th>
                   </>
                 ) : null}
-                <td>{line.remark ?? "-"}</td>
+                <th>备注</th>
               </tr>
-            ))}
-            {lines.length === 0 ? (
-              <tr>
-                <td
-                  colSpan={
-                    isOutbound && document.outboundKind === "guest_sale" ? 10 : 7
-                  }
-                >
-                  暂无商品明细
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {lines.map((line) => (
+                <tr key={line.id}>
+                  <td>
+                    <strong>{line.itemName}</strong>
+                    <span className="muted-inline">{line.itemCode}</span>
+                  </td>
+                  <td>{line.spec ?? "-"}</td>
+                  <td>{line.unitName ?? "-"}</td>
+                  <td>{line.quantity}</td>
+                  <td>
+                    {formatMoney(
+                      isOutbound
+                        ? (line.costUnitPrice ?? line.unitPrice)
+                        : (line.purchaseUnitPrice ?? line.unitPrice),
+                    )}
+                  </td>
+                  <td>
+                    {formatMoney(
+                      isOutbound
+                        ? (line.costAmount ?? line.amount)
+                        : (line.purchaseAmount ?? line.amount),
+                    )}
+                  </td>
+                  {isOutbound && document.outboundKind === "guest_sale" ? (
+                    <>
+                      <td>{formatMoney(line.saleUnitPrice ?? 0)}</td>
+                      <td>{formatMoney(line.saleAmount ?? 0)}</td>
+                      <td>{formatMoney(line.grossProfit ?? 0)}</td>
+                    </>
+                  ) : null}
+                  <td>{line.remark ?? "-"}</td>
+                </tr>
+              ))}
+              {lines.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={
+                      isOutbound && document.outboundKind === "guest_sale"
+                        ? 10
+                        : 7
+                    }
+                  >
+                    暂无商品明细
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {batchLines.length > 0 ? (
@@ -8561,37 +8755,39 @@ function StockDocumentDetailViewer({
             <h3>批次成本明细</h3>
             <span>{batchLines.length} 条</span>
           </div>
-          <table>
-            <thead>
-              <tr>
-                <th>商品</th>
-                <th>批次号</th>
-                <th>入库日期</th>
-                <th>供应商</th>
-                <th>方向</th>
-                <th>数量</th>
-                <th>批次单价</th>
-                <th>批次金额</th>
-              </tr>
-            </thead>
-            <tbody>
-              {batchLines.map((line) => (
-                <tr key={line.id}>
-                  <td>
-                    <strong>{line.itemName}</strong>
-                    <span className="muted-inline">{line.itemCode}</span>
-                  </td>
-                  <td>{line.batchNo}</td>
-                  <td>{formatDateTime(line.inboundDate)}</td>
-                  <td>{line.supplierName ?? "-"}</td>
-                  <td>{line.direction === "in" ? "入库" : "出库"}</td>
-                  <td>{line.quantity}</td>
-                  <td>{formatMoney(line.unitPrice)}</td>
-                  <td>{formatMoney(line.amount)}</td>
+          <div className="document-detail-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>商品</th>
+                  <th>批次号</th>
+                  <th>入库日期</th>
+                  <th>供应商</th>
+                  <th>方向</th>
+                  <th>数量</th>
+                  <th>批次单价</th>
+                  <th>批次金额</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {batchLines.map((line) => (
+                  <tr key={line.id}>
+                    <td>
+                      <strong>{line.itemName}</strong>
+                      <span className="muted-inline">{line.itemCode}</span>
+                    </td>
+                    <td>{line.batchNo}</td>
+                    <td>{formatDateTime(line.inboundDate)}</td>
+                    <td>{line.supplierName ?? "-"}</td>
+                    <td>{line.direction === "in" ? "入库" : "出库"}</td>
+                    <td>{line.quantity}</td>
+                    <td>{formatMoney(line.unitPrice)}</td>
+                    <td>{formatMoney(line.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       ) : null}
     </div>
@@ -8626,7 +8822,7 @@ function StockBatchDetailViewer({
   );
 
   return (
-    <div className="document-detail-viewer">
+    <div className="document-detail-viewer single-lines">
       <div className="detail-summary-grid">
         <InfoTile label="物品" value={`${first.itemCode} · ${first.itemName}`} />
         <InfoTile label="批次数" value={String(batches.length)} />
@@ -8643,36 +8839,38 @@ function StockBatchDetailViewer({
           <h3>批次余额</h3>
           <span>{batches.length} 条</span>
         </div>
-        <table>
-          <thead>
-            <tr>
-              <th>批次号</th>
-              <th>入库日期</th>
-              <th>来源单据</th>
-              <th>供应商</th>
-              <th>原始数量</th>
-              <th>剩余数量</th>
-              <th>批次单价</th>
-              <th>剩余金额</th>
-              <th>状态</th>
-            </tr>
-          </thead>
-          <tbody>
-            {batches.map((batch) => (
-              <tr key={batch.id}>
-                <td>{batch.batchNo}</td>
-                <td>{formatDateTime(batch.inboundDate)}</td>
-                <td>{batch.sourceDocumentNo ?? "-"}</td>
-                <td>{batch.supplierName ?? "-"}</td>
-                <td>{batch.originalQuantity}</td>
-                <td>{batch.remainingQuantity}</td>
-                <td>{formatMoney(batch.unitPrice)}</td>
-                <td>{formatMoney(batch.remainingAmount)}</td>
-                <td>{stockBatchStatusLabel(batch.status)}</td>
+        <div className="document-detail-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>批次号</th>
+                <th>入库日期</th>
+                <th>来源单据</th>
+                <th>供应商</th>
+                <th>原始数量</th>
+                <th>剩余数量</th>
+                <th>批次单价</th>
+                <th>剩余金额</th>
+                <th>状态</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {batches.map((batch) => (
+                <tr key={batch.id}>
+                  <td>{batch.batchNo}</td>
+                  <td>{formatDateTime(batch.inboundDate)}</td>
+                  <td>{batch.sourceDocumentNo ?? "-"}</td>
+                  <td>{batch.supplierName ?? "-"}</td>
+                  <td>{batch.originalQuantity}</td>
+                  <td>{batch.remainingQuantity}</td>
+                  <td>{formatMoney(batch.unitPrice)}</td>
+                  <td>{formatMoney(batch.remainingAmount)}</td>
+                  <td>{stockBatchStatusLabel(batch.status)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
@@ -8732,52 +8930,54 @@ function StockBalancePage({
   return (
     <section className="table-panel">
       <div className="document-filters">
-        <Field label="关键字">
-          <input
-            placeholder="编码/名称/规格"
-            value={filterDraft.search ?? ""}
-            onChange={(e) => updateFilter({ search: e.target.value })}
-          />
-        </Field>
-        <Field label="分类">
-          <select
-            value={filterDraft.categoryId ?? ""}
-            onChange={(e) => updateFilter({ categoryId: e.target.value })}
-          >
-            <option value="">全部</option>
-            {categories.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="物品">
-          <ItemSearchSelect
-            allowEmpty
-            disabled={false}
-            emptyLabel="全部物品"
-            items={items}
-            value={filterDraft.itemId ?? ""}
-            onChange={(itemId) => updateFilter({ itemId })}
-          />
-        </Field>
-        <Field label="库存状态">
-          <select
-            value={filterDraft.stockStatus ?? ""}
-            onChange={(e) =>
-              updateFilter({
-                stockStatus: e.target.value as StockBalanceQuery["stockStatus"],
-              })
-            }
-          >
-            <option value="">全部</option>
-            <option value="normal">正常</option>
-            <option value="low">低库存</option>
-            <option value="negative">负库存</option>
-          </select>
-        </Field>
-        <div className="document-filter-actions">
+        <div className="filter-fields">
+          <Field label="关键字">
+            <input
+              placeholder="编码/名称/规格"
+              value={filterDraft.search ?? ""}
+              onChange={(e) => updateFilter({ search: e.target.value })}
+            />
+          </Field>
+          <Field label="分类">
+            <select
+              value={filterDraft.categoryId ?? ""}
+              onChange={(e) => updateFilter({ categoryId: e.target.value })}
+            >
+              <option value="">全部</option>
+              {categories.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="物品">
+            <ItemSearchSelect
+              allowEmpty
+              disabled={false}
+              emptyLabel="全部物品"
+              items={items}
+              value={filterDraft.itemId ?? ""}
+              onChange={(itemId) => updateFilter({ itemId })}
+            />
+          </Field>
+          <Field label="库存状态">
+            <select
+              value={filterDraft.stockStatus ?? ""}
+              onChange={(e) =>
+                updateFilter({
+                  stockStatus: e.target.value as StockBalanceQuery["stockStatus"],
+                })
+              }
+            >
+              <option value="">全部</option>
+              <option value="normal">正常</option>
+              <option value="low">低库存</option>
+              <option value="negative">负库存</option>
+            </select>
+          </Field>
+        </div>
+        <div className="filter-actions document-filter-actions">
           <button className="ghost-button" onClick={resetFilters}>
             清空
           </button>
@@ -8874,53 +9074,55 @@ function StockMovementPage({
   return (
     <section className="table-panel">
       <div className="document-filters">
-        <Field label="关键字">
-          <input
-            placeholder="编码/名称/单号"
-            value={filterDraft.search ?? ""}
-            onChange={(e) => updateFilter({ search: e.target.value })}
-          />
-        </Field>
-        <Field label="物品">
-          <ItemSearchSelect
-            allowEmpty
-            disabled={false}
-            emptyLabel="全部物品"
-            items={items}
-            value={filterDraft.itemId ?? ""}
-            onChange={(itemId) => updateFilter({ itemId })}
-          />
-        </Field>
-        <Field label="方向">
-          <select
-            value={filterDraft.direction ?? ""}
-            onChange={(e) =>
-              updateFilter({
-                direction: e.target.value as StockMovementQuery["direction"],
-              })
-            }
-          >
-            <option value="">全部</option>
-            <option value="in">入</option>
-            <option value="out">出</option>
-          </select>
-        </Field>
-        <Field label="流水类型">
-          <select
-            value={filterDraft.movementType ?? ""}
-            onChange={(e) => updateFilter({ movementType: e.target.value })}
-          >
-            <option value="">全部</option>
-            <option value="opening">期初</option>
-            <option value="inbound">入库</option>
-            <option value="outbound">出库</option>
-            <option value="stocktake_gain">盘盈</option>
-            <option value="stocktake_loss">盘亏</option>
-            <option value="adjustment">调整</option>
-            <option value="reversal">冲正</option>
-          </select>
-        </Field>
-        <div className="document-filter-actions">
+        <div className="filter-fields">
+          <Field label="关键字">
+            <input
+              placeholder="编码/名称/单号"
+              value={filterDraft.search ?? ""}
+              onChange={(e) => updateFilter({ search: e.target.value })}
+            />
+          </Field>
+          <Field label="物品">
+            <ItemSearchSelect
+              allowEmpty
+              disabled={false}
+              emptyLabel="全部物品"
+              items={items}
+              value={filterDraft.itemId ?? ""}
+              onChange={(itemId) => updateFilter({ itemId })}
+            />
+          </Field>
+          <Field label="方向">
+            <select
+              value={filterDraft.direction ?? ""}
+              onChange={(e) =>
+                updateFilter({
+                  direction: e.target.value as StockMovementQuery["direction"],
+                })
+              }
+            >
+              <option value="">全部</option>
+              <option value="in">入</option>
+              <option value="out">出</option>
+            </select>
+          </Field>
+          <Field label="流水类型">
+            <select
+              value={filterDraft.movementType ?? ""}
+              onChange={(e) => updateFilter({ movementType: e.target.value })}
+            >
+              <option value="">全部</option>
+              <option value="opening">期初</option>
+              <option value="inbound">入库</option>
+              <option value="outbound">出库</option>
+              <option value="stocktake_gain">盘盈</option>
+              <option value="stocktake_loss">盘亏</option>
+              <option value="adjustment">调整</option>
+              <option value="reversal">冲正</option>
+            </select>
+          </Field>
+        </div>
+        <div className="filter-actions document-filter-actions">
           <button className="ghost-button" onClick={resetFilters}>
             清空
           </button>
@@ -9421,66 +9623,68 @@ function ReportsPage({
           </div>
         </div>
         <div className="report-filters">
-          <Field label="月份">
-            <MonthSelect
-              disabled={!canViewReports}
-              value={filterDraft.month}
-              onChange={(month) => updateFilter({ month })}
-            />
-          </Field>
-          <Field label="部门">
-            <select
-              disabled={!canViewReports}
-              value={filterDraft.departmentId ?? ""}
-              onChange={(e) => updateFilter({ departmentId: e.target.value })}
-            >
-              <option value="">全部</option>
-              {departments.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="分类">
-            <select
-              disabled={!canViewReports}
-              value={filterDraft.categoryId ?? ""}
-              onChange={(e) => updateFilter({ categoryId: e.target.value })}
-            >
-              <option value="">全部</option>
-              {categories.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="物品">
-            <ItemSearchSelect
-              allowEmpty
-              disabled={!canViewReports}
-              emptyLabel="全部物品"
-              items={items}
-              value={filterDraft.itemId ?? ""}
-              onChange={(itemId) => updateFilter({ itemId })}
-            />
-          </Field>
-          <Field label="供应商">
-            <select
-              disabled={!canViewReports}
-              value={filterDraft.supplierId ?? ""}
-              onChange={(e) => updateFilter({ supplierId: e.target.value })}
-            >
-              <option value="">全部</option>
-              {suppliers.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <div className="report-filter-actions">
+          <div className="filter-fields">
+            <Field label="月份">
+              <MonthSelect
+                disabled={!canViewReports}
+                value={filterDraft.month}
+                onChange={(month) => updateFilter({ month })}
+              />
+            </Field>
+            <Field label="部门">
+              <select
+                disabled={!canViewReports}
+                value={filterDraft.departmentId ?? ""}
+                onChange={(e) => updateFilter({ departmentId: e.target.value })}
+              >
+                <option value="">全部</option>
+                {departments.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="分类">
+              <select
+                disabled={!canViewReports}
+                value={filterDraft.categoryId ?? ""}
+                onChange={(e) => updateFilter({ categoryId: e.target.value })}
+              >
+                <option value="">全部</option>
+                {categories.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="物品">
+              <ItemSearchSelect
+                allowEmpty
+                disabled={!canViewReports}
+                emptyLabel="全部物品"
+                items={items}
+                value={filterDraft.itemId ?? ""}
+                onChange={(itemId) => updateFilter({ itemId })}
+              />
+            </Field>
+            <Field label="供应商">
+              <select
+                disabled={!canViewReports}
+                value={filterDraft.supplierId ?? ""}
+                onChange={(e) => updateFilter({ supplierId: e.target.value })}
+              >
+                <option value="">全部</option>
+                {suppliers.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <div className="filter-actions report-filter-actions">
             <button
               className="ghost-button"
               disabled={!canViewReports}

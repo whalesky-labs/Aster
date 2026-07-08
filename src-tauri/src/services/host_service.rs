@@ -187,7 +187,7 @@ pub fn save_client_config(
     state: &AppState,
     request: SaveClientConfigRequest,
 ) -> AppResult<crate::domain::runtime::RuntimeConfig> {
-    crate::services::user_service::require_admin(state)?;
+    allow_client_bootstrap_or_admin(state, false)?;
     validate_host_port(request.host_port)?;
     let next_address = normalize_host_address(&request.host_address)?;
     state.db.with_conn(|conn| {
@@ -214,7 +214,7 @@ pub fn pair_with_host(
     client_device_id: String,
     app_version: String,
 ) -> AppResult<crate::domain::runtime::RuntimeConfig> {
-    crate::services::user_service::require_admin(state)?;
+    allow_client_bootstrap_or_admin(state, true)?;
     validate_pairing_request(&pair_code, &client_name, &client_device_id)?;
     let config = crate::services::status_service::get_runtime_config(state)?;
     let address = config
@@ -243,6 +243,20 @@ pub fn pair_with_host(
         Ok(())
     })?;
     crate::services::status_service::get_runtime_config(state)
+}
+
+fn allow_client_bootstrap_or_admin(state: &AppState, require_client_mode: bool) -> AppResult<()> {
+    if crate::services::user_service::current_user(state)?.is_some() {
+        crate::services::user_service::require_admin(state)?;
+        return Ok(());
+    }
+    let mode = crate::services::status_service::get_runtime_config(state)?.mode;
+    if mode == RuntimeMode::Host || (require_client_mode && mode != RuntimeMode::Client) {
+        return Err(AppError::Validation(
+            "请先登录管理员账号".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 pub fn test_host_connection(
@@ -3155,6 +3169,57 @@ mod tests {
 
         let list_error = list_client_connections(&state).unwrap_err();
         assert!(list_error.to_string().contains("请先登录管理员账号"));
+    }
+
+    #[test]
+    fn unauthenticated_client_bootstrap_can_save_host_config() {
+        let (_dir, db) = test_db();
+        let state = AppState {
+            paths: AppPaths {
+                data_dir: _dir.path().to_path_buf(),
+                database_path: _dir.path().join("aster.sqlite"),
+                backup_dir: _dir.path().join("backups"),
+                export_dir: _dir.path().join("exports"),
+                import_report_dir: _dir.path().join("import-reports"),
+            },
+            db,
+            session: Arc::new(Mutex::new(None)),
+            host_service: Arc::new(Mutex::new(HostServiceRuntime::default())),
+        };
+
+        let config = save_client_config(
+            &state,
+            SaveClientConfigRequest {
+                host_address: "127.0.0.1".to_string(),
+                host_port: 17871,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(config.mode, RuntimeMode::Client);
+        assert_eq!(config.host_address.as_deref(), Some("127.0.0.1"));
+    }
+
+    #[test]
+    fn unauthenticated_host_mode_cannot_be_reconfigured_as_client() {
+        let (_dir, db) = test_db();
+        let state = AppState {
+            paths: AppPaths {
+                data_dir: _dir.path().to_path_buf(),
+                database_path: _dir.path().join("aster.sqlite"),
+                backup_dir: _dir.path().join("backups"),
+                export_dir: _dir.path().join("exports"),
+                import_report_dir: _dir.path().join("import-reports"),
+            },
+            db,
+            session: Arc::new(Mutex::new(None)),
+            host_service: Arc::new(Mutex::new(HostServiceRuntime::default())),
+        };
+        state
+            .db
+            .with_conn(|conn| repository::set_setting(conn, "runtime_mode", "host"))
+            .unwrap();
+
         let save_error = save_client_config(
             &state,
             SaveClientConfigRequest {

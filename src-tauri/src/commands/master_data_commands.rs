@@ -1,6 +1,7 @@
 use tauri::State;
 
 use crate::app::state::AppState;
+use crate::domain::imports::ExportItemsResult;
 use crate::domain::master_data::{
     BudgetRule, Category, Department, Item, SaveBudgetRuleRequest, SaveCategoryRequest,
     SaveDepartmentRequest, SaveItemRequest, SaveSupplierRequest, SaveUnitRequest, Supplier,
@@ -109,6 +110,14 @@ pub fn list_supplier_purchase_records(
 #[tauri::command]
 pub fn list_items(search: Option<String>, state: State<'_, AppState>) -> AppResult<Vec<Item>> {
     master_data_service::list_items(&state, search)
+}
+
+#[tauri::command]
+pub fn export_items(
+    search: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<ExportItemsResult> {
+    master_data_service::export_items(&state, search)
 }
 
 #[tauri::command]

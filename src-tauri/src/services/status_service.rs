@@ -305,17 +305,17 @@ pub fn effective_backup_dir(state: &AppState) -> AppResult<std::path::PathBuf> {
 
 pub fn get_app_status(state: &AppState, app_version: &str) -> AppResult<AppStatus> {
     let local_runtime = get_runtime_config(state)?;
+    if crate::services::user_service::current_user(state)?.is_none() {
+        return state.db.with_conn(|conn| {
+            client_shell_status(
+                conn,
+                app_version,
+                local_runtime,
+                "未登录，仅显示本机连接配置".to_string(),
+            )
+        });
+    }
     if local_runtime.mode == RuntimeMode::Client {
-        if crate::services::user_service::current_user(state)?.is_none() {
-            return state.db.with_conn(|conn| {
-                client_shell_status(
-                    conn,
-                    app_version,
-                    local_runtime,
-                    "客户端未登录，仅显示本机连接配置".to_string(),
-                )
-            });
-        }
         return match crate::services::host_service::remote_get_app_status(state) {
             Ok(mut remote_status) => {
                 remote_status.runtime = local_runtime;
