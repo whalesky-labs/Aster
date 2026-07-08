@@ -252,9 +252,7 @@ fn allow_client_bootstrap_or_admin(state: &AppState, require_client_mode: bool) 
     }
     let mode = crate::services::status_service::get_runtime_config(state)?.mode;
     if mode == RuntimeMode::Host || (require_client_mode && mode != RuntimeMode::Client) {
-        return Err(AppError::Validation(
-            "请先登录管理员账号".to_string(),
-        ));
+        return Err(AppError::Validation("请先登录管理员账号".to_string()));
     }
     Ok(())
 }

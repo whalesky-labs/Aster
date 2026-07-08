@@ -382,9 +382,9 @@ fn write_items_workbook(path: &std::path::Path, items: &[Item]) -> AppResult<()>
             .set_column_width(col as u16, *width)
             .map_err(xlsx_error)?;
     }
-    workbook.save(path).map_err(|error| {
-        AppError::Validation(format!("物品档案导出失败：{error}"))
-    })
+    workbook
+        .save(path)
+        .map_err(|error| AppError::Validation(format!("物品档案导出失败：{error}")))
 }
 
 fn write_optional_string(
