@@ -51,7 +51,7 @@ const requiredReleaseCommands = [
   "npm run tauri -- build",
 ];
 const commandMatchers = {
-  "npm run tauri -- build": (command) => command === "npm run tauri -- build" || command.startsWith("npm run tauri -- build --target "),
+  "npm run tauri -- build": (command) => command === "npm run tauri -- build" || command.startsWith("npm run tauri -- build "),
 };
 
 const missing = [];

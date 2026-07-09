@@ -98,7 +98,11 @@ function releaseEvidence(platform) {
             ? "npm run tauri -- build --target x86_64-pc-windows-msvc"
             : command,
         )
-      : requiredReleaseCommands;
+      : requiredReleaseCommands.map((command) =>
+          command === "npm run tauri -- build"
+            ? 'npm run tauri -- build --config {"bundle":{"createUpdaterArtifacts":false}}'
+            : command,
+        );
   return {
     platform,
     status: "passed",

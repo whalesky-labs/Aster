@@ -711,12 +711,13 @@ select:focus-visible {
 }
 
 .editor-shell {
+  position: relative;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   width: 100%;
   height: 100vh;
   overflow: hidden;
-  padding: 14px;
+  padding: 0;
   background: var(--native-content-bg);
 }
 
@@ -725,25 +726,31 @@ select:focus-visible {
   grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
+  padding: 18px;
+}
+
+.editor-body > .editor-form,
+.editor-body > .editor-document {
+  margin: -18px;
 }
 
 .editor-form,
 .editor-document {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr);
   gap: 0;
   height: 100%;
   min-height: 100%;
   max-height: 100%;
   overflow: hidden;
   padding: 0;
-  border-radius: var(--native-radius-panel);
+  border-radius: 0;
   background: var(--native-panel-bg);
-  box-shadow: var(--native-shadow-panel);
+  box-shadow: none;
 }
 
 .editor-form {
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .editor-form-grid,
@@ -760,7 +767,7 @@ select:focus-visible {
   align-self: stretch;
   min-height: 0;
   max-height: 100%;
-  padding: 16px 0 18px;
+  padding: 16px 0 72px;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--text-muted) 38%, transparent)
     transparent;
@@ -779,22 +786,28 @@ select:focus-visible {
   background: transparent;
 }
 
-.editor-document {
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+.document-entry-editor,
+.stocktake-counts-editor {
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 
-.editor-document > .editor-form-grid {
-  padding: 14px 0 0;
+.document-entry-editor > .editor-form-grid {
+  padding: 14px 0 72px;
   overflow: visible;
 }
 
-.editor-document > .stocktake-metrics {
+.stocktake-counts-editor {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.stocktake-counts-editor > .stocktake-metrics {
   padding-top: 12px;
 }
 
 .editor-table-scroll {
   min-height: 0;
   overflow: auto;
+  padding-bottom: 64px;
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
@@ -835,21 +848,30 @@ select:focus-visible {
 }
 
 .editor-actions {
-  position: sticky;
+  position: fixed;
+  right: 0;
   bottom: 0;
+  left: 0;
   z-index: 3;
+  flex: 0 0 auto;
   justify-content: flex-end;
-  min-height: 62px;
+  min-height: 54px;
   margin: 0;
   border-top: 1px solid var(--native-panel-border);
-  padding: 12px 14px 14px;
-  background: color-mix(in srgb, var(--native-panel-bg) 94%, transparent);
-  backdrop-filter: blur(18px);
+  padding: 10px 14px 11px;
+  background: color-mix(in srgb, var(--native-content-bg) 98%, transparent);
+  backdrop-filter: blur(12px);
 }
 
 .editor-actions strong {
   margin-right: auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 13px;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1115,6 +1137,15 @@ select:focus-visible {
   border-color: color-mix(in srgb, var(--accent) 80%, #091226);
   color: var(--accent-contrast);
   background: var(--accent);
+}
+
+.editor-actions .ghost-button,
+.editor-actions .primary-button {
+  min-width: 72px;
+  min-height: 30px;
+  padding: 0 14px;
+  font-size: 13px;
+  line-height: 28px;
 }
 
 .primary-button:hover {
@@ -1734,6 +1765,43 @@ td {
   min-height: 0;
   height: 100%;
   overflow: hidden;
+}
+
+.readonly-editor-document,
+.stocktake-detail-document {
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+}
+
+.readonly-editor-scroll,
+.stocktake-detail-scroll {
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 20px 84px;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text-muted) 38%, transparent)
+    transparent;
+}
+
+.readonly-editor-scroll::-webkit-scrollbar,
+.stocktake-detail-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.readonly-editor-scroll::-webkit-scrollbar-thumb,
+.stocktake-detail-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 34%, transparent);
+}
+
+.readonly-editor-scroll::-webkit-scrollbar-track,
+.stocktake-detail-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.readonly-editor-scroll > .placeholder-panel {
+  min-height: 100%;
 }
 
 .document-detail-viewer.has-batches {
@@ -2884,6 +2952,111 @@ tbody tr:hover {
   transition: width 180ms ease;
 }
 
+.software-update-window {
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+}
+
+.software-update-scroll {
+  min-height: 0;
+  overflow: auto;
+  padding: 24px 28px 88px;
+}
+
+.software-update-window .editor-actions {
+  margin: 0;
+}
+
+.software-update-panel {
+  display: grid;
+  gap: 16px;
+  min-height: 100%;
+}
+
+.software-update-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.software-update-header > div:first-child {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.software-update-header h4 {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 17px;
+  line-height: 1.3;
+}
+
+.software-update-header p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.software-update-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0;
+  margin: 0;
+  border-block: 1px solid var(--native-panel-border);
+}
+
+.software-update-metrics div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 13px 14px;
+  border-right: 1px solid var(--native-panel-border);
+}
+
+.software-update-metrics div:last-child {
+  border-right: 0;
+}
+
+.software-update-metrics dt {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.software-update-metrics dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-main);
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.software-update-notes {
+  min-height: 220px;
+  max-height: none;
+  border-top: 1px solid var(--native-panel-border);
+  padding-top: 16px;
+}
+
+.software-update-notes strong {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--text-main);
+  font-size: 13px;
+}
+
+.software-update-notes p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
 .compact-settings-panel {
   min-height: auto;
 }
@@ -2933,18 +3106,33 @@ tbody tr:hover {
 }
 
 .connection-wizard {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 0;
   height: 100%;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
 }
 
 .wizard-header {
   display: grid;
   gap: 8px;
-  padding: 2px 2px 0;
+  border-bottom: 1px solid var(--native-panel-border);
+  padding: 18px 20px 14px;
+  background: var(--native-panel-bg);
+}
+
+.wizard-content {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 20px 84px;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text-muted) 38%, transparent)
+    transparent;
 }
 
 .wizard-header span {
@@ -3020,6 +3208,10 @@ tbody tr:hover {
   background: var(--native-subpanel-bg);
 }
 
+.wizard-content > .wizard-panel {
+  min-height: min(360px, 100%);
+}
+
 .wizard-panel > .field,
 .wizard-panel > .settings-result,
 .wizard-panel > .pair-code-card,
@@ -3060,6 +3252,27 @@ tbody tr:hover {
   gap: 8px;
   margin-top: auto;
   padding-top: 2px;
+}
+
+.wizard-content .wizard-actions {
+  display: none;
+}
+
+.wizard-footer-actions {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-height: 54px;
+  border-top: 1px solid var(--native-panel-border);
+  padding: 10px 14px 11px;
+  background: color-mix(in srgb, var(--native-content-bg) 98%, transparent);
+  backdrop-filter: blur(12px);
 }
 
 .pair-code-card {
@@ -3296,7 +3509,14 @@ tbody tr:hover {
 }
 
 .stocktake-metrics {
-  margin: 10px;
+  margin: 0;
+}
+
+.stocktake-detail-panel {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 12px;
+  min-height: 100%;
 }
 
 .stocktake-detail-panel .document-detail-header .report-actions {

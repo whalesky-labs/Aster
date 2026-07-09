@@ -202,7 +202,7 @@ function validateReleaseReport(reportPath, record, platformName, missing) {
   ];
   const commandMatchers = {
     "npm run tauri -- build": (command) =>
-      command === "npm run tauri -- build" || command?.startsWith("npm run tauri -- build --target "),
+      command === "npm run tauri -- build" || command?.startsWith("npm run tauri -- build "),
   };
   for (const command of requiredCommands) {
     const matchesCommand = commandMatchers[command] ?? ((candidate) => candidate === command);

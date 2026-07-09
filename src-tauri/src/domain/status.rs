@@ -77,6 +77,13 @@ pub struct SystemSettings {
     pub smtp_password_configured: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyCandidate {
+    pub label: String,
+    pub url: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveSystemSettingsRequest {

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -14,13 +14,19 @@ const hasUpdaterSigningKey = Boolean(
   process.env.TAURI_SIGNING_PRIVATE_KEY || process.env.TAURI_SIGNING_PRIVATE_KEY_PATH,
 );
 let resolvedBundleDir = null;
+const tauriBuildCommandText = tauriBuildTarget
+  ? `npm run tauri -- build --target ${tauriBuildTarget}`
+  : "npm run tauri -- build";
+const effectiveTauriBuildCommandText = hasUpdaterSigningKey
+  ? tauriBuildCommandText
+  : `${tauriBuildCommandText} --config {"bundle":{"createUpdaterArtifacts":false}}`;
 const requiredReleaseCommands = [
   "npm run build",
   "npm run verify:coverage",
   "npm run verify:no-placeholders",
   "cargo fmt --check",
   "cargo test",
-  tauriBuildTarget ? `npm run tauri -- build --target ${tauriBuildTarget}` : "npm run tauri -- build",
+  effectiveTauriBuildCommandText,
 ];
 
 function run(command, args, options = {}) {
@@ -95,6 +101,16 @@ function assertNoAppleDoubleFiles(dir, description) {
     console.error(`- ${path}`);
   }
   process.exit(1);
+}
+
+function removeAppleDoubleFiles(dir) {
+  const files = appleDoubleFiles(dir);
+  for (const path of files) {
+    rmSync(path, { force: true });
+  }
+  if (files.length > 0) {
+    console.log(`\n[verify-release] Removed ${files.length} AppleDouble sidecar file(s) under ${dir}.`);
+  }
 }
 
 function assertEqual(actual, expected, message) {
@@ -317,9 +333,14 @@ const tauriBuildArgs = ["run", "tauri", "--", "build"];
 if (tauriBuildTarget) {
   tauriBuildArgs.push("--target", tauriBuildTarget);
 }
+if (!hasUpdaterSigningKey) {
+  tauriBuildArgs.push("--config", JSON.stringify({ bundle: { createUpdaterArtifacts: false } }));
+}
 run("npm", tauriBuildArgs);
 
 resolvedBundleDir = resolveBundleDir();
+removeAppleDoubleFiles(resolvedBundleDir);
+assertNoAppleDoubleFiles(resolvedBundleDir, "Tauri bundle directory");
 if (process.platform === "darwin") {
   const dmgPath = findSingleArtifact(
     join(resolvedBundleDir, "dmg"),

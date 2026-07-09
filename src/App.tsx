@@ -13,7 +13,7 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open, type OpenDialogOptions } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { check, type Update } from "@tauri-apps/plugin-updater";
+import { check, type CheckOptions, type Update } from "@tauri-apps/plugin-updater";
 import { ColorBendsBackground } from "./components/ColorBendsBackground";
 import { createI18n, type I18n, type LocaleCode } from "./i18n";
 import "./App.css";
@@ -129,6 +129,24 @@ type AppUpdateState = {
   totalBytes?: number | null;
   error?: string | null;
   checkedAt?: string | null;
+  sourceLabel?: string | null;
+};
+
+type ProxyCandidate = {
+  label: string;
+  url: string;
+};
+
+const initialUpdateState: AppUpdateState = {
+  status: "idle",
+  currentVersion: null,
+  latestVersion: null,
+  notes: null,
+  downloadedBytes: 0,
+  totalBytes: null,
+  error: null,
+  checkedAt: null,
+  sourceLabel: null,
 };
 
 type DashboardMetrics = {
@@ -904,6 +922,7 @@ type EditorKind =
   | "changePassword"
   | "passwordReset"
   | "businessSettings"
+  | "softwareUpdate"
   | "clientConnection"
   | "clientPairing"
   | "connectionWizard"
@@ -1755,6 +1774,54 @@ function formatError(err: unknown) {
   return message;
 }
 
+async function loadProxyCandidates() {
+  try {
+    const candidates = await invoke<ProxyCandidate[]>(
+      "get_system_proxy_candidates",
+    );
+    return candidates.filter((candidate) => candidate.url.trim());
+  } catch {
+    return [];
+  }
+}
+
+async function checkAppUpdateWithFallback() {
+  const attempts: Array<{
+    label: string;
+    options?: CheckOptions;
+    proxy?: string;
+  }> = [
+    { label: "直连" },
+  ];
+  for (const candidate of await loadProxyCandidates()) {
+    attempts.push({
+      label: candidate.label,
+      options: { proxy: candidate.url },
+      proxy: candidate.url,
+    });
+  }
+
+  const errors: string[] = [];
+  for (const attempt of attempts) {
+    try {
+      const update = await check(attempt.options);
+      return { attemptLabel: attempt.label, proxy: attempt.proxy ?? null, update };
+    } catch (err) {
+      errors.push(`${attempt.label}：${formatError(err)}`);
+    }
+  }
+
+  throw new Error(
+    [
+      "无法连接更新源，已尝试直连和本机代理。",
+      "如果当前电脑已开启 VPN，请确认 VPN 代理允许桌面应用访问 GitHub Releases。",
+      errors[errors.length - 1] ?? "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
+}
+
 function editorTitle(
   editor: EditorKind,
   mode: EditorMode,
@@ -1795,6 +1862,7 @@ function editorTitle(
     item: "物品",
     restoreBackup: "恢复备份",
     secondBackupDir: "第二备份目录",
+    softwareUpdate: "软件更新",
     stocktakeCounts: "盘点实盘",
     stocktakeCreate: "创建盘点单",
     supplier: "供应商",
@@ -1809,6 +1877,7 @@ function editorTitle(
     editor === "changePassword" ||
     editor === "passwordReset" ||
     editor === "businessSettings" ||
+    editor === "softwareUpdate" ||
     editor === "clientConnection" ||
     editor === "clientPairing" ||
     editor === "connectionWizard" ||
@@ -1862,6 +1931,9 @@ function editorWindowSize(editor: EditorKind) {
   }
   if (editor === "connectionWizard") {
     return { width: 680, height: 560, minWidth: 560, minHeight: 460 };
+  }
+  if (editor === "softwareUpdate") {
+    return { width: 760, height: 620, minWidth: 620, minHeight: 480 };
   }
   return { width: 860, height: 720, minWidth: 680, minHeight: 560 };
 }
@@ -2098,16 +2170,8 @@ function MainApp() {
     string | null
   >(null);
   const [updateState, setUpdateState] = useState<AppUpdateState>({
-    status: "idle",
-    currentVersion: null,
-    latestVersion: null,
-    notes: null,
-    downloadedBytes: 0,
-    totalBytes: null,
-    error: null,
-    checkedAt: null,
+    ...initialUpdateState,
   });
-  const pendingUpdateRef = useRef<Update | null>(null);
   const hasCheckedUpdateOnStartupRef = useRef(false);
 
   function clearBusinessState() {
@@ -2671,22 +2735,6 @@ function MainApp() {
     }
   }
 
-  async function createBackupBeforeUpdate() {
-    if (status?.runtime.mode === "client") {
-      return null;
-    }
-    setIsBackupWorking(true);
-    try {
-      const summary = await invoke<BackupSummary>("create_backup", {
-        request: { backupType: "manual" },
-      });
-      setLastBackup(summary);
-      return summary;
-    } finally {
-      setIsBackupWorking(false);
-    }
-  }
-
   async function checkForAppUpdate(options: { silent?: boolean } = {}) {
     const silent = options.silent ?? false;
     try {
@@ -2699,12 +2747,11 @@ function MainApp() {
         status: "checking",
         error: null,
       }));
-      const update = await check();
+      const { attemptLabel, update } = await checkAppUpdateWithFallback();
       const checkedAt = new Date().toLocaleString(
         appearanceSettings.locale === "zh-CN" ? "zh-CN" : "en-US",
       );
       if (!update) {
-        pendingUpdateRef.current = null;
         setUpdateState((current) => ({
           ...current,
           status: "notAvailable",
@@ -2715,6 +2762,7 @@ function MainApp() {
           totalBytes: null,
           error: null,
           checkedAt,
+          sourceLabel: attemptLabel,
         }));
         if (!silent) {
           setNotice(i18n.t("settings.updateNotAvailableNotice"));
@@ -2722,7 +2770,6 @@ function MainApp() {
         return;
       }
 
-      pendingUpdateRef.current = update;
       setUpdateState((current) => ({
         ...current,
         status: "available",
@@ -2734,11 +2781,12 @@ function MainApp() {
         totalBytes: null,
         error: null,
         checkedAt,
+        sourceLabel: attemptLabel,
       }));
       setNotice(
         i18n.t("settings.updateAvailableNotice", {
           version: update.version,
-        }),
+        }) + `（${attemptLabel}）`,
       );
     } catch (err) {
       const message = formatError(err);
@@ -2749,71 +2797,12 @@ function MainApp() {
         checkedAt: new Date().toLocaleString(
           appearanceSettings.locale === "zh-CN" ? "zh-CN" : "en-US",
         ),
+        sourceLabel: current.sourceLabel ?? null,
       }));
       if (!silent) {
         setError(message);
       }
     }
-  }
-
-  async function downloadAndInstallAppUpdate() {
-    const update = pendingUpdateRef.current;
-    if (!update) {
-      await checkForAppUpdate();
-      return;
-    }
-    try {
-      setError(null);
-      setNotice(null);
-      setUpdateState((current) => ({
-        ...current,
-        status: "downloading",
-        downloadedBytes: 0,
-        totalBytes: null,
-        error: null,
-      }));
-      await createBackupBeforeUpdate();
-      let downloadedBytes = 0;
-      let totalBytes: number | null = null;
-      await update.downloadAndInstall((event) => {
-        if (event.event === "Started") {
-          totalBytes = event.data.contentLength ?? null;
-          downloadedBytes = 0;
-        } else if (event.event === "Progress") {
-          downloadedBytes += event.data.chunkLength;
-        } else if (event.event === "Finished") {
-          if (totalBytes != null) {
-            downloadedBytes = totalBytes;
-          }
-        }
-        setUpdateState((current) => ({
-          ...current,
-          status: "downloading",
-          downloadedBytes,
-          totalBytes,
-        }));
-      });
-      setUpdateState((current) => ({
-        ...current,
-        status: "installed",
-        downloadedBytes:
-          current.totalBytes != null ? current.totalBytes : current.downloadedBytes,
-        error: null,
-      }));
-      setNotice(i18n.t("settings.updateInstalledNotice"));
-    } catch (err) {
-      const message = formatError(err);
-      setUpdateState((current) => ({
-        ...current,
-        status: "error",
-        error: message,
-      }));
-      setError(message);
-    }
-  }
-
-  async function restartAppAfterUpdate() {
-    await relaunch();
   }
 
   async function loginUser(
@@ -3474,17 +3463,15 @@ function MainApp() {
             isWorking={isBackupWorking}
             lastBackup={lastBackup}
             onBackup={createManualBackup}
-            onCheckUpdate={() => checkForAppUpdate()}
-            onInstallUpdate={downloadAndInstallAppUpdate}
             onOpenConnectionWizard={() =>
               void openEditorWindow("connectionWizard", {
                 width: 760,
                 height: 640,
               })
             }
+            onOpenSoftwareUpdate={() => void openEditorWindow("softwareUpdate")}
             onLogout={logoutUser}
             onRemoveClientConnection={removeClientConnection}
-            onRestartAfterUpdate={restartAppAfterUpdate}
             onStartHostService={startHostRuntime}
             clientConnections={clientConnections}
             hostStatus={hostStatus}
@@ -3885,6 +3872,9 @@ function EditorWindowApp({
   const [systemSettings, setSystemSettings] = useState<SystemSettings | null>(
     null,
   );
+  const [updateState, setUpdateState] =
+    useState<AppUpdateState>(initialUpdateState);
+  const pendingUpdateRef = useRef<Update | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const periodMonth = params.get("periodMonth") ?? currentMonthString();
 
@@ -3974,6 +3964,7 @@ function EditorWindowApp({
       }
       if (
         editor === "businessSettings" ||
+        editor === "softwareUpdate" ||
         editor === "clientConnection" ||
         editor === "clientPairing" ||
         editor === "secondBackupDir" ||
@@ -4049,6 +4040,144 @@ function EditorWindowApp({
     await runEditorAction({ editor, message }, action);
   }
 
+  async function createEditorBackupBeforeUpdate() {
+    if (status?.runtime.mode === "client") {
+      return null;
+    }
+    return invoke<BackupSummary>("create_backup", {
+      request: { backupType: "manual" },
+    });
+  }
+
+  async function checkEditorUpdate(options: { silent?: boolean } = {}) {
+    const silent = options.silent ?? false;
+    try {
+      if (!silent) {
+        setError(null);
+        setNotice(null);
+      }
+      setUpdateState((current) => ({
+        ...current,
+        status: "checking",
+        error: null,
+      }));
+      const { attemptLabel, update } = await checkAppUpdateWithFallback();
+      const checkedAt = new Date().toLocaleString(
+        loadAppearanceSettings().locale === "zh-CN" ? "zh-CN" : "en-US",
+      );
+      if (!update) {
+        pendingUpdateRef.current = null;
+        setUpdateState((current) => ({
+          ...current,
+          status: "notAvailable",
+          currentVersion: status?.appVersion ?? current.currentVersion ?? null,
+          latestVersion: null,
+          notes: null,
+          downloadedBytes: 0,
+          totalBytes: null,
+          error: null,
+          checkedAt,
+          sourceLabel: attemptLabel,
+        }));
+        if (!silent) {
+          setNotice(defaultI18n.t("settings.updateNotAvailableNotice"));
+        }
+        return;
+      }
+
+      pendingUpdateRef.current = update;
+      setUpdateState((current) => ({
+        ...current,
+        status: "available",
+        currentVersion:
+          update.currentVersion ?? status?.appVersion ?? current.currentVersion,
+        latestVersion: update.version,
+        notes: update.body ?? null,
+        downloadedBytes: 0,
+        totalBytes: null,
+        error: null,
+        checkedAt,
+        sourceLabel: attemptLabel,
+      }));
+      setNotice(
+        defaultI18n.t("settings.updateAvailableNotice", {
+          version: update.version,
+        }) + `（${attemptLabel}）`,
+      );
+    } catch (err) {
+      const message = formatError(err);
+      setUpdateState((current) => ({
+        ...current,
+        status: "error",
+        error: message,
+        checkedAt: new Date().toLocaleString(
+          loadAppearanceSettings().locale === "zh-CN" ? "zh-CN" : "en-US",
+        ),
+        sourceLabel: current.sourceLabel ?? null,
+      }));
+      if (!silent) {
+        setError(message);
+      }
+    }
+  }
+
+  async function downloadAndInstallEditorUpdate() {
+    const update = pendingUpdateRef.current;
+    if (!update) {
+      await checkEditorUpdate();
+      return;
+    }
+    try {
+      setIsSaving(true);
+      setError(null);
+      setNotice(null);
+      setUpdateState((current) => ({
+        ...current,
+        status: "downloading",
+        downloadedBytes: 0,
+        totalBytes: null,
+        error: null,
+      }));
+      await createEditorBackupBeforeUpdate();
+      let downloadedBytes = 0;
+      let totalBytes: number | null = null;
+      await update.downloadAndInstall((event) => {
+        if (event.event === "Started") {
+          totalBytes = event.data.contentLength ?? null;
+          downloadedBytes = 0;
+        } else if (event.event === "Progress") {
+          downloadedBytes += event.data.chunkLength;
+        } else if (event.event === "Finished" && totalBytes != null) {
+          downloadedBytes = totalBytes;
+        }
+        setUpdateState((current) => ({
+          ...current,
+          status: "downloading",
+          downloadedBytes,
+          totalBytes,
+        }));
+      });
+      setUpdateState((current) => ({
+        ...current,
+        status: "installed",
+        downloadedBytes:
+          current.totalBytes != null ? current.totalBytes : current.downloadedBytes,
+        error: null,
+      }));
+      setNotice(defaultI18n.t("settings.updateInstalledNotice"));
+    } catch (err) {
+      const message = formatError(err);
+      setUpdateState((current) => ({
+        ...current,
+        status: "error",
+        error: message,
+      }));
+      setError(message);
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   useEffect(() => {
     document.body.classList.add("editor-window");
     return () => document.body.classList.remove("editor-window");
@@ -4057,6 +4186,11 @@ function EditorWindowApp({
   useEffect(() => {
     void loadEditorData();
   }, []);
+
+  useEffect(() => {
+    if (editor !== "softwareUpdate" || isLoading) return;
+    void checkEditorUpdate({ silent: true });
+  }, [editor, isLoading]);
 
   const enabledCategories = categories.filter((item) => item.enabled);
   const enabledUnits = units.filter((item) => item.enabled);
@@ -4222,6 +4356,18 @@ function EditorWindowApp({
             invoke("save_system_settings", { request }),
           )
         }
+      />
+    );
+  } else if (editor === "softwareUpdate") {
+    content = (
+      <SoftwareUpdateWindow
+        disabled={isSaving || isLoading}
+        i18n={createI18n(loadAppearanceSettings().locale)}
+        status={status}
+        updateState={updateState}
+        onCheck={() => checkEditorUpdate()}
+        onInstall={downloadAndInstallEditorUpdate}
+        onRestart={() => relaunch()}
       />
     );
   } else if (editor === "clientConnection") {
@@ -5769,6 +5915,135 @@ function ConnectionWizard({
     }
   }
 
+  const footerActions = (() => {
+    if (step === "role" && !clientOnly) return null;
+    if (step === "hostConfirm" && !clientOnly) {
+      return (
+        <>
+          <button
+            className="ghost-button"
+            disabled={isBusy}
+            type="button"
+            onClick={() => setStep("role")}
+          >
+            返回
+          </button>
+          <button
+            className="primary-button"
+            disabled={disabled || isBusy}
+            type="button"
+            onClick={() => void enableHost()}
+          >
+            {isBusy ? "开启中..." : "开启共享"}
+          </button>
+        </>
+      );
+    }
+    if (step === "hostReady" && !clientOnly) {
+      return (
+        <>
+          <button
+            className="ghost-button"
+            disabled={isBusy}
+            type="button"
+            onClick={() => void onRefreshHost()}
+          >
+            刷新状态
+          </button>
+          <button
+            className="primary-button"
+            disabled={disabled || isBusy}
+            type="button"
+            onClick={() => void onFinish("这台电脑已开启主电脑共享")}
+          >
+            完成
+          </button>
+        </>
+      );
+    }
+    if (step === "discover") {
+      return (
+        <>
+          <button
+            className="ghost-button"
+            disabled={isBusy}
+            type="button"
+            onClick={() => setStep(clientOnly ? "manual" : "role")}
+          >
+            返回
+          </button>
+          <button
+            className="ghost-button"
+            disabled={isBusy}
+            type="button"
+            onClick={() => setStep("manual")}
+          >
+            手动输入地址
+          </button>
+        </>
+      );
+    }
+    if (step === "manual") {
+      return (
+        <>
+          <button
+            className="ghost-button"
+            disabled={isBusy}
+            type="button"
+            onClick={() => setStep("discover")}
+          >
+            返回搜索
+          </button>
+          <button
+            className="primary-button"
+            disabled={disabled || isBusy || !hostAddress.trim()}
+            type="button"
+            onClick={() => void testManualHost()}
+          >
+            测试并继续
+          </button>
+        </>
+      );
+    }
+    if (step === "pair") {
+      return (
+        <>
+          <button
+            className="ghost-button"
+            disabled={isBusy}
+            type="button"
+            onClick={() => setStep(hosts.length > 0 ? "discover" : "manual")}
+          >
+            返回
+          </button>
+          <button
+            className="primary-button"
+            disabled={
+              disabled || isBusy || pairCode.length !== 6 || !clientName.trim()
+            }
+            type="button"
+            onClick={() => void pairHost()}
+          >
+            {isBusy ? "连接中..." : "连接"}
+          </button>
+        </>
+      );
+    }
+    if (step === "clientReady") {
+      return (
+        <button
+          className="primary-button"
+          disabled={disabled || isBusy}
+          type="button"
+          onClick={() => void onFinish("已连接到主电脑")}
+        >
+          完成
+        </button>
+      );
+    }
+    return null;
+  })();
+
   return (
     <div className="connection-wizard">
       <div className="wizard-header">
@@ -5776,30 +6051,31 @@ function ConnectionWizard({
         <h2>{wizardStepTitle(step)}</h2>
       </div>
 
-      {localError ? <div className="error-banner">{localError}</div> : null}
+      <div className="wizard-content">
+        {localError ? <div className="error-banner">{localError}</div> : null}
 
-      {step === "role" && !clientOnly ? (
-        <div className="wizard-choice-grid">
-          <button
-            className="wizard-choice"
-            disabled={disabled || isBusy}
-            type="button"
-            onClick={() => setStep("hostConfirm")}
-          >
-            <strong>这台作为主电脑</strong>
-            <span>正式库存数据保存在这台电脑，其他电脑连接过来一起使用。</span>
-          </button>
-          <button
-            className="wizard-choice"
-            disabled={disabled || isBusy}
-            type="button"
-            onClick={() => void discover()}
-          >
-            <strong>连接到主电脑</strong>
-            <span>这台电脑连接已有主电脑，共用同一套库存数据。</span>
-          </button>
-        </div>
-      ) : null}
+        {step === "role" && !clientOnly ? (
+          <div className="wizard-choice-grid">
+            <button
+              className="wizard-choice"
+              disabled={disabled || isBusy}
+              type="button"
+              onClick={() => setStep("hostConfirm")}
+            >
+              <strong>这台作为主电脑</strong>
+              <span>正式库存数据保存在这台电脑，其他电脑连接过来一起使用。</span>
+            </button>
+            <button
+              className="wizard-choice"
+              disabled={disabled || isBusy}
+              type="button"
+              onClick={() => void discover()}
+            >
+              <strong>连接到主电脑</strong>
+              <span>这台电脑连接已有主电脑，共用同一套库存数据。</span>
+            </button>
+          </div>
+        ) : null}
 
       {step === "hostConfirm" && !clientOnly ? (
         <div className="wizard-panel">
@@ -6063,26 +6339,30 @@ function ConnectionWizard({
         </div>
       ) : null}
 
-      {step === "clientReady" ? (
-        <div className="wizard-panel">
-          <div className="settings-result success">
-            <strong>已连接到主电脑</strong>
-            <span>
-              {effectiveHostAddress}:{effectiveHostPort}
-            </span>
-            <span>以后打开应用会自动使用主电脑上的库存数据。</span>
+        {step === "clientReady" ? (
+          <div className="wizard-panel">
+            <div className="settings-result success">
+              <strong>已连接到主电脑</strong>
+              <span>
+                {effectiveHostAddress}:{effectiveHostPort}
+              </span>
+              <span>以后打开应用会自动使用主电脑上的库存数据。</span>
+            </div>
+            <div className="wizard-actions">
+              <button
+                className="primary-button"
+                disabled={disabled || isBusy}
+                type="button"
+                onClick={() => void onFinish("已连接到主电脑")}
+              >
+                完成
+              </button>
+            </div>
           </div>
-          <div className="wizard-actions">
-            <button
-              className="primary-button"
-              disabled={disabled || isBusy}
-              type="button"
-              onClick={() => void onFinish("已连接到主电脑")}
-            >
-              完成
-            </button>
-          </div>
-        </div>
+        ) : null}
+      </div>
+      {footerActions ? (
+        <div className="wizard-footer-actions">{footerActions}</div>
       ) : null}
     </div>
   );
@@ -6537,7 +6817,7 @@ function StockDocumentEditor({
   }
 
   return (
-    <div className="editor-document">
+    <div className="editor-document document-entry-editor">
       <div className="editor-form-grid">
         <Field label="业务日期">
           <input
@@ -7112,7 +7392,7 @@ function AdjustmentEditor({
   }
 
   return (
-    <div className="editor-document">
+    <div className="editor-document document-entry-editor">
       <div className="editor-form-grid">
         <Field label="调整日期">
           <input
@@ -7474,7 +7754,7 @@ function StocktakeCountsEditor({
     detail.document.status !== "confirmed" &&
     detail.document.status !== "voided";
   return (
-    <div className="editor-document">
+    <div className="editor-document stocktake-counts-editor">
       <div className="editor-toolbar">
         <Field label="盘点单">
           <select
@@ -8853,10 +9133,18 @@ function StockDocumentDetailViewer({
   isLoading: boolean;
 }) {
   if (isLoading) {
-    return <div className="placeholder-panel">正在加载单据明细...</div>;
+    return (
+      <ReadOnlyEditorWindow>
+        <div className="placeholder-panel">正在加载单据明细...</div>
+      </ReadOnlyEditorWindow>
+    );
   }
   if (!detail) {
-    return <div className="placeholder-panel">未找到单据明细</div>;
+    return (
+      <ReadOnlyEditorWindow>
+        <div className="placeholder-panel">未找到单据明细</div>
+      </ReadOnlyEditorWindow>
+    );
   }
 
   const { document, lines, batchLines } = detail;
@@ -8869,165 +9157,173 @@ function StockDocumentDetailViewer({
     : (document.supplierName ?? "-");
 
   return (
-    <div
-      className={`document-detail-viewer ${
-        batchLines.length > 0 ? "has-batches" : "single-lines"
-      }`}
-    >
-      <div className="detail-summary-grid">
-        <InfoTile label="单号" value={document.documentNo} />
-        <InfoTile label="日期" value={formatDateTime(document.businessDate)} />
-        <InfoTile
-          label="类型"
-          value={
-            isOutbound
-              ? outboundKindLabel(document.outboundKind)
-              : document.documentType === "inbound"
-                ? "入库"
-                : document.documentType
-          }
-        />
-        <InfoTile label={partyLabel} value={partyValue} />
-        <InfoTile label="数量" value={String(document.totalQuantity)} />
-        <InfoTile
-          label={
-            isOutbound
-              ? document.outboundKind === "guest_sale"
-                ? "销售金额"
-                : "成本金额"
-              : "采购金额"
-          }
-          value={formatMoney(document.totalAmount)}
-        />
-        {isOutbound && document.outboundKind === "guest_sale" ? (
-          <>
-            <InfoTile label="销售成本" value={formatMoney(document.totalCostAmount)} />
-            <InfoTile label="毛利" value={formatMoney(document.totalGrossProfit)} />
-          </>
-        ) : null}
-        <InfoTile label="经办人" value={document.handler ?? "-"} />
-        <InfoTile label="用途" value={document.purpose ?? "-"} />
-      </div>
-
-      <div className="subtable document-detail-lines">
-        <div className="subtable-heading">
-          <h3>商品明细</h3>
-          <span>{lines.length} 项</span>
+    <ReadOnlyEditorWindow>
+      <div
+        className={`document-detail-viewer ${
+          batchLines.length > 0 ? "has-batches" : "single-lines"
+        }`}
+      >
+        <div className="detail-summary-grid">
+          <InfoTile label="单号" value={document.documentNo} />
+          <InfoTile label="日期" value={formatDateTime(document.businessDate)} />
+          <InfoTile
+            label="类型"
+            value={
+              isOutbound
+                ? outboundKindLabel(document.outboundKind)
+                : document.documentType === "inbound"
+                  ? "入库"
+                  : document.documentType
+            }
+          />
+          <InfoTile label={partyLabel} value={partyValue} />
+          <InfoTile label="数量" value={String(document.totalQuantity)} />
+          <InfoTile
+            label={
+              isOutbound
+                ? document.outboundKind === "guest_sale"
+                  ? "销售金额"
+                  : "成本金额"
+                : "采购金额"
+            }
+            value={formatMoney(document.totalAmount)}
+          />
+          {isOutbound && document.outboundKind === "guest_sale" ? (
+            <>
+              <InfoTile
+                label="销售成本"
+                value={formatMoney(document.totalCostAmount)}
+              />
+              <InfoTile
+                label="毛利"
+                value={formatMoney(document.totalGrossProfit)}
+              />
+            </>
+          ) : null}
+          <InfoTile label="经办人" value={document.handler ?? "-"} />
+          <InfoTile label="用途" value={document.purpose ?? "-"} />
         </div>
-        <div className="document-detail-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>商品</th>
-                <th>规格</th>
-                <th>单位</th>
-                <th>数量</th>
-                <th>{isOutbound ? "成本单价" : "采购单价"}</th>
-                <th>{isOutbound ? "成本金额" : "采购金额"}</th>
-                {isOutbound && document.outboundKind === "guest_sale" ? (
-                  <>
-                    <th>销售单价</th>
-                    <th>销售金额</th>
-                    <th>毛利</th>
-                  </>
-                ) : null}
-                <th>备注</th>
-              </tr>
-            </thead>
-            <tbody>
-              {lines.map((line) => (
-                <tr key={line.id}>
-                  <td>
-                    <strong>{line.itemName}</strong>
-                    <span className="muted-inline">{line.itemCode}</span>
-                  </td>
-                  <td>{line.spec ?? "-"}</td>
-                  <td>{line.unitName ?? "-"}</td>
-                  <td>{line.quantity}</td>
-                  <td>
-                    {formatMoney(
-                      isOutbound
-                        ? (line.costUnitPrice ?? line.unitPrice)
-                        : (line.purchaseUnitPrice ?? line.unitPrice),
-                    )}
-                  </td>
-                  <td>
-                    {formatMoney(
-                      isOutbound
-                        ? (line.costAmount ?? line.amount)
-                        : (line.purchaseAmount ?? line.amount),
-                    )}
-                  </td>
-                  {isOutbound && document.outboundKind === "guest_sale" ? (
-                    <>
-                      <td>{formatMoney(line.saleUnitPrice ?? 0)}</td>
-                      <td>{formatMoney(line.saleAmount ?? 0)}</td>
-                      <td>{formatMoney(line.grossProfit ?? 0)}</td>
-                    </>
-                  ) : null}
-                  <td>{line.remark ?? "-"}</td>
-                </tr>
-              ))}
-              {lines.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={
-                      isOutbound && document.outboundKind === "guest_sale"
-                        ? 10
-                        : 7
-                    }
-                  >
-                    暂无商品明细
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-      </div>
 
-      {batchLines.length > 0 ? (
         <div className="subtable document-detail-lines">
           <div className="subtable-heading">
-            <h3>批次成本明细</h3>
-            <span>{batchLines.length} 条</span>
+            <h3>商品明细</h3>
+            <span>{lines.length} 项</span>
           </div>
           <div className="document-detail-scroll">
             <table>
               <thead>
                 <tr>
                   <th>商品</th>
-                  <th>批次号</th>
-                  <th>入库日期</th>
-                  <th>供应商</th>
-                  <th>方向</th>
+                  <th>规格</th>
+                  <th>单位</th>
                   <th>数量</th>
-                  <th>批次单价</th>
-                  <th>批次金额</th>
+                  <th>{isOutbound ? "成本单价" : "采购单价"}</th>
+                  <th>{isOutbound ? "成本金额" : "采购金额"}</th>
+                  {isOutbound && document.outboundKind === "guest_sale" ? (
+                    <>
+                      <th>销售单价</th>
+                      <th>销售金额</th>
+                      <th>毛利</th>
+                    </>
+                  ) : null}
+                  <th>备注</th>
                 </tr>
               </thead>
               <tbody>
-                {batchLines.map((line) => (
+                {lines.map((line) => (
                   <tr key={line.id}>
                     <td>
                       <strong>{line.itemName}</strong>
                       <span className="muted-inline">{line.itemCode}</span>
                     </td>
-                    <td>{line.batchNo}</td>
-                    <td>{formatDateTime(line.inboundDate)}</td>
-                    <td>{line.supplierName ?? "-"}</td>
-                    <td>{line.direction === "in" ? "入库" : "出库"}</td>
+                    <td>{line.spec ?? "-"}</td>
+                    <td>{line.unitName ?? "-"}</td>
                     <td>{line.quantity}</td>
-                    <td>{formatMoney(line.unitPrice)}</td>
-                    <td>{formatMoney(line.amount)}</td>
+                    <td>
+                      {formatMoney(
+                        isOutbound
+                          ? (line.costUnitPrice ?? line.unitPrice)
+                          : (line.purchaseUnitPrice ?? line.unitPrice),
+                      )}
+                    </td>
+                    <td>
+                      {formatMoney(
+                        isOutbound
+                          ? (line.costAmount ?? line.amount)
+                          : (line.purchaseAmount ?? line.amount),
+                      )}
+                    </td>
+                    {isOutbound && document.outboundKind === "guest_sale" ? (
+                      <>
+                        <td>{formatMoney(line.saleUnitPrice ?? 0)}</td>
+                        <td>{formatMoney(line.saleAmount ?? 0)}</td>
+                        <td>{formatMoney(line.grossProfit ?? 0)}</td>
+                      </>
+                    ) : null}
+                    <td>{line.remark ?? "-"}</td>
                   </tr>
                 ))}
+                {lines.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={
+                        isOutbound && document.outboundKind === "guest_sale"
+                          ? 10
+                          : 7
+                      }
+                    >
+                      暂无商品明细
+                    </td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
         </div>
-      ) : null}
-    </div>
+
+        {batchLines.length > 0 ? (
+          <div className="subtable document-detail-lines">
+            <div className="subtable-heading">
+              <h3>批次成本明细</h3>
+              <span>{batchLines.length} 条</span>
+            </div>
+            <div className="document-detail-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>商品</th>
+                    <th>批次号</th>
+                    <th>入库日期</th>
+                    <th>供应商</th>
+                    <th>方向</th>
+                    <th>数量</th>
+                    <th>批次单价</th>
+                    <th>批次金额</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {batchLines.map((line) => (
+                    <tr key={line.id}>
+                      <td>
+                        <strong>{line.itemName}</strong>
+                        <span className="muted-inline">{line.itemCode}</span>
+                      </td>
+                      <td>{line.batchNo}</td>
+                      <td>{formatDateTime(line.inboundDate)}</td>
+                      <td>{line.supplierName ?? "-"}</td>
+                      <td>{line.direction === "in" ? "入库" : "出库"}</td>
+                      <td>{line.quantity}</td>
+                      <td>{formatMoney(line.unitPrice)}</td>
+                      <td>{formatMoney(line.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </ReadOnlyEditorWindow>
   );
 }
 
@@ -9039,10 +9335,18 @@ function StockBatchDetailViewer({
   isLoading: boolean;
 }) {
   if (isLoading) {
-    return <div className="placeholder-panel">正在加载批次库存...</div>;
+    return (
+      <ReadOnlyEditorWindow>
+        <div className="placeholder-panel">正在加载批次库存...</div>
+      </ReadOnlyEditorWindow>
+    );
   }
   if (batches.length === 0) {
-    return <div className="placeholder-panel">暂无批次库存</div>;
+    return (
+      <ReadOnlyEditorWindow>
+        <div className="placeholder-panel">暂无批次库存</div>
+      </ReadOnlyEditorWindow>
+    );
   }
 
   const first = batches[0];
@@ -9059,55 +9363,74 @@ function StockBatchDetailViewer({
   );
 
   return (
-    <div className="document-detail-viewer single-lines">
-      <div className="detail-summary-grid">
-        <InfoTile label="物品" value={`${first.itemCode} · ${first.itemName}`} />
-        <InfoTile label="批次数" value={String(batches.length)} />
-        <InfoTile label="可用批次" value={String(availableBatches.length)} />
-        <InfoTile
-          label="剩余数量"
-          value={String(Number(totalRemainingQuantity.toFixed(6)))}
-        />
-        <InfoTile label="剩余金额" value={formatMoney(totalRemainingAmount)} />
-      </div>
+    <ReadOnlyEditorWindow>
+      <div className="document-detail-viewer single-lines">
+        <div className="detail-summary-grid">
+          <InfoTile label="物品" value={`${first.itemCode} · ${first.itemName}`} />
+          <InfoTile label="批次数" value={String(batches.length)} />
+          <InfoTile label="可用批次" value={String(availableBatches.length)} />
+          <InfoTile
+            label="剩余数量"
+            value={String(Number(totalRemainingQuantity.toFixed(6)))}
+          />
+          <InfoTile label="剩余金额" value={formatMoney(totalRemainingAmount)} />
+        </div>
 
-      <div className="subtable document-detail-lines">
-        <div className="subtable-heading">
-          <h3>批次余额</h3>
-          <span>{batches.length} 条</span>
-        </div>
-        <div className="document-detail-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>批次号</th>
-                <th>入库日期</th>
-                <th>来源单据</th>
-                <th>供应商</th>
-                <th>原始数量</th>
-                <th>剩余数量</th>
-                <th>批次单价</th>
-                <th>剩余金额</th>
-                <th>状态</th>
-              </tr>
-            </thead>
-            <tbody>
-              {batches.map((batch) => (
-                <tr key={batch.id}>
-                  <td>{batch.batchNo}</td>
-                  <td>{formatDateTime(batch.inboundDate)}</td>
-                  <td>{batch.sourceDocumentNo ?? "-"}</td>
-                  <td>{batch.supplierName ?? "-"}</td>
-                  <td>{batch.originalQuantity}</td>
-                  <td>{batch.remainingQuantity}</td>
-                  <td>{formatMoney(batch.unitPrice)}</td>
-                  <td>{formatMoney(batch.remainingAmount)}</td>
-                  <td>{stockBatchStatusLabel(batch.status)}</td>
+        <div className="subtable document-detail-lines">
+          <div className="subtable-heading">
+            <h3>批次余额</h3>
+            <span>{batches.length} 条</span>
+          </div>
+          <div className="document-detail-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>批次号</th>
+                  <th>入库日期</th>
+                  <th>来源单据</th>
+                  <th>供应商</th>
+                  <th>原始数量</th>
+                  <th>剩余数量</th>
+                  <th>批次单价</th>
+                  <th>剩余金额</th>
+                  <th>状态</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {batches.map((batch) => (
+                  <tr key={batch.id}>
+                    <td>{batch.batchNo}</td>
+                    <td>{formatDateTime(batch.inboundDate)}</td>
+                    <td>{batch.sourceDocumentNo ?? "-"}</td>
+                    <td>{batch.supplierName ?? "-"}</td>
+                    <td>{batch.originalQuantity}</td>
+                    <td>{batch.remainingQuantity}</td>
+                    <td>{formatMoney(batch.unitPrice)}</td>
+                    <td>{formatMoney(batch.remainingAmount)}</td>
+                    <td>{stockBatchStatusLabel(batch.status)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
+      </div>
+    </ReadOnlyEditorWindow>
+  );
+}
+
+function ReadOnlyEditorWindow({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="editor-document readonly-editor-document">
+      <div className="readonly-editor-scroll">{children}</div>
+      <div className="editor-actions">
+        <button
+          className="primary-button"
+          type="button"
+          onClick={() => void closeCurrentEditorWindow()}
+        >
+          关闭
+        </button>
       </div>
     </div>
   );
@@ -9544,151 +9867,162 @@ function StocktakeDetailViewer({
     ) ?? [];
 
   if (isLoading) {
-    return <div className="placeholder-panel">正在加载盘点详情...</div>;
+    return (
+      <ReadOnlyEditorWindow>
+        <div className="placeholder-panel">正在加载盘点详情...</div>
+      </ReadOnlyEditorWindow>
+    );
   }
   if (!detail) {
-    return <div className="placeholder-panel">盘点单不存在或已被删除。</div>;
+    return (
+      <ReadOnlyEditorWindow>
+        <div className="placeholder-panel">盘点单不存在或已被删除。</div>
+      </ReadOnlyEditorWindow>
+    );
   }
 
   return (
-    <div className="stocktake-detail-panel">
-      <div className="document-detail-header">
-        <div>
-          <h2>{detail.document.documentNo}</h2>
-          <span>
-            {formatDateTime(detail.document.businessDate)} ·{" "}
-            {stocktakeScopeLabel(detail.document.scopeType)} ·{" "}
-            {stocktakeStatusLabel(detail.document.status)}
-          </span>
-        </div>
-        <div className="report-actions">
-          <input
-            placeholder="经办人"
-            value={handler}
-            onChange={(e) => setHandler(e.target.value)}
-          />
-          <input
-            placeholder="备注/作废原因"
-            value={remark}
-            onChange={(e) => setRemark(e.target.value)}
-          />
-          <button
-            className="ghost-button"
-            disabled={disabled}
-            onClick={() => onExport(detail.document.id)}
-          >
-            导出盘点表
-          </button>
-          <button
-            className="ghost-button"
-            disabled={!canEdit || disabled}
-            onClick={() =>
-              openEditorWindow("stocktakeCounts", {
-                mode: "edit",
-                id: detail.document.id,
-                width: 1120,
-                height: 760,
-              })
-            }
-          >
-            录入实盘
-          </button>
-          <button
-            className="ghost-button"
-            disabled={!canVoid || disabled || !remark.trim()}
-            onClick={() =>
-              onVoid(
-                detail.document.documentId,
-                detail.document.id,
-                remark,
-                handler,
-              )
-            }
-          >
-            作废盘点
-          </button>
-          <button
-            className="primary-button"
-            disabled={!canEdit || disabled}
-            onClick={() => onConfirm(detail.document.id, handler, remark)}
-          >
-            确认盘点
-          </button>
+    <div className="editor-document stocktake-detail-document">
+      <div className="stocktake-detail-scroll">
+        <div className="stocktake-detail-panel">
+          <div className="document-detail-header">
+            <div>
+              <h2>{detail.document.documentNo}</h2>
+              <span>
+                {formatDateTime(detail.document.businessDate)} ·{" "}
+                {stocktakeScopeLabel(detail.document.scopeType)} ·{" "}
+                {stocktakeStatusLabel(detail.document.status)}
+              </span>
+            </div>
+            <div className="report-actions">
+              <input
+                placeholder="经办人"
+                value={handler}
+                onChange={(e) => setHandler(e.target.value)}
+              />
+              <input
+                placeholder="备注/作废原因"
+                value={remark}
+                onChange={(e) => setRemark(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <section className="metrics-grid stocktake-metrics">
+            <div className="metric-card">
+              <span>盘点行数</span>
+              <strong>{detail.document.lineCount}</strong>
+              <em>行</em>
+            </div>
+            <div className="metric-card">
+              <span>已录入</span>
+              <strong>{detail.document.countedCount}</strong>
+              <em>行</em>
+            </div>
+            <div className="metric-card">
+              <span>差异项</span>
+              <strong>{differenceLines.length}</strong>
+              <em>项</em>
+            </div>
+            <div className="metric-card">
+              <span>盘盈/盘亏</span>
+              <strong>
+                {formatMoney(detail.document.gainAmount)} /{" "}
+                {formatMoney(detail.document.lossAmount)}
+              </strong>
+              <em>元</em>
+            </div>
+          </section>
+
+          <div className="subtable document-detail-lines">
+            <div className="subtable-heading">
+              <h3>盘点商品</h3>
+              <span>{detail.lines.length} 行</span>
+            </div>
+            <div className="document-detail-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>编码</th>
+                    <th>物品</th>
+                    <th>规格</th>
+                    <th>单位</th>
+                    <th>账面</th>
+                    <th>实盘</th>
+                    <th>差异</th>
+                    <th>差异金额</th>
+                    <th>备注</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {detail.lines.map((line) => (
+                    <tr key={line.id}>
+                      <td>{line.itemCode}</td>
+                      <td>{line.itemName}</td>
+                      <td>{line.spec ?? "-"}</td>
+                      <td>{line.unitName ?? "-"}</td>
+                      <td>{line.bookQuantity}</td>
+                      <td>{line.countedQuantity ?? "-"}</td>
+                      <td
+                        className={
+                          line.differenceQuantity === 0
+                            ? ""
+                            : line.differenceQuantity > 0
+                              ? "gain-text"
+                              : "loss-text"
+                        }
+                      >
+                        {line.differenceQuantity}
+                      </td>
+                      <td>{formatMoney(line.differenceAmount)}</td>
+                      <td>{line.remark ?? "-"}</td>
+                    </tr>
+                  ))}
+                  {detail.lines.length === 0 ? <EmptyRow colSpan={9} /> : null}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </div>
-
-      <section className="metrics-grid stocktake-metrics">
-        <div className="metric-card">
-          <span>盘点行数</span>
-          <strong>{detail.document.lineCount}</strong>
-          <em>行</em>
-        </div>
-        <div className="metric-card">
-          <span>已录入</span>
-          <strong>{detail.document.countedCount}</strong>
-          <em>行</em>
-        </div>
-        <div className="metric-card">
-          <span>差异项</span>
-          <strong>{differenceLines.length}</strong>
-          <em>项</em>
-        </div>
-        <div className="metric-card">
-          <span>盘盈/盘亏</span>
-          <strong>
-            {formatMoney(detail.document.gainAmount)} /{" "}
-            {formatMoney(detail.document.lossAmount)}
-          </strong>
-          <em>元</em>
-        </div>
-      </section>
-
-      <div className="subtable document-detail-lines">
-        <div className="subtable-heading">
-          <h3>盘点商品</h3>
-          <span>{detail.lines.length} 行</span>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th>编码</th>
-              <th>物品</th>
-              <th>规格</th>
-              <th>单位</th>
-              <th>账面</th>
-              <th>实盘</th>
-              <th>差异</th>
-              <th>差异金额</th>
-              <th>备注</th>
-            </tr>
-          </thead>
-          <tbody>
-            {detail.lines.map((line) => (
-              <tr key={line.id}>
-                <td>{line.itemCode}</td>
-                <td>{line.itemName}</td>
-                <td>{line.spec ?? "-"}</td>
-                <td>{line.unitName ?? "-"}</td>
-                <td>{line.bookQuantity}</td>
-                <td>{line.countedQuantity ?? "-"}</td>
-                <td
-                  className={
-                    line.differenceQuantity === 0
-                      ? ""
-                      : line.differenceQuantity > 0
-                        ? "gain-text"
-                        : "loss-text"
-                  }
-                >
-                  {line.differenceQuantity}
-                </td>
-                <td>{formatMoney(line.differenceAmount)}</td>
-                <td>{line.remark ?? "-"}</td>
-              </tr>
-            ))}
-            {detail.lines.length === 0 ? <EmptyRow colSpan={9} /> : null}
-          </tbody>
-        </table>
+      <div className="editor-actions">
+        <button
+          className="ghost-button"
+          disabled={disabled}
+          onClick={() => onExport(detail.document.id)}
+        >
+          导出盘点表
+        </button>
+        <button
+          className="ghost-button"
+          disabled={!canEdit || disabled}
+          onClick={() =>
+            openEditorWindow("stocktakeCounts", {
+              mode: "edit",
+              id: detail.document.id,
+              width: 1120,
+              height: 760,
+            })
+          }
+        >
+          录入实盘
+        </button>
+        <button
+          className="ghost-button"
+          disabled={!canVoid || disabled || !remark.trim()}
+          onClick={() =>
+            onVoid(detail.document.documentId, detail.document.id, remark, handler)
+          }
+        >
+          作废盘点
+        </button>
+        <button
+          className="primary-button"
+          disabled={!canEdit || disabled}
+          onClick={() => onConfirm(detail.document.id, handler, remark)}
+        >
+          确认盘点
+        </button>
       </div>
     </div>
   );
@@ -10515,12 +10849,10 @@ function SettingsPage({
   lastBackup,
   onBackup,
   onAppearanceChange,
-  onCheckUpdate,
-  onInstallUpdate,
   onLogout,
   onOpenConnectionWizard,
+  onOpenSoftwareUpdate,
   onRemoveClientConnection,
-  onRestartAfterUpdate,
   onStartHostService,
   status,
   systemSettings,
@@ -10538,12 +10870,10 @@ function SettingsPage({
   lastBackup: BackupSummary | null;
   onBackup: () => Promise<void>;
   onAppearanceChange: React.Dispatch<React.SetStateAction<AppearanceSettings>>;
-  onCheckUpdate: () => Promise<void>;
-  onInstallUpdate: () => Promise<void>;
   onLogout: () => Promise<void>;
   onOpenConnectionWizard: () => void;
+  onOpenSoftwareUpdate: () => void;
   onRemoveClientConnection: (client: ClientConnectionInfo) => Promise<void>;
-  onRestartAfterUpdate: () => Promise<void>;
   onStartHostService: () => Promise<void>;
   status: AppStatus | null;
   systemSettings: SystemSettings | null;
@@ -10587,15 +10917,6 @@ function SettingsPage({
       suffix: "",
     },
   ];
-  const updateIsBusy =
-    updateState.status === "checking" || updateState.status === "downloading";
-  const updateProgress =
-    updateState.totalBytes && updateState.totalBytes > 0
-      ? Math.min(100, (updateState.downloadedBytes / updateState.totalBytes) * 100)
-      : updateState.status === "downloading"
-        ? null
-        : 0;
-
   return (
     <section className="settings-page">
       <div className="settings-group">
@@ -10765,7 +11086,7 @@ function SettingsPage({
         <h3 className="settings-group-title">
           {i18n.t("settings.softwareUpdate")}
         </h3>
-        <article className="surface settings-feature-panel">
+        <article className="surface settings-feature-panel settings-update-summary">
           <div className="settings-feature-header">
             <div>
               <span className="settings-feature-kicker">
@@ -10776,34 +11097,12 @@ function SettingsPage({
             </div>
             <div className="settings-feature-actions">
               <button
-                className="ghost-button"
-                disabled={updateIsBusy}
+                className="primary-button"
                 type="button"
-                onClick={() => void onCheckUpdate()}
+                onClick={onOpenSoftwareUpdate}
               >
-                {updateState.status === "checking"
-                  ? i18n.t("settings.checkingUpdate")
-                  : i18n.t("settings.checkUpdate")}
+                {i18n.t("settings.openSoftwareUpdate")}
               </button>
-              {updateState.status === "available" ? (
-                <button
-                  className="primary-button"
-                  disabled={updateIsBusy || isWorking}
-                  type="button"
-                  onClick={() => void onInstallUpdate()}
-                >
-                  {i18n.t("settings.downloadInstallUpdate")}
-                </button>
-              ) : null}
-              {updateState.status === "installed" ? (
-                <button
-                  className="primary-button"
-                  type="button"
-                  onClick={() => void onRestartAfterUpdate()}
-                >
-                  {i18n.t("settings.restartToUpdate")}
-                </button>
-              ) : null}
             </div>
           </div>
 
@@ -10822,45 +11121,13 @@ function SettingsPage({
             </div>
             <div>
               <dt>{i18n.t("settings.updateSource")}</dt>
-              <dd>GitHub Releases</dd>
+              <dd>
+                {updateState.sourceLabel
+                  ? `GitHub Releases · ${updateState.sourceLabel}`
+                  : "GitHub Releases"}
+              </dd>
             </div>
           </dl>
-
-          {updateState.status === "downloading" ? (
-            <div className="settings-update-progress">
-              <div className="settings-update-progress-track">
-                <span
-                  style={{
-                    width:
-                      updateProgress == null
-                        ? "35%"
-                        : `${Math.max(4, updateProgress)}%`,
-                  }}
-                />
-              </div>
-              <span>
-                {updateProgress == null
-                  ? i18n.t("settings.updateDownloading")
-                  : i18n.t("settings.updateProgress", {
-                      percent: Math.round(updateProgress),
-                    })}
-              </span>
-            </div>
-          ) : null}
-
-          {updateState.notes ? (
-            <div className="settings-result">
-              <strong>{i18n.t("settings.updateNotes")}</strong>
-              <p>{updateState.notes}</p>
-            </div>
-          ) : null}
-
-          {updateState.status === "error" && updateState.error ? (
-            <div className="settings-inline-note warning">
-              <strong>{i18n.t("settings.updateFailed")}</strong>
-              <span>{updateState.error}</span>
-            </div>
-          ) : null}
         </article>
       </div>
 
@@ -11241,6 +11508,167 @@ function SettingsPage({
     </section>
   );
 
+}
+
+function SoftwareUpdateWindow({
+  disabled,
+  i18n,
+  status,
+  updateState,
+  onCheck,
+  onInstall,
+  onRestart,
+}: {
+  disabled: boolean;
+  i18n: I18n;
+  status: AppStatus | null;
+  updateState: AppUpdateState;
+  onCheck: () => Promise<void>;
+  onInstall: () => Promise<void>;
+  onRestart: () => Promise<void>;
+}) {
+  const updateIsBusy =
+    disabled ||
+    updateState.status === "checking" ||
+    updateState.status === "downloading";
+  const updateProgress =
+    updateState.totalBytes && updateState.totalBytes > 0
+      ? Math.min(100, (updateState.downloadedBytes / updateState.totalBytes) * 100)
+      : updateState.status === "downloading"
+        ? null
+        : 0;
+
+  return (
+    <article className="editor-document software-update-window">
+      <div className="software-update-scroll">
+        <div className="software-update-panel">
+          <div className="software-update-header">
+            <div>
+              <span className="settings-feature-kicker">
+                {i18n.t("settings.updateChannel")}
+              </span>
+              <h4>{softwareUpdateTitle(updateState, i18n)}</h4>
+              <p>{softwareUpdateHint(updateState, i18n)}</p>
+            </div>
+            <span
+              className={`status ${
+                updateState.status === "error"
+                  ? "disabled"
+                  : updateState.status === "available" ||
+                      updateState.status === "installed"
+                    ? "enabled"
+                    : ""
+              }`}
+            >
+              {updateState.status === "checking"
+                ? i18n.t("settings.checkingUpdate")
+                : updateState.status === "downloading"
+                  ? i18n.t("settings.updateDownloading")
+                  : updateState.status === "installed"
+                    ? i18n.t("settings.updateStatusInstalled")
+                    : updateState.status === "available"
+                      ? i18n.t("settings.updateStatusAvailable", {
+                          version: updateState.latestVersion ?? "-",
+                        })
+                      : updateState.status === "notAvailable"
+                        ? i18n.t("settings.updateStatusLatest")
+                        : updateState.status === "error"
+                          ? i18n.t("settings.updateFailed")
+                          : i18n.t("settings.updateStatusIdle")}
+            </span>
+          </div>
+
+          <dl className="software-update-metrics">
+            <div>
+              <dt>{i18n.t("settings.currentVersion")}</dt>
+              <dd>{updateState.currentVersion ?? status?.appVersion ?? "-"}</dd>
+            </div>
+            <div>
+              <dt>{i18n.t("settings.latestVersion")}</dt>
+              <dd>{updateState.latestVersion ?? "-"}</dd>
+            </div>
+            <div>
+              <dt>{i18n.t("settings.updateCheckedAt")}</dt>
+              <dd>{updateState.checkedAt ?? "-"}</dd>
+            </div>
+            <div>
+              <dt>{i18n.t("settings.updateSource")}</dt>
+              <dd>
+                {updateState.sourceLabel
+                  ? `GitHub Releases · ${updateState.sourceLabel}`
+                  : "GitHub Releases"}
+              </dd>
+            </div>
+          </dl>
+
+          {updateState.status === "downloading" ? (
+            <div className="settings-update-progress">
+              <div className="settings-update-progress-track">
+                <span
+                  style={{
+                    width:
+                      updateProgress == null
+                        ? "35%"
+                        : `${Math.max(4, updateProgress)}%`,
+                  }}
+                />
+              </div>
+              <span>
+                {updateProgress == null
+                  ? i18n.t("settings.updateDownloading")
+                  : i18n.t("settings.updateProgress", {
+                      percent: Math.round(updateProgress),
+                    })}
+              </span>
+            </div>
+          ) : null}
+
+          {updateState.status === "error" && updateState.error ? (
+            <div className="settings-inline-note warning">
+              <strong>{i18n.t("settings.updateFailed")}</strong>
+              <span>{updateState.error}</span>
+            </div>
+          ) : null}
+
+          <div className="software-update-notes">
+            <strong>{i18n.t("settings.updateNotes")}</strong>
+            <p>{updateState.notes || i18n.t("settings.updateNotesEmpty")}</p>
+          </div>
+        </div>
+      </div>
+      <div className="editor-actions">
+        <button
+          className="ghost-button"
+          disabled={updateIsBusy}
+          type="button"
+          onClick={() => void onCheck()}
+        >
+          {updateState.status === "checking"
+            ? i18n.t("settings.checkingUpdate")
+            : i18n.t("settings.checkUpdate")}
+        </button>
+        {updateState.status === "available" ? (
+          <button
+            className="primary-button"
+            disabled={updateIsBusy}
+            type="button"
+            onClick={() => void onInstall()}
+          >
+            {i18n.t("settings.downloadInstallUpdate")}
+          </button>
+        ) : null}
+        {updateState.status === "installed" ? (
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => void onRestart()}
+          >
+            {i18n.t("settings.restartToUpdate")}
+          </button>
+        ) : null}
+      </div>
+    </article>
+  );
 }
 
 function BackupRecordsPage({
