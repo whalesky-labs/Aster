@@ -5,11 +5,11 @@
 <h1 align="center">Aster</h1>
 
 <p align="center">
-  A desktop client for hotel materials and inventory operations.
+  Hotel Materials Operations Desktop System
 </p>
 
 <p align="center">
-  Inventory lifecycle · Excel import/export · Local disaster recovery · LAN collaboration
+  Localized management for purchasing, stock usage, stocktaking, reporting, and multi-computer collaboration
 </p>
 
 <p align="center">
@@ -23,7 +23,7 @@
 
 [中文默认](./README.md) | English
 
-Aster is a Windows and macOS desktop client for internal hotel materials operations. It uses local SQLite as the source of truth and supports standalone usage, LAN host/client collaboration, complete inventory workflows, Excel import/export, user permissions, budget approvals, stocktaking, reporting, and local disaster recovery.
+Aster is a Windows/macOS desktop system for internal hotel materials flow and inventory cost management. It stores business data in a local database, supports standalone operation and LAN multi-computer collaboration, and helps hotels manage item records, suppliers, purchase batches, inbound and outbound documents, stock balances, stocktake differences, department budgets, guest amenity sales, report exports, and backup recovery in a locally controlled, low-maintenance environment.
 
 See the [Aster execution plan](docs/ASTER_EXECUTION_PLAN.md) for the complete product scope.
 
