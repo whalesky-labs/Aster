@@ -7,55 +7,35 @@
   <style>
     :root {
       color-scheme: light;
-      --bg: #f6f7f9;
+      --bg: #f5f7fb;
       --paper: #ffffff;
-      --text: #18202a;
+      --text: #172033;
       --muted: #667085;
-      --line: #d9dee7;
-      --accent: #1f6feb;
-      --accent-soft: #e8f1ff;
-      --warning: #8a5a00;
-      --warning-bg: #fff6da;
-      --shadow: 0 16px 36px rgba(24, 32, 42, 0.08);
+      --line: #d9e0ea;
+      --accent: #2f6dff;
+      --accent-soft: #eef4ff;
+      --shadow: 0 18px 42px rgba(18, 27, 43, 0.08);
     }
-
-    * {
-      box-sizing: border-box;
-    }
-
-    html {
-      scroll-behavior: smooth;
-    }
-
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
     body {
       margin: 0;
       background: var(--bg);
       color: var(--text);
-      font-family:
-        -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei",
-        "PingFang SC", "Hiragino Sans GB", Arial, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", Arial, sans-serif;
       font-size: 16px;
       line-height: 1.75;
     }
-
-    a {
-      color: var(--accent);
-      text-decoration: none;
-    }
-
-    a:hover {
-      text-decoration: underline;
-    }
-
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
     .layout {
       display: grid;
-      grid-template-columns: 280px minmax(0, 1fr);
+      grid-template-columns: 292px minmax(0, 1fr);
       gap: 28px;
-      width: min(1280px, calc(100% - 40px));
+      width: min(1320px, calc(100% - 40px));
       margin: 0 auto;
       padding: 32px 0 56px;
     }
-
     .sidebar {
       position: sticky;
       top: 24px;
@@ -63,11 +43,10 @@
       max-height: calc(100vh - 48px);
       overflow: auto;
       border: 1px solid var(--line);
-      border-radius: 10px;
+      border-radius: 8px;
       background: var(--paper);
       box-shadow: var(--shadow);
     }
-
     .toc-title {
       position: sticky;
       top: 0;
@@ -76,215 +55,83 @@
       background: var(--paper);
       font-weight: 700;
     }
-
-    .toc {
-      display: grid;
-      gap: 2px;
-      padding: 10px;
-      margin: 0;
-      list-style: none;
-    }
-
+    .toc { display: grid; gap: 2px; padding: 10px; }
     .toc a {
       display: block;
-      border-radius: 8px;
+      border-radius: 6px;
       padding: 7px 9px;
-      color: var(--text);
-      font-size: 14px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.35;
     }
-
-    .toc a:hover {
-      background: var(--accent-soft);
-      color: var(--accent);
-      text-decoration: none;
-    }
-
+    .toc a:hover { background: var(--accent-soft); color: var(--accent); text-decoration: none; }
+    .toc-level-2 { font-weight: 700; }
+    .toc-level-3 { padding-left: 20px !important; }
     main {
       min-width: 0;
-    }
-
-    .manual {
       border: 1px solid var(--line);
-      border-radius: 14px;
+      border-radius: 8px;
       background: var(--paper);
       box-shadow: var(--shadow);
+      padding: 42px 52px 56px;
+    }
+    h1, h2, h3, h4 { color: var(--text); line-height: 1.25; }
+    h1 { margin: 0 0 16px; font-size: 34px; }
+    h2 { margin: 42px 0 14px; border-top: 1px solid var(--line); padding-top: 28px; font-size: 24px; }
+    h3 { margin: 26px 0 10px; font-size: 18px; }
+    h4 { margin: 20px 0 8px; font-size: 16px; }
+    p { margin: 0 0 12px; }
+    ul, ol { margin: 0 0 16px 0; padding-left: 24px; }
+    li { margin: 4px 0; }
+    figure {
+      margin: 18px 0 26px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
       overflow: hidden;
+      background: #f8fafc;
     }
-
-    .hero {
-      padding: 40px 46px 34px;
-      border-bottom: 1px solid var(--line);
-      background:
-        linear-gradient(135deg, rgba(31, 111, 235, 0.12), rgba(22, 163, 74, 0.08)),
-        #ffffff;
-    }
-
-    .hero h1 {
-      margin: 0 0 8px;
-      font-size: 36px;
-      line-height: 1.2;
-      letter-spacing: 0;
-    }
-
-    .hero p {
-      max-width: 760px;
-      margin: 0;
-      color: var(--muted);
-      font-size: 17px;
-    }
-
-    .meta {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      margin-top: 18px;
-    }
-
-    .meta span,
-    .tag {
-      display: inline-flex;
-      align-items: center;
-      min-height: 28px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 3px 10px;
-      background: rgba(255, 255, 255, 0.74);
-      color: var(--muted);
-      font-size: 13px;
-    }
-
-    section {
-      padding: 30px 46px;
-      border-bottom: 1px solid var(--line);
-    }
-
-    section:last-child {
-      border-bottom: 0;
-    }
-
-    h2 {
-      margin: 0 0 14px;
-      font-size: 24px;
-      line-height: 1.35;
-      letter-spacing: 0;
-    }
-
-    h3 {
-      margin: 26px 0 10px;
-      font-size: 18px;
-      line-height: 1.4;
-      letter-spacing: 0;
-    }
-
-    p {
-      margin: 0 0 12px;
-    }
-
-    ul,
-    ol {
-      margin: 8px 0 16px 22px;
-      padding: 0;
-    }
-
-    li {
-      margin: 4px 0;
-    }
-
-    .note {
-      margin: 16px 0;
-      border: 1px solid #f3d27b;
-      border-radius: 10px;
-      padding: 12px 14px;
-      background: var(--warning-bg);
-      color: var(--warning);
-    }
-
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 14px;
-      margin-top: 14px;
-    }
-
-    .card {
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 14px 16px;
-      background: #fbfcfe;
-    }
-
-    .card strong {
+    figure img {
       display: block;
-      margin-bottom: 4px;
+      width: 100%;
+      height: auto;
     }
-
-    .footer {
-      padding: 22px 46px 34px;
+    figcaption {
+      border-top: 1px solid var(--line);
+      padding: 8px 12px;
       color: var(--muted);
       font-size: 13px;
+      text-align: center;
+      background: #fff;
     }
-
-    @media (max-width: 920px) {
-      .layout {
-        grid-template-columns: 1fr;
-      }
-
-      .sidebar {
-        position: static;
-        max-height: none;
-      }
-
-      .toc {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
+    code {
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 1px 5px;
+      background: #f7f8fb;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
     }
-
-    @media (max-width: 640px) {
-      .layout {
-        width: min(100% - 20px, 1280px);
-        padding: 10px 0 28px;
-      }
-
-      .hero,
-      section,
-      .footer {
-        padding-left: 20px;
-        padding-right: 20px;
-      }
-
-      .hero h1 {
-        font-size: 28px;
-      }
-
-      .grid,
-      .toc {
-        grid-template-columns: 1fr;
-      }
+    pre {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: #f7f8fb;
     }
-
+    @media (max-width: 980px) {
+      .layout { display: block; width: min(100% - 24px, 760px); padding: 18px 0 32px; }
+      .sidebar { position: static; max-height: none; margin-bottom: 18px; }
+      main { padding: 28px 22px 36px; }
+      h1 { font-size: 28px; }
+      h2 { font-size: 21px; }
+    }
     @media print {
-      body {
-        background: #ffffff;
-      }
-
-      .layout {
-        display: block;
-        width: 100%;
-        padding: 0;
-      }
-
-      .sidebar {
-        display: none;
-      }
-
-      .manual {
-        border: 0;
-        box-shadow: none;
-      }
-
-      section {
-        break-inside: avoid;
-      }
+      body { background: #fff; }
+      .layout { display: block; width: auto; padding: 0; }
+      .sidebar { display: none; }
+      main { border: 0; box-shadow: none; padding: 0; }
+      h2, figure { break-inside: avoid; }
+      a { color: inherit; }
     }
   </style>
 </head>
@@ -292,410 +139,744 @@
   <div class="layout">
     <aside class="sidebar">
       <div class="toc-title">目录</div>
-      <ol class="toc">
-        <li><a href="#people">1. 适用人员</a></li>
-        <li><a href="#workflow">2. 日常使用流程</a></li>
-        <li><a href="#login">3. 登录与权限</a></li>
-        <li><a href="#dashboard">4. 首页工作台</a></li>
-        <li><a href="#items">5. 物品档案</a></li>
-        <li><a href="#base-data">6. 基础资料</a></li>
-        <li><a href="#inbound">7. 入库</a></li>
-        <li><a href="#outbound">8. 出库</a></li>
-        <li><a href="#internal">9. 内部员工领用</a></li>
-        <li><a href="#sale">10. 酒店客人销售</a></li>
-        <li><a href="#document-detail">11. 单据详情与作废</a></li>
-        <li><a href="#ledger">12. 库存台账</a></li>
-        <li><a href="#movements">13. 库存流水</a></li>
-        <li><a href="#batches">14. 批次库存</a></li>
-        <li><a href="#adjustment">15. 库存调整</a></li>
-        <li><a href="#stocktake">16. 库存盘点</a></li>
-        <li><a href="#reports">17. 报表中心</a></li>
-        <li><a href="#export">18. Excel 导出</a></li>
-        <li><a href="#import">19. Excel 导入</a></li>
-        <li><a href="#budget">20. 预算控制</a></li>
-        <li><a href="#approval">21. 审批</a></li>
-        <li><a href="#backup">22. 备份与恢复</a></li>
-        <li><a href="#lan">23. 多电脑连接</a></li>
-        <li><a href="#settings">24. 系统设置</a></li>
-        <li><a href="#faq">25. 常见问题</a></li>
-      </ol>
+      <nav class="toc">
+<a class="toc-level-2" href="#1.-aster-是做什么的">1. Aster 是做什么的</a>
+<a class="toc-level-2" href="#2.-适用人员">2. 适用人员</a>
+<a class="toc-level-2" href="#3.-基本使用原则">3. 基本使用原则</a>
+<a class="toc-level-2" href="#4.-安装与打开">4. 安装与打开</a>
+<a class="toc-level-3" href="#4.1-windows">4.1 Windows</a>
+<a class="toc-level-3" href="#4.2-macos">4.2 macOS</a>
+<a class="toc-level-2" href="#5.-登录记住账号和找回密码">5. 登录、记住账号和找回密码</a>
+<a class="toc-level-3" href="#5.1-登录">5.1 登录</a>
+<a class="toc-level-3" href="#5.2-记住账号密码">5.2 记住账号密码</a>
+<a class="toc-level-3" href="#5.3-找回密码">5.3 找回密码</a>
+<a class="toc-level-2" href="#6.-多电脑连接">6. 多电脑连接</a>
+<a class="toc-level-3" href="#6.1-第一次在客户端电脑登录前连接主电脑">6.1 第一次在客户端电脑登录前连接主电脑</a>
+<a class="toc-level-3" href="#6.2-搜索不到主电脑">6.2 搜索不到主电脑</a>
+<a class="toc-level-3" href="#6.3-主电脑管理已连接设备">6.3 主电脑管理已连接设备</a>
+<a class="toc-level-2" href="#7.-首页工作台">7. 首页工作台</a>
+<a class="toc-level-2" href="#8.-物品档案">8. 物品档案</a>
+<a class="toc-level-3" href="#8.1-新增物品">8.1 新增物品</a>
+<a class="toc-level-3" href="#8.2-参考进价和参考售价">8.2 参考进价和参考售价</a>
+<a class="toc-level-3" href="#8.3-导入和导出物品档案">8.3 导入和导出物品档案</a>
+<a class="toc-level-3" href="#8.4-停用物品">8.4 停用物品</a>
+<a class="toc-level-2" href="#9.-分类单位部门供应商">9. 分类、单位、部门、供应商</a>
+<a class="toc-level-3" href="#9.1-分类">9.1 分类</a>
+<a class="toc-level-3" href="#9.2-单位">9.2 单位</a>
+<a class="toc-level-3" href="#9.3-部门">9.3 部门</a>
+<a class="toc-level-3" href="#9.4-供应商">9.4 供应商</a>
+<a class="toc-level-2" href="#10.-入库采购">10. 入库采购</a>
+<a class="toc-level-3" href="#10.1-新建入库单">10.1 新建入库单</a>
+<a class="toc-level-3" href="#10.2-入库价格和批次">10.2 入库价格和批次</a>
+<a class="toc-level-3" href="#10.3-保存草稿和确认入库">10.3 保存草稿和确认入库</a>
+<a class="toc-level-3" href="#10.4-入库列表和详情">10.4 入库列表和详情</a>
+<a class="toc-level-2" href="#11.-出库领用">11. 出库/领用</a>
+<a class="toc-level-3" href="#11.1-内部员工领用">11.1 内部员工领用</a>
+<a class="toc-level-3" href="#11.2-酒店客人销售">11.2 酒店客人销售</a>
+<a class="toc-level-3" href="#11.3-可用库存">11.3 可用库存</a>
+<a class="toc-level-3" href="#11.4-出库成本如何计算">11.4 出库成本如何计算</a>
+<a class="toc-level-3" href="#11.5-客人销售低于成本">11.5 客人销售低于成本</a>
+<a class="toc-level-3" href="#11.6-出库列表和详情">11.6 出库列表和详情</a>
+<a class="toc-level-2" href="#12.-单据作废">12. 单据作废</a>
+<a class="toc-level-2" href="#13.-库存台账">13. 库存台账</a>
+<a class="toc-level-2" href="#14.-库存流水">14. 库存流水</a>
+<a class="toc-level-2" href="#15.-批次库存">15. 批次库存</a>
+<a class="toc-level-2" href="#16.-库存调整">16. 库存调整</a>
+<a class="toc-level-2" href="#17.-库存盘点">17. 库存盘点</a>
+<a class="toc-level-3" href="#17.1-创建盘点单">17.1 创建盘点单</a>
+<a class="toc-level-3" href="#17.2-录入实盘数量">17.2 录入实盘数量</a>
+<a class="toc-level-3" href="#17.3-确认盘点">17.3 确认盘点</a>
+<a class="toc-level-3" href="#17.4-盘点导出">17.4 盘点导出</a>
+<a class="toc-level-2" href="#18.-报表中心">18. 报表中心</a>
+<a class="toc-level-3" href="#18.1-月份选择">18.1 月份选择</a>
+<a class="toc-level-3" href="#18.2-客人销售毛利">18.2 客人销售毛利</a>
+<a class="toc-level-2" href="#19.-excel-导出">19. Excel 导出</a>
+<a class="toc-level-2" href="#20.-excel-导入">20. Excel 导入</a>
+<a class="toc-level-2" href="#21.-预算控制">21. 预算控制</a>
+<a class="toc-level-2" href="#22.-审批">22. 审批</a>
+<a class="toc-level-2" href="#23.-备份与恢复">23. 备份与恢复</a>
+<a class="toc-level-3" href="#23.1-什么时候需要备份">23.1 什么时候需要备份</a>
+<a class="toc-level-3" href="#23.2-手动备份">23.2 手动备份</a>
+<a class="toc-level-3" href="#23.3-自动备份">23.3 自动备份</a>
+<a class="toc-level-3" href="#23.4-恢复备份">23.4 恢复备份</a>
+<a class="toc-level-2" href="#24.-系统设置">24. 系统设置</a>
+<a class="toc-level-2" href="#25.-用户与权限">25. 用户与权限</a>
+<a class="toc-level-2" href="#26.-操作日志">26. 操作日志</a>
+<a class="toc-level-2" href="#27.-常见问题">27. 常见问题</a>
+<a class="toc-level-3" href="#27.1-台账和流水有什么区别">27.1 台账和流水有什么区别</a>
+<a class="toc-level-3" href="#27.2-入库价格填错怎么办">27.2 入库价格填错怎么办</a>
+<a class="toc-level-3" href="#27.3-出库数量超过库存怎么办">27.3 出库数量超过库存怎么办</a>
+<a class="toc-level-3" href="#27.4-为什么客人销售毛利为负">27.4 为什么客人销售毛利为负</a>
+<a class="toc-level-3" href="#27.5-为什么看不到某个菜单">27.5 为什么看不到某个菜单</a>
+<a class="toc-level-3" href="#27.6-客户端为什么提示未完成主机配对">27.6 客户端为什么提示未完成主机配对</a>
+<a class="toc-level-3" href="#27.7-为什么导出文件找不到">27.7 为什么导出文件找不到</a>
+<a class="toc-level-3" href="#27.8-为什么月份筛选没有数据">27.8 为什么月份筛选没有数据</a>
+<a class="toc-level-3" href="#27.9-日期能不能填过去或未来">27.9 日期能不能填过去或未来</a>
+<a class="toc-level-3" href="#27.10-本地数据如何在多台电脑一致">27.10 本地数据如何在多台电脑一致</a>
+<a class="toc-level-2" href="#28.-日常检查清单">28. 日常检查清单</a>
+<a class="toc-level-2" href="#29.-交接注意事项">29. 交接注意事项</a>
+      </nav>
     </aside>
-
-    <main class="manual">
-      <header class="hero">
-        <h1>Aster 使用手册</h1>
-        <p>面向酒店员工的日常操作说明。本文档可直接在本地浏览器打开，不需要联网。</p>
-        <div class="meta">
-          <span>更新日期：2026-07-06</span>
-          <span>适用：Windows / macOS 客户端</span>
-          <span>格式：离线 HTML</span>
-        </div>
-      </header>
-
-      <section id="people">
-        <h2>1. 适用人员</h2>
-        <p>本文档面向酒店日常使用 Aster 的员工，包括仓库员、管理员、部门查看人员和负责报表的人员。</p>
-        <p>手册重点说明每个业务功能怎么用、什么时候用、填写时注意什么。</p>
-      </section>
-
-      <section id="workflow">
-        <h2>2. 日常使用流程</h2>
-        <ol>
-          <li>维护基础资料：物品、分类、单位、部门、供应商。</li>
-          <li>采购到货后做入库。</li>
-          <li>内部员工领用或酒店客人购买时做出库。</li>
-          <li>在库存台账查看当前库存。</li>
-          <li>在库存流水查看库存变化过程。</li>
-          <li>定期做库存盘点。</li>
-          <li>在报表中心查看月度统计并导出 Excel。</li>
-          <li>按需要做备份或恢复。</li>
-        </ol>
-      </section>
-
-      <section id="login">
-        <h2>3. 登录与权限</h2>
-        <p>打开客户端后，使用分配的账号登录。不同账号能看到的菜单可能不同。</p>
-        <div class="grid">
-          <div class="card"><strong>管理员</strong>可维护用户、权限、系统设置、备份恢复、预算和审批。</div>
-          <div class="card"><strong>仓库员</strong>可维护物品、入库、出库、盘点、导入和库存业务。</div>
-          <div class="card"><strong>部门查看员</strong>主要查看自己部门相关报表。</div>
-          <div class="card"><strong>只读用户</strong>只能查看数据，不能新增或修改。</div>
-        </div>
-        <p class="note">如果某个按钮是灰色，通常表示当前账号没有这个操作权限。</p>
-      </section>
-
-      <section id="dashboard">
-        <h2>4. 首页工作台</h2>
-        <p>首页用于快速查看当前业务概况。日常进入系统后，可以先看首页有没有库存预警或备份提醒。</p>
-        <ul>
-          <li>当前库存概况</li>
-          <li>库存预警</li>
-          <li>最近操作记录</li>
-          <li>快捷入口</li>
-          <li>备份提醒</li>
-        </ul>
-      </section>
-
-      <section id="items">
-        <h2>5. 物品档案</h2>
-        <p>物品档案用于维护酒店库存商品和易耗品。进入位置：基础资料或物品档案菜单。</p>
-        <h3>5.1 新增物品</h3>
-        <ul>
-          <li>名称：物品名称，例如矿泉水、牙刷、拖鞋。</li>
-          <li>条码：可选，如果有扫码枪，可以填写商品条码。</li>
-          <li>分类：用于报表统计和筛选。</li>
-          <li>规格：例如 500ml、独立包装、10 个/包。</li>
-          <li>单位：例如瓶、件、包、盒。</li>
-          <li>参考进价：入库时默认带出的采购参考价。</li>
-          <li>参考售价：酒店客人销售时默认带出的销售参考价。</li>
-          <li>供应商：默认供应商，可选。</li>
-          <li>预警线：库存低于该数量时会进入库存预警。</li>
-        </ul>
-        <h3>5.2 参考进价和参考售价</h3>
-        <p>参考进价和参考售价只是方便录入，不是最终结果。入库时可以按本次实际采购价修改；客人销售时可以按本次实际销售价修改。</p>
-        <p>例如矿泉水参考售价是 3 元，但临时活动卖 2 元，可以在出库销售时改成 2 元。</p>
-        <h3>5.3 停用物品</h3>
-        <p>不再使用的物品可以停用。停用后，通常不建议继续在新单据中使用，但历史单据和报表仍可查看。</p>
-      </section>
-
-      <section id="base-data">
-        <h2>6. 分类、单位、部门、供应商</h2>
-        <p>这些资料是单据和报表的基础。</p>
-        <h3>6.1 分类管理</h3>
-        <p>分类用于区分物品类型，例如客房耗材、餐饮用品、工程用品、清洁用品。分类会影响筛选、报表统计和预算管理。</p>
-        <h3>6.2 单位管理</h3>
-        <p>单位用于物品数量展示，例如件、瓶、包、盒、套。</p>
-        <h3>6.3 部门管理</h3>
-        <p>部门用于内部员工领用和部门报表，例如客房、餐饮、工程、行政办。内部领用必须选择部门。</p>
-        <h3>6.4 供应商管理</h3>
-        <p>供应商用于入库采购记录。供应商页面可以查看该供应商的采购记录，方便核对采购历史。</p>
-      </section>
-
-      <section id="inbound">
-        <h2>7. 入库</h2>
-        <p>入库用于记录采购到货、库存增加。进入位置：入库菜单。</p>
-        <h3>7.1 新建入库单</h3>
-        <ul>
-          <li>业务日期：本次入库的实际日期和时间，不能选择晚于当前时间的未来时间。</li>
-          <li>供应商：本次采购供应商。</li>
-          <li>经办人：实际处理人。</li>
-          <li>备注：可填写采购说明。</li>
-          <li>商品明细：选择物品、填写数量、本次进价和采购金额。</li>
-        </ul>
-        <p>本次进价默认会带出物品档案中的参考进价，但应按实际采购价核对。</p>
-        <h3>7.2 入库确认</h3>
-        <ul>
-          <li>库存数量增加。</li>
-          <li>系统记录本次采购价格。</li>
-          <li>后续出库会按采购批次计算成本。</li>
-        </ul>
-        <p>如果只是临时保存，还不想影响库存，可以先保存草稿。</p>
-        <h3>7.3 入库列表</h3>
-        <p>入库列表可以按月份、供应商、物品和关键字筛选。点击“详情”可以查看单据明细和批次成本明细。</p>
-      </section>
-
-      <section id="outbound">
-        <h2>8. 出库</h2>
-        <p>出库用于记录库存减少。进入位置：出库或出库/领用菜单。</p>
-        <ul>
-          <li>内部员工领用</li>
-          <li>酒店客人销售</li>
-        </ul>
-      </section>
-
-      <section id="internal">
-        <h2>9. 内部员工领用</h2>
-        <p>内部员工领用用于酒店内部消耗，例如客房领牙刷、工程领工具耗材。</p>
-        <h3>9.1 新建内部领用单</h3>
-        <ul>
-          <li>业务日期和时间，不能选择晚于当前时间的未来时间。</li>
-          <li>领用部门。</li>
-          <li>经办人。</li>
-          <li>用途。</li>
-          <li>商品和数量。</li>
-        </ul>
-        <p>内部领用不需要填写销售价格。</p>
-        <h3>9.2 成本怎么计算</h3>
-        <p>内部领用提交后，系统会自动按现有库存批次计算成本。员工只需要确认领用物品和数量，不需要手动计算成本。</p>
-        <h3>9.3 预算提醒</h3>
-        <p>如果启用了预算控制，内部领用可能因为超预算无法提交。遇到超预算时，可以按公司流程申请审批，通过后再提交。</p>
-      </section>
-
-      <section id="sale">
-        <h2>10. 酒店客人销售</h2>
-        <p>酒店客人销售用于记录对客销售商品，例如客人购买矿泉水、拖鞋、洗漱用品等。</p>
-        <h3>10.1 新建客人销售单</h3>
-        <ul>
-          <li>业务日期和时间，不能选择晚于当前时间的未来时间。</li>
-          <li>经办人。</li>
-          <li>用途或备注。</li>
-          <li>商品。</li>
-          <li>数量。</li>
-          <li>销售单价。</li>
-          <li>销售金额。</li>
-        </ul>
-        <p>销售单价默认带出物品档案中的参考售价，可以按实际售价修改。</p>
-        <h3>10.2 销售低于成本</h3>
-        <p>如果销售价低于采购成本，系统允许提交。这种情况可能来自促销、赔偿、特殊价格等。</p>
-        <p>报表中心会显示毛利和亏损提醒，后续可由管理人员核查。</p>
-        <h3>10.3 客人销售不占用部门预算</h3>
-        <p>酒店客人销售会扣减库存，但不占用内部部门预算。</p>
-      </section>
-
-      <section id="document-detail">
-        <h2>11. 单据详情与作废</h2>
-        <p>入库单和出库单都可以在列表中点击“详情”查看。</p>
-        <ul>
-          <li>单号</li>
-          <li>日期和时间</li>
-          <li>经办人</li>
-          <li>商品明细</li>
-          <li>金额</li>
-          <li>批次成本明细</li>
-        </ul>
-        <p>如果单据录错，并且系统允许作废，可以填写作废原因后作废。</p>
-        <p class="note">作废已确认单据会影响库存。如果入库批次已经被后续出库消耗，可能无法直接作废。</p>
-      </section>
-
-      <section id="ledger">
-        <h2>12. 库存台账</h2>
-        <p>库存台账用于查看当前库存结果。它回答的是：现在每个物品还有多少、值多少钱。</p>
-        <ul>
-          <li>当前库存</li>
-          <li>库存金额</li>
-          <li>平均成本</li>
-          <li>最近入库价</li>
-          <li>预警线</li>
-          <li>库存状态</li>
-        </ul>
-        <p>如果只想知道现在库存够不够，看库存台账。</p>
-      </section>
-
-      <section id="movements">
-        <h2>13. 库存流水</h2>
-        <p>库存流水用于查看库存变化过程。它回答的是：库存为什么变成现在这样。</p>
-        <p>每一次入库、出库、盘点、调整、作废冲正都会产生流水。</p>
-        <ul>
-          <li>日期和时间</li>
-          <li>单号</li>
-          <li>类型</li>
-          <li>物品</li>
-          <li>入库或出库方向</li>
-          <li>数量、单价、金额</li>
-          <li>部门或供应商</li>
-          <li>操作人和备注</li>
-        </ul>
-        <p>如果台账数量不对，需要追查原因，看库存流水。</p>
-      </section>
-
-      <section id="batches">
-        <h2>14. 批次库存</h2>
-        <p>在库存台账中，可以查看某个物品的批次。批次用于查看同一个物品不同采购时间、不同采购价格的库存。</p>
-        <ul>
-          <li>批次号</li>
-          <li>入库日期和时间</li>
-          <li>来源单据</li>
-          <li>供应商</li>
-          <li>原始数量</li>
-          <li>剩余数量</li>
-          <li>批次单价</li>
-          <li>剩余金额</li>
-        </ul>
-        <p>如果同一个商品采购价经常变化，批次库存可以帮助核对成本。</p>
-      </section>
-
-      <section id="adjustment">
-        <h2>15. 库存调整</h2>
-        <p>库存调整用于处理非正常入库或出库，例如盘外增加、损耗、纠错、报损。</p>
-        <ul>
-          <li>调整日期和时间</li>
-          <li>调整类型</li>
-          <li>经办人</li>
-          <li>原因</li>
-          <li>商品、方向、数量、单价和金额</li>
-        </ul>
-        <p class="note">调整会影响库存，请谨慎操作。</p>
-      </section>
-
-      <section id="stocktake">
-        <h2>16. 库存盘点</h2>
-        <p>盘点用于核对实际库存和系统库存是否一致。进入位置：库存盘点菜单。</p>
-        <h3>16.1 创建盘点单</h3>
-        <ul>
-          <li>盘点日期和时间。</li>
-          <li>全部物品。</li>
-          <li>某个分类。</li>
-          <li>自定义物品。</li>
-        </ul>
-        <p>创建后，系统会生成盘点明细。</p>
-        <h3>16.2 录入实盘数量</h3>
-        <p>点击“录入实盘”，填写实际盘点数量。系统会自动计算账面数量、实盘数量、差异数量和差异金额。</p>
-        <h3>16.3 确认盘点</h3>
-        <p>确认盘点后，系统会按差异调整库存。确认前请认真核对实盘数量。</p>
-      </section>
-
-      <section id="reports">
-        <h2>17. 报表中心</h2>
-        <p>报表中心用于查看月度经营和库存情况，可以按月份、部门、分类、物品和供应商筛选。</p>
-        <ul>
-          <li>本月入库金额</li>
-          <li>本月出库成本</li>
-          <li>客销收入</li>
-          <li>销售毛利</li>
-          <li>库存预警</li>
-          <li>部门领用金额</li>
-          <li>分类消耗金额</li>
-          <li>物品消耗排行</li>
-          <li>盘点差异</li>
-        </ul>
-        <p>页面上主要展示摘要和图表，完整明细可以导出 Excel 查看。</p>
-      </section>
-
-      <section id="export">
-        <h2>18. Excel 导出</h2>
-        <p>报表中心可以导出 Excel。导出文件通常包含：</p>
-        <ul>
-          <li>月度进销存</li>
-          <li>部门领用汇总和明细</li>
-          <li>分类消耗统计</li>
-          <li>物品消耗排行</li>
-          <li>入库明细和出库明细</li>
-          <li>销售毛利</li>
-          <li>库存余额和库存预警</li>
-          <li>盘点差异</li>
-        </ul>
-        <p>如需对账、归档或发送给管理人员，建议使用导出功能。</p>
-      </section>
-
-      <section id="import">
-        <h2>19. Excel 导入</h2>
-        <p>导入功能用于把整理好的 Excel 模板导入系统。请使用软件生成的新版模板，模板包含三张表：</p>
-        <ul>
-          <li><strong>物品档案：</strong>维护物品编码、名称、分类、规格、单位、参考进价、参考售价和预警库存。</li>
-          <li><strong>入库明细：</strong>填写每一次采购入库的业务时间、供应商、物品、数量、进货单价和进货金额。导入后会生成真实入库单和采购批次。</li>
-          <li><strong>出库明细：</strong>填写每一次出库的业务时间、出库类型、部门、物品、数量和销售单价。出库类型可填写“内部领用”或“酒店客人销售”。</li>
-        </ul>
-        <p>业务时间需要包含真实时间，例如 <code>2026-06-01 09:00:00</code>。系统会按时间顺序生成库存流水，出库会按 FIFO 扣减入库批次；酒店客人销售会同时记录销售收入、实际成本和毛利。</p>
-        <ol>
-          <li>点击“生成导入模板”。</li>
-          <li>打开模板，删除示例行后填写物品档案、入库明细和出库明细。</li>
-          <li>回到软件选择 Excel 文件。</li>
-          <li>点击预览。</li>
-          <li>查看校验信息。</li>
-          <li>确认无错误后执行导入。</li>
-        </ol>
-        <p>如果预览中有错误，需要先修改 Excel 或基础资料，再重新预览。</p>
-        <p>导入前系统会尽量做保护备份，避免误操作导致数据难以恢复。</p>
-      </section>
-
-      <section id="budget">
-        <h2>20. 预算控制</h2>
-        <p>预算控制用于限制内部员工领用金额。管理员可以按部门、月份设置预算，也可以按分类做更细的预算。</p>
-        <ul>
-          <li>内部员工领用会占用预算。</li>
-          <li>酒店客人销售不占用预算。</li>
-          <li>超预算时，可能需要先走审批。</li>
-        </ul>
-      </section>
-
-      <section id="approval">
-        <h2>21. 审批</h2>
-        <p>审批用于处理超预算领用等需要管理员确认的事项。员工可以发起审批申请，管理员在审批页面通过或驳回。</p>
-        <p>审批通过后，再回到对应业务单据继续提交。</p>
-      </section>
-
-      <section id="backup">
-        <h2>22. 备份与恢复</h2>
-        <p>备份用于保护本地数据。</p>
-        <ul>
-          <li>重要导入前先确认有备份。</li>
-          <li>定期检查备份记录。</li>
-          <li>不熟悉恢复操作时，先联系管理员。</li>
-        </ul>
-        <p class="note">恢复会覆盖当前数据，操作前请确认备份文件正确。</p>
-      </section>
-
-      <section id="lan">
-        <h2>23. 多电脑连接</h2>
-        <p>Aster 支持局域网主机和客户端模式。</p>
-        <ul>
-          <li>一台电脑作为主机，保存主要数据库。</li>
-          <li>其他电脑作为客户端，通过局域网连接主机。</li>
-        </ul>
-        <p>客户端连接后，业务数据由主机统一管理。</p>
-        <p>如果客户端无法访问业务功能，先检查主机是否开机、主机服务是否运行、客户端是否完成配对、网络是否在同一局域网。</p>
-      </section>
-
-      <section id="settings">
-        <h2>24. 系统设置</h2>
-        <p>系统设置用于维护客户端和业务运行配置。部分设置只有管理员可以修改。</p>
-        <ul>
-          <li>界面语言</li>
-          <li>主题和外观</li>
-          <li>导出目录</li>
-          <li>备份目录</li>
-          <li>主机/客户端连接</li>
-          <li>业务参数</li>
-        </ul>
-      </section>
-
-      <section id="faq">
-        <h2>25. 常见问题</h2>
-        <h3>25.1 台账和流水有什么区别</h3>
-        <p>库存台账看当前结果。库存流水看变化过程。例如台账显示矿泉水还剩 30 瓶；如果想知道为什么只剩 30 瓶，就去看库存流水。</p>
-        <h3>25.2 入库价格填错怎么办</h3>
-        <p>如果单据还没确认，可以编辑草稿。如果已经确认，需要按权限和实际情况作废后重新录入。</p>
-        <h3>25.3 出库数量超过库存怎么办</h3>
-        <p>系统通常会提示库存不足。请先核对库存台账、批次库存和实际库存。</p>
-        <h3>25.4 为什么客人销售有毛利为负</h3>
-        <p>说明销售金额低于系统计算出的出库成本。可能原因包括促销、赔偿、售价录错或采购成本过高。</p>
-        <h3>25.5 为什么看不到某个菜单</h3>
-        <p>通常是当前账号没有权限。请联系管理员确认角色和权限。</p>
-      </section>
-
-      <div class="footer">
-        Aster 使用手册。建议将本文件和 Aster 客户端安装包一起交付给员工，员工可直接用浏览器打开查看。
-      </div>
+    <main>
+<h1 id="aster-使用手册">Aster 使用手册</h1>
+<p>更新日期：2026-07-08</p>
+<p>本文档用于交付给酒店日常使用人员，说明 Aster 桌面客户端的基础操作、业务流程、常见注意事项和问题处理。文档不要求使用人员了解数据库、程序部署或开发知识。</p>
+<h2 id="1.-aster-是做什么的">1. Aster 是做什么的</h2>
+<p>Aster 用于管理酒店日常物资流转，重点解决以下问题：</p>
+<ul>
+<li>物品档案是否完整。</li>
+<li>采购入库是否有记录。</li>
+<li>内部员工领用了哪些物资。</li>
+<li>酒店客人购买了哪些商品。</li>
+<li>当前库存还剩多少。</li>
+<li>库存金额和成本如何计算。</li>
+<li>哪些物品低于预警线。</li>
+<li>月度入库、出库、销售毛利和盘点差异如何查看。</li>
+<li>本地数据如何备份、恢复和多电脑使用。</li>
+</ul>
+<p>通俗理解：</p>
+<ul>
+<li>入库：物资进入库存。</li>
+<li>出库：物资离开库存。</li>
+<li>台账：当前库存结果。</li>
+<li>流水：库存变化过程。</li>
+<li>批次：同一个物品不同采购时间、不同采购价格形成的库存来源。</li>
+</ul>
+<h2 id="2.-适用人员">2. 适用人员</h2>
+<p>本文档适用于以下人员：</p>
+<ul>
+<li>仓库员：负责物品档案、入库、出库、盘点和导入。</li>
+<li>酒店管理人员：查看报表、审核预算、检查库存异常。</li>
+<li>部门查看人员：查看本部门领用和相关统计。</li>
+<li>系统管理员：维护账号、系统设置、备份恢复和多电脑连接。</li>
+</ul>
+<p>不同账号看到的菜单可能不同。如果看不到某个菜单，通常是权限原因，请联系管理员。</p>
+<h2 id="3.-基本使用原则">3. 基本使用原则</h2>
+<p>日常使用请遵守以下原则：</p>
+<ol>
+<li>先维护基础资料，再录入业务单据。</li>
+<li>入库和出库必须按真实业务时间填写，日期要包含时间。</li>
+<li>入库价格按本次实际采购价格填写，不要只依赖参考进价。</li>
+<li>客人销售要填写真实销售价格。</li>
+<li>出库成本由系统按入库批次自动计算，员工不用手工计算。</li>
+<li>单据确认后会影响库存，确认前必须核对物品、数量和金额。</li>
+<li>大量导入、恢复备份、作废单据前，应确认已有可用备份。</li>
+</ol>
+<h2 id="4.-安装与打开">4. 安装与打开</h2>
+<p>Aster 支持 Windows 和 macOS。</p>
+<h3 id="4.1-windows">4.1 Windows</h3>
+<ol>
+<li>双击安装包。</li>
+<li>按安装提示完成安装。</li>
+<li>从桌面图标或开始菜单打开 Aster。</li>
+</ol>
+<h3 id="4.2-macos">4.2 macOS</h3>
+<ol>
+<li>打开 <code>.dmg</code> 安装包。</li>
+<li>将 Aster 拖入应用程序。</li>
+<li>从启动台或应用程序目录打开 Aster。</li>
+</ol>
+<p>如果系统提示安全验证，请按公司内部安装要求处理。</p>
+<h2 id="5.-登录记住账号和找回密码">5. 登录、记住账号和找回密码</h2>
+<figure><img src="docs/user-manual/images/login.png" alt="登录界面" loading="lazy"><figcaption>登录界面</figcaption></figure>
+<h3 id="5.1-登录">5.1 登录</h3>
+<p>打开客户端后，在登录页输入账号和密码，点击“登录”。</p>
+<p>如果登录失败，请检查：</p>
+<ul>
+<li>用户名是否正确。</li>
+<li>密码是否正确。</li>
+<li>当前电脑是否已经连接主电脑。</li>
+<li>主电脑是否正在运行。</li>
+</ul>
+<h3 id="5.2-记住账号密码">5.2 记住账号密码</h3>
+<p>登录页可以勾选“记住账号密码”。</p>
+<p>勾选后：</p>
+<ul>
+<li>当前电脑会保存本次登录的用户名和密码。</li>
+<li>下次打开客户端时会自动带出。</li>
+</ul>
+<p>取消勾选后：</p>
+<ul>
+<li>当前电脑保存的登录信息会被清除。</li>
+</ul>
+<p>注意：该功能只建议在酒店内部受控电脑上使用，不建议在公共电脑上勾选。</p>
+<h3 id="5.3-找回密码">5.3 找回密码</h3>
+<p>点击登录页“找回密码”，会打开找回密码窗口。</p>
+<p>一般流程：</p>
+<ol>
+<li>输入用户名。</li>
+<li>点击“发送验证码”。</li>
+<li>到绑定邮箱中查看验证码。</li>
+<li>输入验证码。</li>
+<li>输入新密码。</li>
+<li>点击“重置密码”。</li>
+</ol>
+<p>如果收不到验证码，请检查：</p>
+<ul>
+<li>用户账号是否绑定邮箱。</li>
+<li>系统设置中是否配置了发件邮箱。</li>
+<li>邮箱是否进入垃圾邮件。</li>
+<li>主电脑是否可以正常访问邮箱服务器。</li>
+</ul>
+<h2 id="6.-多电脑连接">6. 多电脑连接</h2>
+<p>Aster 可以单机使用，也可以在局域网内多电脑使用。</p>
+<figure><img src="docs/user-manual/images/connection-wizard.png" alt="连接主电脑向导" loading="lazy"><figcaption>连接主电脑向导</figcaption></figure>
+<p>常见模式：</p>
+<ul>
+<li>主电脑：保存主要业务数据，开启主机服务。</li>
+<li>客户端电脑：连接主电脑，共用主电脑上的库存数据。</li>
+</ul>
+<h3 id="6.1-第一次在客户端电脑登录前连接主电脑">6.1 第一次在客户端电脑登录前连接主电脑</h3>
+<p>如果账号是在主电脑上创建的，新电脑第一次使用前需要先连接主电脑。</p>
+<p>操作流程：</p>
+<ol>
+<li>打开客户端。</li>
+<li>在登录页点击“连接主电脑”。</li>
+<li>在连接向导中搜索主电脑。</li>
+<li>选择搜索到的主电脑。</li>
+<li>输入主电脑界面上显示的配对码。</li>
+<li>填写这台电脑名称。</li>
+<li>点击连接。</li>
+<li>连接成功后，再返回登录页使用主电脑上的账号登录。</li>
+</ol>
+<h3 id="6.2-搜索不到主电脑">6.2 搜索不到主电脑</h3>
+<p>请检查：</p>
+<ul>
+<li>主电脑是否开机。</li>
+<li>主电脑是否已经开启主机服务。</li>
+<li>两台电脑是否在同一局域网。</li>
+<li>防火墙是否阻止主机服务端口。</li>
+<li>客户端是否可以访问主电脑 IP。</li>
+</ul>
+<p>如果自动搜索不到，可以点击“手动输入地址”，填写主电脑 IP 和端口。</p>
+<h3 id="6.3-主电脑管理已连接设备">6.3 主电脑管理已连接设备</h3>
+<p>主电脑可以查看已连接的其他电脑。</p>
+<p>如果某台设备不再使用，管理员可以将其移除。移除后，该设备需要重新配对才能继续连接。</p>
+<h2 id="7.-首页工作台">7. 首页工作台</h2>
+<p>首页用于快速了解当前运营状态。</p>
+<figure><img src="docs/user-manual/images/dashboard.png" alt="首页工作台" loading="lazy"><figcaption>首页工作台</figcaption></figure>
+<p>常见信息包括：</p>
+<ul>
+<li>当前库存概况。</li>
+<li>低库存预警。</li>
+<li>最近入库、出库、盘点和调整记录。</li>
+<li>当前运行模式。</li>
+<li>数据目录、备份目录和导出目录。</li>
+</ul>
+<p>建议每天打开系统后先查看首页，确认是否有库存异常或备份提醒。</p>
+<h2 id="8.-物品档案">8. 物品档案</h2>
+<p>物品档案用于维护酒店所有需要管理库存的物品，例如矿泉水、牙刷、拖鞋、清洁用品、工程耗材等。</p>
+<figure><img src="docs/user-manual/images/items.png" alt="物品档案" loading="lazy"><figcaption>物品档案</figcaption></figure>
+<h3 id="8.1-新增物品">8.1 新增物品</h3>
+<p>进入“物品档案”，点击“新增物品”，填写：</p>
+<ul>
+<li>物品名称：例如矿泉水、牙刷、拖鞋。</li>
+<li>条码：可选，有扫码枪时可填写商品条码。</li>
+<li>分类：用于筛选、报表和预算统计。</li>
+<li>规格：例如 500ml、10 个/包、独立包装。</li>
+<li>单位：例如瓶、件、包、盒。</li>
+<li>参考进价：采购入库时默认带出的参考价格。</li>
+<li>参考售价：酒店客人销售时默认带出的参考销售价格。</li>
+<li>默认供应商：常用供应商，可选。</li>
+<li>预警线：低于该数量时进入库存预警。</li>
+<li>备注：补充说明。</li>
+</ul>
+<h3 id="8.2-参考进价和参考售价">8.2 参考进价和参考售价</h3>
+<p>参考进价和参考售价只是录入时的默认值，不代表每次业务的最终价格。</p>
+<p>例如：</p>
+<ul>
+<li>矿泉水参考进价 1.20 元，本次采购实际 1.35 元，入库时应填 1.35 元。</li>
+<li>矿泉水参考售价 3.00 元，本次促销卖 2.00 元，客人销售时应填 2.00 元。</li>
+</ul>
+<h3 id="8.3-导入和导出物品档案">8.3 导入和导出物品档案</h3>
+<p>物品档案列表有导入、导出功能。</p>
+<ul>
+<li>导入：选择 Excel，只导入物品档案，不生成入库和出库单据。</li>
+<li>导出：按当前筛选条件导出物品档案 Excel。</li>
+</ul>
+<p>客户端模式下，导出文件会保存到当前电脑自己的默认导出目录。</p>
+<h3 id="8.4-停用物品">8.4 停用物品</h3>
+<p>不再使用的物品可以停用。</p>
+<p>停用后：</p>
+<ul>
+<li>不建议再用于新单据。</li>
+<li>历史单据和历史报表仍然可以查看。</li>
+</ul>
+<h2 id="9.-分类单位部门供应商">9. 分类、单位、部门、供应商</h2>
+<p>这些资料是业务单据和报表的基础。</p>
+<h3 id="9.1-分类">9.1 分类</h3>
+<p>分类用于区分物品类型，例如：</p>
+<ul>
+<li>客房耗材。</li>
+<li>餐饮用品。</li>
+<li>工程用品。</li>
+<li>清洁用品。</li>
+</ul>
+<p>分类会影响筛选、报表统计、预算规则和盘点范围。</p>
+<h3 id="9.2-单位">9.2 单位</h3>
+<p>单位用于数量展示，例如瓶、件、包、盒、套。</p>
+<p>新增物品前，应先维护好常用单位。</p>
+<h3 id="9.3-部门">9.3 部门</h3>
+<p>部门用于内部员工领用和部门报表，例如客房、餐饮、工程、行政办。</p>
+<p>内部员工领用必须选择部门。</p>
+<h3 id="9.4-供应商">9.4 供应商</h3>
+<p>供应商用于入库采购记录。</p>
+<p>供应商页面可以查看供应商采购记录，方便核对历史采购。</p>
+<h2 id="10.-入库采购">10. 入库采购</h2>
+<p>入库用于记录采购到货，库存数量增加。</p>
+<p>进入位置：入库菜单。</p>
+<figure><img src="docs/user-manual/images/inbound.png" alt="入库采购" loading="lazy"><figcaption>入库采购</figcaption></figure>
+<h3 id="10.1-新建入库单">10.1 新建入库单</h3>
+<p>点击“新增入库”，填写：</p>
+<ul>
+<li>业务日期：真实入库日期和时间，不能选择未来时间。</li>
+<li>供应商：本次采购供应商。</li>
+<li>经办人：实际处理人。</li>
+<li>备注：采购说明。</li>
+<li>商品明细：选择物品，填写数量、本次进价和采购金额。</li>
+</ul>
+<p>选择商品时支持模糊搜索，下拉结果中选择正确物品。</p>
+<h3 id="10.2-入库价格和批次">10.2 入库价格和批次</h3>
+<p>同一个物品每次采购价格可能不同。</p>
+<p>Aster 会按每次确认入库生成采购批次。每个批次会记录：</p>
+<ul>
+<li>入库时间。</li>
+<li>来源单据。</li>
+<li>供应商。</li>
+<li>本次采购单价。</li>
+<li>原始数量。</li>
+<li>剩余数量。</li>
+<li>剩余金额。</li>
+</ul>
+<p>因此，入库时必须填写本次真实采购价。</p>
+<h3 id="10.3-保存草稿和确认入库">10.3 保存草稿和确认入库</h3>
+<p>保存草稿：</p>
+<ul>
+<li>不影响库存。</li>
+<li>可以后续继续修改。</li>
+</ul>
+<p>确认入库：</p>
+<ul>
+<li>库存数量增加。</li>
+<li>形成库存流水。</li>
+<li>生成采购批次。</li>
+<li>后续出库会按批次计算成本。</li>
+</ul>
+<h3 id="10.4-入库列表和详情">10.4 入库列表和详情</h3>
+<p>入库列表可以按月份、供应商、物品和关键字筛选。</p>
+<p>点击“详情”可以查看：</p>
+<ul>
+<li>单据基本信息。</li>
+<li>商品明细。</li>
+<li>批次成本明细。</li>
+</ul>
+<h2 id="11.-出库领用">11. 出库/领用</h2>
+<p>出库用于记录库存减少。</p>
+<p>出库分为两类：</p>
+<ul>
+<li>内部员工领用。</li>
+<li>酒店客人销售。</li>
+</ul>
+<p>进入位置：出库菜单。</p>
+<figure><img src="docs/user-manual/images/outbound.png" alt="出库领用" loading="lazy"><figcaption>出库领用</figcaption></figure>
+<h3 id="11.1-内部员工领用">11.1 内部员工领用</h3>
+<p>适用于酒店内部消耗，例如：</p>
+<ul>
+<li>客房领用牙刷、拖鞋、矿泉水。</li>
+<li>工程领用工具耗材。</li>
+<li>保洁领用清洁用品。</li>
+</ul>
+<p>填写内容：</p>
+<ul>
+<li>业务日期和时间，不能选择未来时间。</li>
+<li>出库类型选择“内部员工领用”。</li>
+<li>领用部门。</li>
+<li>经办人。</li>
+<li>用途或备注。</li>
+<li>商品和数量。</li>
+</ul>
+<p>内部领用不需要填写销售价格。</p>
+<h3 id="11.2-酒店客人销售">11.2 酒店客人销售</h3>
+<p>适用于对客销售商品，例如客人购买矿泉水、拖鞋、洗漱用品。</p>
+<p>填写内容：</p>
+<ul>
+<li>业务日期和时间，不能选择未来时间。</li>
+<li>出库类型选择“酒店客人销售”。</li>
+<li>经办人。</li>
+<li>商品。</li>
+<li>数量。</li>
+<li>销售单价。</li>
+<li>销售金额。</li>
+<li>备注。</li>
+</ul>
+<p>销售单价默认带出物品档案中的参考售价，可以按实际售价修改。</p>
+<h3 id="11.3-可用库存">11.3 可用库存</h3>
+<p>出库选择商品时，列表会显示可用库存。</p>
+<p>出库前请核对：</p>
+<ul>
+<li>选择的物品是否正确。</li>
+<li>可用库存是否足够。</li>
+<li>数量是否录入正确。</li>
+</ul>
+<h3 id="11.4-出库成本如何计算">11.4 出库成本如何计算</h3>
+<p>Aster 按先进先出 FIFO 计算出库成本。</p>
+<p>例如商品 A：</p>
+<ul>
+<li>第一次入库：5 个，单价 12 元。</li>
+<li>第二次入库：10 个，单价 20 元。</li>
+</ul>
+<p>出库时会先扣第一次入库的 5 个；第一次批次扣完后，再扣第二次入库的库存。</p>
+<p>因此，同一张出库单可能对应多个入库批次成本。</p>
+<h3 id="11.5-客人销售低于成本">11.5 客人销售低于成本</h3>
+<p>如果销售价格低于采购成本，系统允许提交。</p>
+<p>可能原因包括：</p>
+<ul>
+<li>促销。</li>
+<li>赔偿。</li>
+<li>特殊折扣。</li>
+<li>售价录错。</li>
+<li>采购成本异常偏高。</li>
+</ul>
+<p>报表会体现销售收入、出库成本和毛利，管理人员可据此检查异常。</p>
+<h3 id="11.6-出库列表和详情">11.6 出库列表和详情</h3>
+<p>出库列表可以按月份、部门、物品和关键字筛选。</p>
+<p>点击“详情”可以查看：</p>
+<ul>
+<li>单据基本信息。</li>
+<li>商品明细。</li>
+<li>批次成本明细。</li>
+<li>客人销售收入和成本。</li>
+</ul>
+<h2 id="12.-单据作废">12. 单据作废</h2>
+<p>如果入库或出库录错，可以按权限进行作废。</p>
+<p>作废前请注意：</p>
+<ul>
+<li>作废已确认单据会影响库存。</li>
+<li>作废会生成反向库存流水。</li>
+<li>如果入库批次已经被后续出库消耗，可能无法直接作废。</li>
+<li>作废原因应填写清楚，便于后续追查。</li>
+</ul>
+<p>不确定是否可以作废时，请先联系管理员。</p>
+<h2 id="13.-库存台账">13. 库存台账</h2>
+<p>库存台账用于查看当前库存结果。</p>
+<p>它回答的是：现在每个物品还有多少、库存金额是多少。</p>
+<figure><img src="docs/user-manual/images/stock-balance.png" alt="库存台账" loading="lazy"><figcaption>库存台账</figcaption></figure>
+<p>常见字段：</p>
+<ul>
+<li>物品名称。</li>
+<li>分类。</li>
+<li>单位。</li>
+<li>当前库存数量。</li>
+<li>库存金额。</li>
+<li>平均成本。</li>
+<li>最近入库价。</li>
+<li>预警线。</li>
+<li>库存状态。</li>
+</ul>
+<p>如果只是想知道库存够不够，看库存台账。</p>
+<h2 id="14.-库存流水">14. 库存流水</h2>
+<p>库存流水用于查看库存变化过程。</p>
+<p>它回答的是：库存为什么变成现在这样。</p>
+<p>每次入库、出库、盘点、调整、作废冲正都会产生库存流水。</p>
+<figure><img src="docs/user-manual/images/stock-movement.png" alt="库存流水" loading="lazy"><figcaption>库存流水</figcaption></figure>
+<p>常见字段：</p>
+<ul>
+<li>日期和时间。</li>
+<li>单据号。</li>
+<li>类型。</li>
+<li>物品。</li>
+<li>入库或出库方向。</li>
+<li>数量。</li>
+<li>单价。</li>
+<li>金额。</li>
+<li>部门或供应商。</li>
+<li>操作人。</li>
+<li>备注。</li>
+</ul>
+<p>如果台账数量不对，需要追查原因，看库存流水。</p>
+<h2 id="15.-批次库存">15. 批次库存</h2>
+<p>批次库存用于查看同一个物品不同采购来源的剩余库存。</p>
+<p>在库存台账中点击批次相关入口，可以查看某个物品的批次。</p>
+<p>常见字段：</p>
+<ul>
+<li>批次号。</li>
+<li>入库日期和时间。</li>
+<li>来源单据。</li>
+<li>供应商。</li>
+<li>原始数量。</li>
+<li>剩余数量。</li>
+<li>批次单价。</li>
+<li>剩余金额。</li>
+</ul>
+<p>批次库存适合用于核对成本和采购价格变化。</p>
+<h2 id="16.-库存调整">16. 库存调整</h2>
+<p>库存调整用于处理非正常库存变化，例如：</p>
+<ul>
+<li>盘外增加。</li>
+<li>损耗。</li>
+<li>报损。</li>
+<li>纠错。</li>
+</ul>
+<p>填写内容：</p>
+<ul>
+<li>调整日期和时间，不能选择未来时间。</li>
+<li>调整类型。</li>
+<li>经办人。</li>
+<li>原因。</li>
+<li>商品。</li>
+<li>方向。</li>
+<li>数量。</li>
+<li>单价和金额。</li>
+</ul>
+<p>库存调整会直接影响库存，请谨慎操作。</p>
+<h2 id="17.-库存盘点">17. 库存盘点</h2>
+<p>盘点用于核对实际库存和系统库存是否一致。</p>
+<p>进入位置：库存盘点菜单。</p>
+<figure><img src="docs/user-manual/images/stocktake.png" alt="库存盘点" loading="lazy"><figcaption>库存盘点</figcaption></figure>
+<h3 id="17.1-创建盘点单">17.1 创建盘点单</h3>
+<p>点击“创建盘点单”，选择盘点范围：</p>
+<ul>
+<li>盘点日期和时间，不能选择未来时间。</li>
+<li>全部物品。</li>
+<li>某个分类。</li>
+<li>自定义物品。</li>
+</ul>
+<p>创建后，系统会生成盘点明细。</p>
+<h3 id="17.2-录入实盘数量">17.2 录入实盘数量</h3>
+<p>点击“录入实盘”，填写实际盘点数量。</p>
+<p>系统会自动计算：</p>
+<ul>
+<li>账面数量。</li>
+<li>实盘数量。</li>
+<li>差异数量。</li>
+<li>差异金额。</li>
+</ul>
+<h3 id="17.3-确认盘点">17.3 确认盘点</h3>
+<p>确认盘点后，系统会按差异调整库存。</p>
+<p>确认前必须核对实盘数量。确认后会生成库存流水。</p>
+<h3 id="17.4-盘点导出">17.4 盘点导出</h3>
+<p>盘点表可以导出，用于线下盘点、签字或归档。</p>
+<p>导出位置取决于系统设置中的默认导出目录。</p>
+<h2 id="18.-报表中心">18. 报表中心</h2>
+<p>报表中心用于查看月度经营和库存情况。</p>
+<p>可以按月份、部门、分类、物品和供应商筛选。</p>
+<figure><img src="docs/user-manual/images/reports.png" alt="报表中心" loading="lazy"><figcaption>报表中心</figcaption></figure>
+<p>常见内容包括：</p>
+<ul>
+<li>本月入库金额。</li>
+<li>本月出库成本。</li>
+<li>客销收入。</li>
+<li>销售毛利。</li>
+<li>库存预警。</li>
+<li>部门领用金额。</li>
+<li>分类消耗金额。</li>
+<li>物品消耗排行。</li>
+<li>盘点差异。</li>
+</ul>
+<p>报表中心页面主要展示摘要和图表。完整明细建议导出 Excel 查看。</p>
+<h3 id="18.1-月份选择">18.1 月份选择</h3>
+<p>报表月份使用月份选择控件。</p>
+<p>查看某个月数据时，请先确认月份正确，再查看报表或导出。</p>
+<h3 id="18.2-客人销售毛利">18.2 客人销售毛利</h3>
+<p>客人销售毛利 = 销售收入 - FIFO 出库成本。</p>
+<p>如果毛利为负，说明销售金额低于系统计算出的出库成本，需要管理人员核查原因。</p>
+<h2 id="19.-excel-导出">19. Excel 导出</h2>
+<p>报表中心可导出 Excel。</p>
+<p>导出文件通常包含：</p>
+<ul>
+<li>月度进销存。</li>
+<li>部门领用汇总。</li>
+<li>部门领用明细。</li>
+<li>分类消耗统计。</li>
+<li>物品消耗排行。</li>
+<li>入库明细。</li>
+<li>出库明细。</li>
+<li>销售毛利。</li>
+<li>库存余额。</li>
+<li>库存预警。</li>
+<li>盘点差异。</li>
+</ul>
+<p>如需对账、归档或发送给管理人员，建议使用导出功能。</p>
+<h2 id="20.-excel-导入">20. Excel 导入</h2>
+<p>导入功能用于把整理好的 Excel 模板导入系统。</p>
+<p>请使用软件生成的新版模板，不要再使用旧手工表格格式。</p>
+<figure><img src="docs/user-manual/images/import.png" alt="Excel 导入" loading="lazy"><figcaption>Excel 导入</figcaption></figure>
+<p>新版模板通常包含：</p>
+<ul>
+<li>物品档案：物品编码、名称、分类、规格、单位、参考进价、参考售价和预警库存。</li>
+<li>入库明细：业务时间、供应商、物品、数量、进货单价和进货金额。</li>
+<li>出库明细：业务时间、出库类型、部门、物品、数量和销售单价。</li>
+</ul>
+<p>业务时间必须包含真实时间，例如 <code>2026-07-01 09:00:00</code>。</p>
+<p>一般流程：</p>
+<ol>
+<li>点击“生成导入模板”。</li>
+<li>打开模板，删除示例行后填写数据。</li>
+<li>回到软件选择 Excel 文件。</li>
+<li>点击预览。</li>
+<li>查看校验信息。</li>
+<li>确认无错误后执行导入。</li>
+</ol>
+<p>导入后：</p>
+<ul>
+<li>入库明细会生成真实入库单和采购批次。</li>
+<li>出库明细会生成真实出库单和库存流水。</li>
+<li>出库会按 FIFO 扣减入库批次。</li>
+<li>酒店客人销售会记录销售收入、实际成本和毛利。</li>
+</ul>
+<p>如果预览中有错误，需要先修改 Excel 或基础资料，再重新预览。</p>
+<h2 id="21.-预算控制">21. 预算控制</h2>
+<p>预算控制用于限制内部员工领用金额。</p>
+<p>管理员可以按部门和月份设置预算，也可以按分类做更细的控制。</p>
+<p>注意：</p>
+<ul>
+<li>内部员工领用会占用预算。</li>
+<li>酒店客人销售不占用预算。</li>
+<li>超预算时，可能需要先走审批。</li>
+<li>预算不一定必须限制到分类，按部门月份总额也可以使用。</li>
+</ul>
+<h2 id="22.-审批">22. 审批</h2>
+<p>审批用于处理超预算领用等需要管理员确认的事项。</p>
+<p>一般流程：</p>
+<ol>
+<li>员工提交业务时触发预算限制。</li>
+<li>按提示发起审批。</li>
+<li>管理员进入审批页面查看申请。</li>
+<li>管理员通过或驳回。</li>
+<li>审批通过后，再回到对应业务单据继续提交。</li>
+</ol>
+<p>审批记录用于后续核查，不建议随意删除或绕过。</p>
+<h2 id="23.-备份与恢复">23. 备份与恢复</h2>
+<p>Aster 数据保存在本地电脑或主电脑上，因此备份非常重要。</p>
+<h3 id="23.1-什么时候需要备份">23.1 什么时候需要备份</h3>
+<p>建议以下情况前确认有备份：</p>
+<ul>
+<li>大量 Excel 导入前。</li>
+<li>恢复历史备份前。</li>
+<li>清空测试数据前。</li>
+<li>版本升级前。</li>
+<li>做大量作废或调整前。</li>
+</ul>
+<h3 id="23.2-手动备份">23.2 手动备份</h3>
+<p>管理员可以在备份页面创建手动备份。</p>
+<p>备份文件可用于其他客户端恢复出相同数据，但恢复会覆盖当前数据。</p>
+<h3 id="23.3-自动备份">23.3 自动备份</h3>
+<p>系统可按设置进行自动备份和间隔备份。</p>
+<p>管理员应定期检查备份目录是否正常、磁盘空间是否足够。</p>
+<h3 id="23.4-恢复备份">23.4 恢复备份</h3>
+<p>恢复备份会覆盖当前数据。</p>
+<p>恢复前请确认：</p>
+<ul>
+<li>备份文件来源正确。</li>
+<li>备份时间正确。</li>
+<li>当前数据确实可以被覆盖。</li>
+</ul>
+<p>不熟悉恢复操作时，请先联系管理员。</p>
+<h2 id="24.-系统设置">24. 系统设置</h2>
+<p>系统设置用于维护客户端和业务运行配置。</p>
+<figure><img src="docs/user-manual/images/settings.png" alt="系统设置" loading="lazy"><figcaption>系统设置</figcaption></figure>
+<p>常见设置包括：</p>
+<ul>
+<li>界面语言。</li>
+<li>主题和外观。</li>
+<li>默认导出目录。</li>
+<li>默认备份目录。</li>
+<li>业务参数。</li>
+<li>邮箱验证码发件配置。</li>
+<li>主机/客户端连接。</li>
+</ul>
+<p>部分设置只有管理员可以修改。</p>
+<p>客户端模式下，每台电脑可以维护自己的本地导出目录和备份目录，避免所有电脑都使用主电脑路径。</p>
+<h2 id="25.-用户与权限">25. 用户与权限</h2>
+<p>管理员可以维护用户账号和权限。</p>
+<p>常见角色：</p>
+<ul>
+<li>管理员：可维护系统设置、用户、备份恢复、预算审批等。</li>
+<li>仓库员：可维护物品、入库、出库、盘点和导入。</li>
+<li>部门查看人员：查看本部门相关数据。</li>
+<li>只读人员：只查看，不新增或修改。</li>
+</ul>
+<p>如果员工离职或不再使用系统，应及时停用账号。</p>
+<h2 id="26.-操作日志">26. 操作日志</h2>
+<p>操作日志用于记录关键操作，便于追溯。</p>
+<p>常见记录包括：</p>
+<ul>
+<li>登录。</li>
+<li>新增或修改资料。</li>
+<li>入库、出库、盘点、调整。</li>
+<li>作废。</li>
+<li>备份和恢复。</li>
+<li>系统设置变更。</li>
+</ul>
+<p>管理员可在需要时查看操作日志。</p>
+<h2 id="27.-常见问题">27. 常见问题</h2>
+<h3 id="27.1-台账和流水有什么区别">27.1 台账和流水有什么区别</h3>
+<p>库存台账看当前结果。</p>
+<p>库存流水看变化过程。</p>
+<p>例如台账显示矿泉水还剩 30 瓶；如果想知道为什么只剩 30 瓶，就去看库存流水。</p>
+<h3 id="27.2-入库价格填错怎么办">27.2 入库价格填错怎么办</h3>
+<p>如果单据还没确认，可以编辑草稿。</p>
+<p>如果已经确认，需要按权限和实际情况作废后重新录入。</p>
+<h3 id="27.3-出库数量超过库存怎么办">27.3 出库数量超过库存怎么办</h3>
+<p>系统通常会提示库存不足。</p>
+<p>请先核对库存台账、批次库存和实际库存。</p>
+<h3 id="27.4-为什么客人销售毛利为负">27.4 为什么客人销售毛利为负</h3>
+<p>说明销售金额低于系统计算出的出库成本。</p>
+<p>可能原因包括促销、赔偿、售价录错或采购成本过高。</p>
+<h3 id="27.5-为什么看不到某个菜单">27.5 为什么看不到某个菜单</h3>
+<p>通常是当前账号没有权限。</p>
+<p>请联系管理员确认角色和权限。</p>
+<h3 id="27.6-客户端为什么提示未完成主机配对">27.6 客户端为什么提示未完成主机配对</h3>
+<p>说明当前电脑还没有成功连接主电脑。</p>
+<p>请在登录页或系统设置中打开连接向导，完成主机搜索、配对码输入和连接。</p>
+<h3 id="27.7-为什么导出文件找不到">27.7 为什么导出文件找不到</h3>
+<p>请检查系统设置中的默认导出目录。</p>
+<p>客户端模式下，每台电脑使用自己的本地导出目录。</p>
+<h3 id="27.8-为什么月份筛选没有数据">27.8 为什么月份筛选没有数据</h3>
+<p>请确认：</p>
+<ul>
+<li>选择的月份是否正确。</li>
+<li>单据业务日期是否属于该月份。</li>
+<li>是否设置了部门、分类、物品或供应商筛选条件。</li>
+</ul>
+<h3 id="27.9-日期能不能填过去或未来">27.9 日期能不能填过去或未来</h3>
+<p>业务日期允许填写过去的真实业务时间。</p>
+<p>业务日期不允许填写未来时间。</p>
+<h3 id="27.10-本地数据如何在多台电脑一致">27.10 本地数据如何在多台电脑一致</h3>
+<p>推荐使用主机/客户端模式。</p>
+<p>主电脑保存主要数据库，其他电脑作为客户端连接主电脑。这样多台电脑看到的是同一套业务数据。</p>
+<h2 id="28.-日常检查清单">28. 日常检查清单</h2>
+<p>每天建议检查：</p>
+<ul>
+<li>是否能正常登录。</li>
+<li>首页是否有库存预警。</li>
+<li>当日入库是否已录入。</li>
+<li>当日出库是否已录入。</li>
+<li>是否存在未确认草稿。</li>
+</ul>
+<p>每周建议检查：</p>
+<ul>
+<li>低库存物品。</li>
+<li>库存台账和实际库存是否明显不符。</li>
+<li>备份是否正常生成。</li>
+</ul>
+<p>每月建议检查：</p>
+<ul>
+<li>月度报表。</li>
+<li>部门领用统计。</li>
+<li>客人销售毛利。</li>
+<li>盘点差异。</li>
+<li>备份文件是否可用。</li>
+</ul>
+<h2 id="29.-交接注意事项">29. 交接注意事项</h2>
+<p>员工交接时，请确认：</p>
+<ul>
+<li>是否已交接账号。</li>
+<li>是否已说明本岗位常用菜单。</li>
+<li>是否已说明入库和出库填写规则。</li>
+<li>是否已说明不能随意作废、恢复备份和清空数据。</li>
+<li>是否已说明遇到异常时联系管理员。</li>
+</ul>
     </main>
   </div>
 </body>
