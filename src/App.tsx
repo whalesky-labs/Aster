@@ -3759,79 +3759,87 @@ function LoginScreen({
       </section>
 
       <section className="login-card">
-        <div className="login-card-header">
-          <h2>{i18n.t("login.accountLogin")}</h2>
-        </div>
+        <div className="login-card-main">
+          <div className="login-card-header">
+            <h2>{i18n.t("login.accountLogin")}</h2>
+          </div>
 
-        {error ? (
-          <div className="error-banner login-message">{error}</div>
-        ) : null}
-        {notice ? (
-          <div className="notice-banner login-message">{notice}</div>
-        ) : null}
+          {error ? (
+            <div className="error-banner login-message">{error}</div>
+          ) : null}
+          {notice ? (
+            <div className="notice-banner login-message">{notice}</div>
+          ) : null}
 
-        <form className="login-form" onSubmit={submitLogin}>
-          <Field label={i18n.t("login.username")}>
-            <input
-              autoComplete="username"
-              autoFocus
-              disabled={isLoginPending}
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-            />
-          </Field>
-          <Field label={i18n.t("login.password")}>
-            <input
-              autoComplete="current-password"
-              disabled={isLoginPending}
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-            />
-          </Field>
-          <div className="login-options-row">
-            <label className="login-remember-check">
+          <form className="login-form" onSubmit={submitLogin}>
+            <Field label={i18n.t("login.username")}>
               <input
-                checked={rememberLogin}
+                autoComplete="username"
+                autoFocus
                 disabled={isLoginPending}
-                type="checkbox"
-                onChange={(event) => {
-                  setRememberLogin(event.target.checked);
-                  if (!event.target.checked) {
-                    window.localStorage.removeItem(
-                      REMEMBERED_LOGIN_STORAGE_KEY,
-                    );
-                  }
-                }}
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
               />
-              <span>记住账号密码</span>
-            </label>
+            </Field>
+            <Field label={i18n.t("login.password")}>
+              <input
+                autoComplete="current-password"
+                disabled={isLoginPending}
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </Field>
+            <div className="login-options-row">
+              <label className="login-remember-check">
+                <input
+                  checked={rememberLogin}
+                  disabled={isLoginPending}
+                  type="checkbox"
+                  onChange={(event) => {
+                    setRememberLogin(event.target.checked);
+                    if (!event.target.checked) {
+                      window.localStorage.removeItem(
+                        REMEMBERED_LOGIN_STORAGE_KEY,
+                      );
+                    }
+                  }}
+                />
+                <span>记住账号密码</span>
+              </label>
+              <button
+                className="login-reset-toggle"
+                disabled={isLoginPending}
+                onClick={onOpenPasswordReset}
+                type="button"
+              >
+                {i18n.t("login.forgotPassword")}
+              </button>
+            </div>
             <button
-              className="login-reset-toggle"
+              className="primary-button login-submit"
               disabled={isLoginPending}
-              onClick={onOpenPasswordReset}
+              type="submit"
+            >
+              {isLoginPending
+                ? i18n.t("login.loggingIn")
+                : i18n.t("login.login")}
+            </button>
+          </form>
+          <div className="login-reset-panel">
+            <button
+              className="ghost-button login-connect-button"
+              disabled={isLoginPending}
+              onClick={onOpenConnectionWizard}
               type="button"
             >
-              {i18n.t("login.forgotPassword")}
+              连接主电脑
             </button>
           </div>
-          <button
-            className="primary-button login-submit"
-            disabled={isLoginPending}
-            type="submit"
-          >
-            {isLoginPending ? i18n.t("login.loggingIn") : i18n.t("login.login")}
-          </button>
-        </form>
-        <div className="login-reset-panel">
-          <button
-            className="ghost-button login-connect-button"
-            disabled={isLoginPending}
-            onClick={onOpenConnectionWizard}
-            type="button"
-          >
-            连接主电脑
-          </button>
+        </div>
+        <div className="login-support">
+          <span>技术支持</span>
+          <strong>鲸天科技 · whalesky-labs · west · Liberty.</strong>
         </div>
       </section>
     </main>

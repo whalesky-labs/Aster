@@ -27,6 +27,10 @@ Aster is a Windows/macOS desktop system for internal hotel materials flow and in
 
 See the [Aster execution plan](docs/ASTER_EXECUTION_PLAN.md) for the complete product scope.
 
+<p align="center">
+  <img src="docs/images/aster-desktop-screenshot.png" alt="Aster desktop system screenshot">
+</p>
+
 ## Current Capabilities
 
 - Manage suppliers, material categories, material records, warehouses, departments, users, and role permissions.
