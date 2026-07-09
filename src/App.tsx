@@ -3293,15 +3293,12 @@ function MainApp() {
         {activeNav === "units" ? (
           <SimpleNamePage
             canWrite={canWriteStock}
-            description="单位用于物品档案和单据展示。"
-            fields={["sortOrder"]}
             items={units}
             onToggle={(id, enabled, expectedUpdatedAt) =>
               runAction("单位状态已更新", () =>
                 invoke("set_unit_enabled", { id, enabled, expectedUpdatedAt }),
               )
             }
-            title="单位管理"
           />
         ) : null}
 
@@ -8094,31 +8091,20 @@ function UsersPage({
 
   return (
     <section className="table-panel">
-      <div className="table-toolbar table-filter-toolbar">
-        <form
-          className="filter-shell"
-          onSubmit={(event) => event.preventDefault()}
-        >
-          <div className="filter-fields">
-            <Field label="搜索">
-              <input
-                placeholder="用户名、显示名称、邮箱、部门、角色"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
-            </Field>
-          </div>
-          <div className="filter-actions">
-            <button
-              className="primary-button"
-              onClick={() => openEditorWindow("user")}
-              type="button"
-            >
-              新增用户
-            </button>
-          </div>
-        </form>
-      </div>
+      <TableSearchToolbar
+        action={
+          <button
+            className="primary-button"
+            onClick={() => openEditorWindow("user")}
+            type="button"
+          >
+            新增用户
+          </button>
+        }
+        onSearchChange={setSearch}
+        placeholder="用户名、显示名称、邮箱、部门、角色"
+        search={search}
+      />
       <table>
         <thead>
           <tr>
@@ -8196,36 +8182,24 @@ function ItemsPage({
 
   return (
     <section className="table-panel">
-      <div className="table-toolbar table-filter-toolbar">
-        <form
-          className="filter-shell"
-          onSubmit={(e) => {
-            e.preventDefault();
-            onSearch(search);
-          }}
-        >
-          <div className="filter-fields">
-            <Field label="关键字">
-              <input
-                placeholder="搜索编码、名称、规格"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-            </Field>
-          </div>
-          <div className="filter-actions">
-            <button className="ghost-button">搜索</button>
-            <button
-              className="primary-button"
-              disabled={!canWrite}
-              onClick={() => openEditorWindow("item")}
-              type="button"
-            >
-              新增物品
-            </button>
-          </div>
-        </form>
-      </div>
+      <TableSearchToolbar
+        action={
+          <button
+            className="primary-button"
+            disabled={!canWrite}
+            onClick={() => openEditorWindow("item")}
+            type="button"
+          >
+            新增物品
+          </button>
+        }
+        onSearchChange={setSearch}
+        onSubmit={() => onSearch(search)}
+        placeholder="搜索编码、名称、规格"
+        search={search}
+        searchLabel="关键字"
+        submitLabel="搜索"
+      />
       <div className="table-utility-toolbar">
         <div className="table-utility-info">
           <span>物品档案</span>
@@ -8335,28 +8309,22 @@ function DepartmentsPage({
   );
 
   return (
-    <MasterTablePanel
-      actions={
-        <ManagementSearchToolbar
-          action={
-            <button
-              className="primary-button"
-              disabled={!canWrite}
-              onClick={() => openEditorWindow("department")}
-              type="button"
-            >
-              新增部门
-            </button>
-          }
-          onSearchChange={setSearch}
-          placeholder="搜索编码、名称、负责人、备注"
-          search={search}
-        />
-      }
-      description="部门用于出库领用和部门报表统计。"
-      hideHeading
-      title="部门管理"
-    >
+    <section className="table-panel">
+      <TableSearchToolbar
+        action={
+          <button
+            className="primary-button"
+            disabled={!canWrite}
+            onClick={() => openEditorWindow("department")}
+            type="button"
+          >
+            新增部门
+          </button>
+        }
+        onSearchChange={setSearch}
+        placeholder="搜索编码、名称、负责人、备注"
+        search={search}
+      />
       <table>
         <thead>
           <tr>
@@ -8404,7 +8372,7 @@ function DepartmentsPage({
           {filteredDepartments.length === 0 ? <EmptyRow colSpan={6} /> : null}
         </tbody>
       </table>
-    </MasterTablePanel>
+    </section>
   );
 }
 
@@ -8441,28 +8409,22 @@ function CategoriesPage({
   }
 
   return (
-    <MasterTablePanel
-      actions={
-        <ManagementSearchToolbar
-          action={
-            <button
-              className="primary-button"
-              disabled={!canWrite}
-              onClick={() => openEditorWindow("category")}
-              type="button"
-            >
-              新增分类
-            </button>
-          }
-          onSearchChange={setSearch}
-          placeholder="搜索分类、上级分类、类型"
-          search={search}
-        />
-      }
-      description="分类支持大类和小类，用于物品筛选、预算规则和报表统计。"
-      hideHeading
-      title="分类管理"
-    >
+    <section className="table-panel">
+      <TableSearchToolbar
+        action={
+          <button
+            className="primary-button"
+            disabled={!canWrite}
+            onClick={() => openEditorWindow("category")}
+            type="button"
+          >
+            新增分类
+          </button>
+        }
+        onSearchChange={setSearch}
+        placeholder="搜索分类、上级分类、类型"
+        search={search}
+      />
       <table>
         <thead>
           <tr>
@@ -8507,27 +8469,22 @@ function CategoriesPage({
           {filteredCategories.length === 0 ? <EmptyRow colSpan={6} /> : null}
         </tbody>
       </table>
-    </MasterTablePanel>
+    </section>
   );
 }
 
 function SimpleNamePage({
   canWrite,
-  description,
   items,
   onToggle,
-  title,
 }: {
   canWrite: boolean;
-  description: string;
-  fields: string[];
   items: (Category | Unit)[];
   onToggle: (
     id: string,
     enabled: boolean,
     expectedUpdatedAt: string,
   ) => Promise<void>;
-  title: string;
 }) {
   const [search, setSearch] = useState("");
   const filteredItems = useMemo(
@@ -8543,28 +8500,22 @@ function SimpleNamePage({
   );
 
   return (
-    <MasterTablePanel
-      actions={
-        <ManagementSearchToolbar
-          action={
-            <button
-              className="primary-button"
-              disabled={!canWrite}
-              onClick={() => openEditorWindow("unit")}
-              type="button"
-            >
-              新增单位
-            </button>
-          }
-          onSearchChange={setSearch}
-          placeholder="搜索名称、排序、状态"
-          search={search}
-        />
-      }
-      description={description}
-      hideHeading
-      title={title}
-    >
+    <section className="table-panel">
+      <TableSearchToolbar
+        action={
+          <button
+            className="primary-button"
+            disabled={!canWrite}
+            onClick={() => openEditorWindow("unit")}
+            type="button"
+          >
+            新增单位
+          </button>
+        }
+        onSearchChange={setSearch}
+        placeholder="搜索名称、排序、状态"
+        search={search}
+      />
       <table>
         <thead>
           <tr>
@@ -8605,7 +8556,7 @@ function SimpleNamePage({
           {filteredItems.length === 0 ? <EmptyRow colSpan={4} /> : null}
         </tbody>
       </table>
-    </MasterTablePanel>
+    </section>
   );
 }
 
@@ -8671,50 +8622,44 @@ function SuppliersPage({
   }
 
   return (
-    <MasterTablePanel
-      actions={
-        <ManagementSearchToolbar
-          action={
+    <section className="table-panel">
+      <TableSearchToolbar
+        action={
+          <button
+            className="primary-button"
+            disabled={!canWrite}
+            onClick={() => openEditorWindow("supplier")}
+            type="button"
+          >
+            新增供应商
+          </button>
+        }
+        extra={
+          <div className="segmented supplier-tabs">
             <button
-              className="primary-button"
-              disabled={!canWrite}
-              onClick={() => openEditorWindow("supplier")}
+              className={activeTab === "suppliers" ? "selected" : ""}
+              onClick={() => setActiveTab("suppliers")}
               type="button"
             >
-              新增供应商
+              供应商档案
             </button>
-          }
-          extra={
-            <div className="segmented supplier-tabs">
-              <button
-                className={activeTab === "suppliers" ? "selected" : ""}
-                onClick={() => setActiveTab("suppliers")}
-                type="button"
-              >
-                供应商档案
-              </button>
-              <button
-                className={activeTab === "purchases" ? "selected" : ""}
-                onClick={() => setActiveTab("purchases")}
-                type="button"
-              >
-                采购记录
-              </button>
-            </div>
-          }
-          onSearchChange={setSearch}
-          placeholder={
-            activeTab === "suppliers"
-              ? "搜索名称、联系人、电话、地址"
-              : "搜索单号、物品、规格、备注"
-          }
-          search={search}
-        />
-      }
-      description="供应商用于入库单和采购记录查询。"
-      hideHeading
-      title="供应商管理"
-    >
+            <button
+              className={activeTab === "purchases" ? "selected" : ""}
+              onClick={() => setActiveTab("purchases")}
+              type="button"
+            >
+              采购记录
+            </button>
+          </div>
+        }
+        onSearchChange={setSearch}
+        placeholder={
+          activeTab === "suppliers"
+            ? "搜索名称、联系人、电话、地址"
+            : "搜索单号、物品、规格、备注"
+        }
+        search={search}
+      />
       {activeTab === "suppliers" ? (
         <table>
           <thead>
@@ -8814,7 +8759,7 @@ function SuppliersPage({
           </table>
         </div>
       )}
-    </MasterTablePanel>
+    </section>
   );
 }
 
@@ -8853,35 +8798,29 @@ function BudgetRulesPage({
   );
 
   return (
-    <MasterTablePanel
-      actions={
-        <ManagementSearchToolbar
-          action={
-            <button
-              className="primary-button"
-              disabled={!canManage}
-              onClick={() =>
-                openEditorWindow("budget", { extra: { periodMonth: month } })
-              }
-              type="button"
-            >
-              新增预算
-            </button>
-          }
-          extra={
-            <Field label="月份">
-              <MonthSelect compact value={month} onChange={onMonthChange} />
-            </Field>
-          }
-          onSearchChange={setSearch}
-          placeholder="搜索部门、分类、金额、状态"
-          search={search}
-        />
-      }
-      description="预算按部门、月份控制内部领用金额，可选分类做精细控制，超出预算时出库确认会被阻止。"
-      hideHeading
-      title="预算控制"
-    >
+    <section className="table-panel">
+      <TableSearchToolbar
+        action={
+          <button
+            className="primary-button"
+            disabled={!canManage}
+            onClick={() =>
+              openEditorWindow("budget", { extra: { periodMonth: month } })
+            }
+            type="button"
+          >
+            新增预算
+          </button>
+        }
+        extra={
+          <Field label="月份">
+            <MonthSelect compact value={month} onChange={onMonthChange} />
+          </Field>
+        }
+        onSearchChange={setSearch}
+        placeholder="搜索部门、分类、金额、状态"
+        search={search}
+      />
       <table>
         <thead>
           <tr>
@@ -8939,7 +8878,7 @@ function BudgetRulesPage({
           {filteredRules.length === 0 ? <EmptyRow colSpan={8} /> : null}
         </tbody>
       </table>
-    </MasterTablePanel>
+    </section>
   );
 }
 
@@ -8976,29 +8915,20 @@ function ApprovalsPage({
 
   return (
     <section className="table-panel">
-      <div className="table-toolbar table-filter-toolbar">
-        <form
-          className="filter-shell"
-          onSubmit={(event) => event.preventDefault()}
-        >
-          <div className="filter-fields">
-            <Field label="搜索">
-              <input
-                placeholder="搜索类型、对象、原因、状态"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
-            </Field>
-            <Field label="审批意见">
-              <input
-                value={decisionNote}
-                onChange={(e) => setDecisionNote(e.target.value)}
-                placeholder="填写通过或驳回意见"
-              />
-            </Field>
-          </div>
-        </form>
-      </div>
+      <TableSearchToolbar
+        extra={
+          <Field label="审批意见">
+            <input
+              value={decisionNote}
+              onChange={(event) => setDecisionNote(event.target.value)}
+              placeholder="填写通过或驳回意见"
+            />
+          </Field>
+        }
+        onSearchChange={setSearch}
+        placeholder="搜索类型、对象、原因、状态"
+        search={search}
+      />
       <table>
         <thead>
           <tr>
@@ -12171,13 +12101,11 @@ function BackupRecordsPage({
 
   return (
     <section className="table-panel">
-      <div className="table-toolbar table-filter-toolbar">
-        <ManagementSearchToolbar
-          onSearchChange={setSearch}
-          placeholder="搜索类型、状态、主机、文件、错误"
-          search={search}
-        />
-      </div>
+      <TableSearchToolbar
+        onSearchChange={setSearch}
+        placeholder="搜索类型、状态、主机、文件、错误"
+        search={search}
+      />
       <table>
         <thead>
           <tr>
@@ -12255,13 +12183,11 @@ function LogsPage({
 
   return (
     <section className="table-panel">
-      <div className="table-toolbar table-filter-toolbar">
-        <ManagementSearchToolbar
-          onSearchChange={setSearch}
-          placeholder="搜索动作、对象、摘要、操作人"
-          search={search}
-        />
-      </div>
+      <TableSearchToolbar
+        onSearchChange={setSearch}
+        placeholder="搜索动作、对象、摘要、操作人"
+        search={search}
+      />
       <table>
         <thead>
           <tr>
@@ -12328,36 +12254,56 @@ function MasterTablePanel({
   );
 }
 
-function ManagementSearchToolbar({
+function TableSearchToolbar({
   action,
   extra,
   onSearchChange,
+  onSubmit,
   placeholder,
   search,
+  searchLabel = "搜索",
+  submitLabel,
 }: {
   action?: React.ReactNode;
   extra?: React.ReactNode;
   onSearchChange: (value: string) => void;
+  onSubmit?: () => void | Promise<void>;
   placeholder: string;
   search: string;
+  searchLabel?: string;
+  submitLabel?: string;
 }) {
   return (
-    <form
-      className="filter-shell management-filter-shell"
-      onSubmit={(event) => event.preventDefault()}
-    >
-      <div className="filter-fields">
-        {extra}
-        <Field label="搜索">
-          <input
-            placeholder={placeholder}
-            value={search}
-            onChange={(event) => onSearchChange(event.target.value)}
-          />
-        </Field>
-      </div>
-      {action ? <div className="filter-actions">{action}</div> : null}
-    </form>
+    <div className="table-toolbar table-filter-toolbar">
+      <form
+        className="filter-shell"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void onSubmit?.();
+        }}
+      >
+        <div className="filter-fields">
+          {extra}
+          <Field label={searchLabel}>
+            <input
+              placeholder={placeholder}
+              value={search}
+              onChange={(event) => onSearchChange(event.target.value)}
+            />
+          </Field>
+        </div>
+        {(submitLabel || action) ? (
+          <div className="filter-actions">
+            {submitLabel ? (
+              <button className="ghost-button" type="submit">
+                {submitLabel}
+              </button>
+            ) : null}
+            {action}
+          </div>
+        ) : null}
+      </form>
+    </div>
   );
 }
 
