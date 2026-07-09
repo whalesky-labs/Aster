@@ -25,6 +25,7 @@
     "test:manual-acceptance": "node scripts/test-manual-acceptance-paths.mjs",
     "verify:release": "node scripts/verify-release.mjs",
     "release:notes": "node scripts/create-release-notes.mjs",
+    "release:updater-manifest": "node scripts/create-updater-manifest.mjs",
     "verify:all-local": "node scripts/verify-all-local.mjs",
     "verify:readiness": "node scripts/verify-readiness.mjs"
   },
@@ -32,6 +33,8 @@
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "ogl": "^1.0.11",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"

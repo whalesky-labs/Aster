@@ -31,6 +31,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "publisher": "Aster",
     "copyright": "Copyright (c) 2026 Aster",
@@ -72,6 +73,17 @@
           "x": 480,
           "y": 170
         }
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ1QzM1MUMyOTg4NEZBRDAKUldUUStvU1l3bEhEUlRmZGlYVENZQ1duQWJ4bk1zMlBVUEU0TTBNbHlPVDFRaHlPVEFYbDVCb3oK",
+      "endpoints": [
+        "https://github.com/whalesky-labs/Aster/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

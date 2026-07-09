@@ -2832,6 +2832,30 @@ tbody tr:hover {
   white-space: nowrap;
 }
 
+.settings-update-progress {
+  display: grid;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.settings-update-progress-track {
+  position: relative;
+  height: 8px;
+  border: 1px solid var(--native-panel-border);
+  border-radius: 999px;
+  background: var(--native-subpanel-bg);
+  overflow: hidden;
+}
+
+.settings-update-progress-track span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 180ms ease;
+}
+
 .compact-settings-panel {
   min-height: auto;
 }

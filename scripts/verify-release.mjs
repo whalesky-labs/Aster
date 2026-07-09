@@ -10,6 +10,9 @@ const commandResults = [];
 const tauriConfigPath = join(root, "src-tauri", "tauri.conf.json");
 const tauriConfig = JSON.parse(readFileSync(tauriConfigPath, "utf8"));
 const tauriBuildTarget = process.env.TAURI_BUILD_TARGET?.trim() || "";
+const hasUpdaterSigningKey = Boolean(
+  process.env.TAURI_SIGNING_PRIVATE_KEY || process.env.TAURI_SIGNING_PRIVATE_KEY_PATH,
+);
 let resolvedBundleDir = null;
 const requiredReleaseCommands = [
   "npm run build",
@@ -239,6 +242,17 @@ function verifyMacAppBundle(appPath) {
   };
 }
 
+function verifyUpdaterArtifact(bundleDir, extension, description) {
+  const signature = findSingleArtifact(
+    bundleDir,
+    (path) => path.endsWith(`${extension}.sig`),
+    `${description} updater signature`,
+  );
+  const archive = signature.slice(0, -4);
+  assertFile(archive, `${description} updater package missing`);
+  verifiedArtifacts.push(artifactInfo(archive), artifactInfo(signature));
+}
+
 function writeEvidenceReport(status = "passed", failure = null) {
   const evidenceDir = join(root, "docs", "release-evidence");
   mkdirSync(evidenceDir, { recursive: true });
@@ -259,11 +273,14 @@ function writeEvidenceReport(status = "passed", failure = null) {
       version: tauriConfig.version,
       identifier: tauriConfig.identifier,
       bundleTargets: tauriConfig.bundle.targets,
+      createUpdaterArtifacts: tauriConfig.bundle.createUpdaterArtifacts ?? null,
       buildTarget: tauriBuildTarget || null,
       bundleDir: resolvedBundleDir ?? null,
       windowsInstallMode: tauriConfig.bundle.windows?.nsis?.installMode ?? null,
       macOSMinimumSystemVersion: tauriConfig.bundle.macOS?.minimumSystemVersion ?? null,
+      updaterEndpoint: tauriConfig.plugins?.updater?.endpoints?.[0] ?? null,
     },
+    updaterSigningConfigured: hasUpdaterSigningKey,
     commands: requiredReleaseCommands,
     commandResults,
     artifacts: verifiedArtifacts,
@@ -301,6 +318,9 @@ if (process.platform === "darwin") {
   const appPath = join(resolvedBundleDir, "macos", `${tauriConfig.productName}.app`);
   assertFile(appPath, "macOS app bundle missing");
   verifiedArtifacts.push(artifactInfo(dmgPath), verifyMacAppBundle(appPath));
+  if (hasUpdaterSigningKey) {
+    verifyUpdaterArtifact(join(resolvedBundleDir, "macos"), ".tar.gz", "macOS");
+  }
   run("hdiutil", ["verify", dmgPath]);
 } else if (process.platform === "win32") {
   const files = collectFiles(resolvedBundleDir);
@@ -313,6 +333,9 @@ if (process.platform === "darwin") {
   for (const path of installers) {
     console.log(`- ${path}`);
     verifiedArtifacts.push(artifactInfo(path));
+  }
+  if (hasUpdaterSigningKey) {
+    verifyUpdaterArtifact(resolvedBundleDir, ".zip", "Windows");
   }
 } else {
   console.log(`\n[verify-release] Build completed on ${process.platform}; installer artifact checks are only defined for macOS and Windows.`);

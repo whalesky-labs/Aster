@@ -5,11 +5,11 @@
 <h1 align="center">Aster</h1>
 
 <p align="center">
-  A desktop client for hotel materials and inventory operations.
+  酒店物资运营管理桌面客户端
 </p>
 
 <p align="center">
-  Inventory lifecycle · Excel import/export · Local disaster recovery · LAN collaboration
+  库存闭环 · Excel 导入导出 · 本地冗灾 · 局域网多电脑协同
 </p>
 
 <p align="center">
@@ -21,129 +21,130 @@
   <a href=".github/workflows/build-desktop.yml"><img src="https://img.shields.io/badge/Windows%20%2B%20macOS-desktop-4B5563" alt="Windows and macOS"></a>
 </p>
 
-[English](./README.md) | [简体中文](./README.zh-CN.md)
+中文默认 | [English](./README.en-US.md)
 
-Aster is a Windows and macOS desktop client for internal hotel materials operations. It uses local SQLite as the source of truth and supports standalone usage, LAN host/client collaboration, complete inventory workflows, Excel import/export, user permissions, budget approvals, stocktaking, reporting, and local disaster recovery.
+Aster 是面向酒店内部使用的 Windows 和 macOS 双端桌面客户端。系统以本地 SQLite 为核心数据源，支持单机使用、局域网主机/客户端协同、库存业务闭环、Excel 导入导出、用户权限、预算审批、盘点、报表和本地冗灾恢复。
 
-See the [Aster execution plan](docs/ASTER_EXECUTION_PLAN.md) for the complete product scope.
+完整产品范围见 [Aster 执行文档](docs/ASTER_EXECUTION_PLAN.md)。
 
-## Current Capabilities
+## 当前能力
 
-- Manage suppliers, material categories, material records, warehouses, departments, users, and role permissions.
-- Support inbound, outbound, transfer, adjustment, void, reversal, stocktaking, and inventory ledger workflows.
-- Support Excel import/export, report export, budget rules, budget approvals, and business validation.
-- Support standalone, host computer, and client computer modes; the host owns the only SQLite database, while clients connect to the host over LAN.
-- Provide a connection wizard for enabling host sharing, LAN discovery, manual address entry, pairing-code input, and saved connection credentials.
-- Support automatic backups, manual backups, a secondary backup directory, pre-import backups, pre-restore backups, restore validation tokens, rollback on failure, and retention policies.
-- Include GitHub Actions builds for Windows and macOS, with the Windows installer produced by a GitHub Windows runner.
+- 管理供应商、物资分类、物资档案、仓库、部门、用户和角色权限等基础资料。
+- 支持入库、出库、调拨、调整、作废、冲销、盘点和库存流水查询。
+- 支持 Excel 导入导出、报表导出、预算规则、预算审批和业务校验。
+- 支持单机、主电脑、其他电脑三种运行方式；主电脑持有唯一 SQLite 数据库，其他电脑通过局域网连接主电脑。
+- 支持连接向导，覆盖开启主机服务、局域网搜索、手动地址、配对码输入和连接保存。
+- 支持自动备份、手动备份、第二备份目录、导入前备份、恢复前备份、恢复校验 token、失败回滚和保留策略。
+- 支持在线检查 GitHub Releases 最新版本，发布版本会生成 Tauri updater 更新清单、签名包和双端安装包。
+- 已接入 Windows/macOS GitHub Actions 构建流程，Windows 安装包由 GitHub Windows runner 生成。
 
-## Runtime Modes
+## 运行模式
 
-| Mode | Use case | Data location |
+| 模式 | 适用场景 | 数据位置 |
 | --- | --- | --- |
-| Standalone | One computer works independently | Local SQLite on the current computer |
-| Host computer | One LAN computer shares data for others | SQLite on the host computer |
-| Client computer | Other computers connect to the host | Read/write through the host API |
+| 单机模式 | 一台电脑独立使用 | 当前电脑 SQLite |
+| 主电脑模式 | 局域网内作为共享主机 | 主电脑 SQLite |
+| 其他电脑模式 | 连接主电脑共同使用 | 通过主电脑 API 读写 |
 
-In LAN collaboration, the host computer is the authoritative data source. Client computers do not directly copy the business database, which avoids multi-writer conflicts; local disaster recovery is handled by the host-side backup policy.
+局域网协同时，主电脑是唯一数据权威来源。其他电脑不直接复制业务数据库，避免多端写入冲突；本地冗灾由主电脑侧备份策略保障。
 
-## Technical Architecture
+## 技术架构
 
-| Layer | Current implementation |
+| 层级 | 当前实现 |
 | --- | --- |
-| Desktop shell | Tauri 2 |
-| Frontend | React 19 + TypeScript + Vite |
-| Native services | Rust + Tauri commands |
-| Local data | SQLite + Rust schema migration |
-| File processing | Excel import/export, acceptance evidence, and local backup scripts |
-| Sync model | LAN host API + client pairing token |
-| Target platforms | Windows x64, macOS Intel, macOS Apple Silicon |
+| 桌面壳 | Tauri 2 |
+| 前端 | React 19 + TypeScript + Vite |
+| 原生服务 | Rust + Tauri commands |
+| 本地数据 | SQLite + Rust schema migration |
+| 文件处理 | Excel 导入导出、验收证据和本地备份脚本 |
+| 同步方式 | 局域网主机 API + 客户端配对 token |
+| 目标平台 | Windows x64、macOS Intel、macOS Apple Silicon |
 
-## Project Structure
+## 项目结构
 
 ```text
 .
-├─ .github/workflows/              GitHub Actions CI and desktop builds
-├─ docs/                           Execution docs, recovery runbook, acceptance templates, and evidence
-├─ scripts/                        Coverage, release, acceptance archive, and build helper scripts
-├─ src/                            React frontend UI and business interactions
-├─ src-tauri/                      Tauri config, Rust commands, SQLite, and native capabilities
-├─ package.json                    Frontend, build, and acceptance script entry points
-└─ tsconfig.json                   TypeScript configuration
+├─ .github/workflows/              GitHub Actions CI 和双端桌面构建
+├─ docs/                           执行文档、冗灾手册、验收模板和实测证据
+├─ scripts/                        覆盖校验、发布验证、验收归档和构建辅助脚本
+├─ src/                            React 前端界面和业务交互
+├─ src-tauri/                      Tauri 配置、Rust 命令、SQLite 和本机能力
+├─ package.json                    前端、构建和验收脚本入口
+└─ tsconfig.json                   TypeScript 配置
 ```
 
-## Development Commands
+## 开发命令
 
-Install dependencies:
+安装依赖：
 
 ```bash
 npm install
 ```
 
-Start the frontend dev server:
+启动前端开发服务：
 
 ```bash
 npm run dev
 ```
 
-Start the Tauri desktop app:
+启动 Tauri 桌面应用：
 
 ```bash
 npm run tauri dev
 ```
 
-Build the frontend:
+构建前端：
 
 ```bash
 npm run build
 ```
 
-Build the desktop bundle:
+构建桌面安装包：
 
 ```bash
 npm run tauri -- build
 ```
 
-Run a Rust check:
+Rust 检查：
 
 ```bash
 cd src-tauri
 cargo check
 ```
 
-## Verification And Acceptance
+## 验证与验收
 
-Run full release verification:
+完整发布验证：
 
 ```bash
 npm run verify:release
 ```
 
-Run the local automated gate:
+本机自动门禁总入口：
 
 ```bash
 npm run verify:all-local
 ```
 
-Verify execution-plan coverage:
+执行文档覆盖验证：
 
 ```bash
 npm run verify:coverage
 ```
 
-Check acceptance readiness:
+验收准备度检查：
 
 ```bash
 npm run verify:readiness
 ```
 
-`verify:coverage` checks homepage, master data, inventory lifecycle, stocktaking, report export, Excel import, backup and disaster recovery, user permissions, host/client consistency, budget approvals, and cross-platform packaging against the execution plan, then generates a local coverage report.
+`verify:coverage` 会按执行文档检查首页、基础资料、库存闭环、盘点、报表导出、Excel 导入、备份冗灾、用户权限、主机/客户端一致性、预算审批和跨平台打包等功能组，并生成本地覆盖报告。
 
-`verify:release` runs coverage verification first, then generates release evidence under `docs/release-evidence/`. The report includes platform, architecture, tool versions, Tauri bundle configuration summaries, artifact paths, file sizes, file SHA256 values, and directory summaries. This directory is local acceptance output and is not committed to the repository.
+`verify:release` 会先运行覆盖验证，再生成发布验收证据到 `docs/release-evidence/`。报告包含平台、架构、工具版本、Tauri 打包配置摘要、产物路径、文件大小、文件 SHA256 和目录内容摘要；该目录为本地验收产物，不纳入版本库。
 
-`verify:all-local` runs build, manual-acceptance fixture tests, unfinished-marker scans, execution coverage, Rust formatting checks, Rust tests, release packaging, acceptance handoff package generation, readiness checks, handoff package self-checks, and archive generation. It proves only that the current machine passed automated gates; it does not replace real Windows/macOS acceptance.
+`verify:all-local` 会串行执行构建、手工验收脚本夹具测试、未完成标记扫描、执行覆盖、Rust 格式检查、Rust 测试、发布打包、验收交接包生成、readiness 检查、交接包自检和归档包生成。它只证明当前机器可自动验证的门禁通过，不替代 Windows/macOS 双端实机验收。
 
-## Cross-Platform Manual Acceptance
+## 双端实机验收
 
 ```bash
 npm run acceptance:template -- windows
@@ -160,27 +161,28 @@ npm run verify:manual-acceptance
 npm run verify:manual-acceptance -- --strict
 ```
 
-Manual acceptance records are stored in `docs/manual-acceptance/` and archive evidence for Windows/macOS installation, startup, login, database creation, Excel workflows, backup and restore, and two-way host/client real-machine testing.
+手工验收记录保存在 `docs/manual-acceptance/`，用于归档 Windows/macOS 安装、启动、登录、建库、Excel、备份恢复，以及互为主机/客户端的实测证据。
 
-`acceptance:package` generates `docs/acceptance-package/` for handing off acceptance docs, the latest local evidence, and cross-device acceptance instructions to testers. `acceptance:archive` generates `docs/acceptance-archives/aster-acceptance-package-*.zip` and a SHA256 archive report. After both Windows and macOS evidence is complete, `acceptance:finalize` runs strict manual acceptance first and refreshes the handoff package only when readiness reaches `ready-for-final-archive`.
+`acceptance:package` 会生成 `docs/acceptance-package/`，用于把验收文档、最新本机证据和跨设备验收说明交接给实机验收人员；`acceptance:archive` 会生成 `docs/acceptance-archives/aster-acceptance-package-*.zip` 和 SHA256 归档报告。双端实机证据补齐后，`acceptance:finalize` 会先跑严格手工验收，只有 readiness 进入 `ready-for-final-archive` 时才刷新交接包并生成最终归档报告。
 
-## Release And CI
+## 发布与 CI
 
-The current Tauri bundle includes Windows NSIS installer metadata and a macOS DMG layout. The Windows installer is generated by the `Build Desktop Bundles` GitHub Actions workflow on a Windows runner; macOS can generate `Aster.app` and DMG either locally or in the workflow.
+当前 Tauri bundle 已配置 Windows NSIS 安装器元信息和 macOS DMG 布局。Windows 安装器由 GitHub Actions 的 `Build Desktop Bundles` workflow 在 Windows runner 上生成；macOS 可在本机或 workflow 中生成 `Aster.app` 和 DMG。
 
-- `.github/workflows/ci.yml` runs the frontend build, manual-acceptance fixture tests, unfinished-marker scan, execution coverage, Rust formatting checks, and Rust tests.
-- `.github/workflows/build-desktop.yml` follows the Liberty desktop build flow: it prepares the version, builds macOS Intel, macOS Apple Silicon, and Windows x64 installers through a matrix, and can optionally publish a GitHub Release.
-- The macOS Intel job runs on `macos-15-intel` with the `x86_64-apple-darwin` target and generates `aster-<version>-macos-x86_64.dmg`.
-- The macOS Apple Silicon job runs on `macos-15` with the `aarch64-apple-darwin` target and generates `aster-<version>-macos-aarch64.dmg`.
-- The Windows job runs `npm run verify:release` on `windows-2022`, generates the installer, and uploads `aster-windows-x64` and `aster-windows-x64-release-evidence` artifacts.
-- If the local machine has a `GITHUB_TOKEN` or `GH_TOKEN` with Actions read access, `npm run acceptance:download-windows-artifacts` can download the latest successful `Build Desktop Bundles` Windows artifacts and validate installer SHA256 values through the import script.
-- After the branch is pushed to GitHub, `npm run acceptance:run-github-build` can trigger the `Build Desktop Bundles` workflow, poll the result, download Windows artifacts, and import them.
+- `.github/workflows/ci.yml` 会运行前端构建、验收脚本夹具测试、未完成标记扫描、执行覆盖、Rust 格式检查和 Rust 测试。
+- `.github/workflows/build-desktop.yml` 参考 Liberty 的桌面构建流程，先准备版本，再用矩阵构建 macOS Intel、macOS Apple Silicon 和 Windows x64 安装包，并可选发布 GitHub Release。
+- 发布 GitHub Release 时会同时上传普通安装包、Tauri updater 包、签名文件和 `latest.json`；客户端“软件更新”功能会读取 `latest.json` 完成在线更新。
+- macOS Intel job 在 `macos-15-intel` 上使用 `x86_64-apple-darwin` target，生成 `aster-<version>-macos-x86_64.dmg`。
+- macOS Apple Silicon job 在 `macos-15` 上使用 `aarch64-apple-darwin` target，生成 `aster-<version>-macos-aarch64.dmg`。
+- Windows job 在 `windows-2022` 上运行 `npm run verify:release`，生成安装器并上传 `aster-windows-x64` 和 `aster-windows-x64-release-evidence` artifacts。
+- 如果本机有具备 Actions read 权限的 `GITHUB_TOKEN` 或 `GH_TOKEN`，可执行 `npm run acceptance:download-windows-artifacts` 自动下载最新成功 `Build Desktop Bundles` 的 Windows artifacts，并自动调用导入脚本校验安装器 SHA256。
+- 分支已经推送到 GitHub 后，也可执行 `npm run acceptance:run-github-build` 触发 `Build Desktop Bundles` workflow、轮询结果、下载 Windows artifacts 并导入。
 
-## Documentation
+## 文档入口
 
-- [Aster execution plan](docs/ASTER_EXECUTION_PLAN.md)
-- [Cross-platform acceptance guide](docs/ASTER_CROSS_PLATFORM_ACCEPTANCE.md)
-- [Disaster recovery runbook](docs/ASTER_DISASTER_RECOVERY_RUNBOOK.md)
-- [Manual acceptance guide](docs/manual-acceptance/README.md)
-- [LAN connection wizard design](docs/superpowers/specs/2026-07-02-lan-connection-wizard-design.md)
-- [Windows host sync acceptance evidence](docs/manual-acceptance/evidence-windows-2026-07-02/windows-host-sync-2026-07-02.md)
+- [Aster 执行文档](docs/ASTER_EXECUTION_PLAN.md)
+- [跨平台验收说明](docs/ASTER_CROSS_PLATFORM_ACCEPTANCE.md)
+- [冗灾处理手册](docs/ASTER_DISASTER_RECOVERY_RUNBOOK.md)
+- [手工验收说明](docs/manual-acceptance/README.md)
+- [局域网连接向导设计](docs/superpowers/specs/2026-07-02-lan-connection-wizard-design.md)
+- [Windows 主机同步实测证据](docs/manual-acceptance/evidence-windows-2026-07-02/windows-host-sync-2026-07-02.md)

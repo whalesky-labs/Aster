@@ -196,8 +196,12 @@ jobs:
             artifact_path: |
               src-tauri/target/*/release/bundle/macos/*.app/**
               src-tauri/target/*/release/bundle/dmg/*.dmg
+              src-tauri/target/*/release/bundle/macos/*.tar.gz
+              src-tauri/target/*/release/bundle/macos/*.tar.gz.sig
               src-tauri/target/release/bundle/macos/*.app/**
               src-tauri/target/release/bundle/dmg/*.dmg
+              src-tauri/target/release/bundle/macos/*.tar.gz
+              src-tauri/target/release/bundle/macos/*.tar.gz.sig
           - name: macOS Apple Silicon
             os: macos-15
             rust_target: aarch64-apple-darwin
@@ -207,8 +211,12 @@ jobs:
             artifact_path: |
               src-tauri/target/*/release/bundle/macos/*.app/**
               src-tauri/target/*/release/bundle/dmg/*.dmg
+              src-tauri/target/*/release/bundle/macos/*.tar.gz
+              src-tauri/target/*/release/bundle/macos/*.tar.gz.sig
               src-tauri/target/release/bundle/macos/*.app/**
               src-tauri/target/release/bundle/dmg/*.dmg
+              src-tauri/target/release/bundle/macos/*.tar.gz
+              src-tauri/target/release/bundle/macos/*.tar.gz.sig
           - name: Windows x64
             os: windows-2022
             rust_target: x86_64-pc-windows-msvc
@@ -218,8 +226,12 @@ jobs:
             artifact_path: |
               src-tauri/target/*/release/bundle/**/*.exe
               src-tauri/target/*/release/bundle/**/*.msi
+              src-tauri/target/*/release/bundle/**/*.zip
+              src-tauri/target/*/release/bundle/**/*.zip.sig
               src-tauri/target/release/bundle/**/*.exe
               src-tauri/target/release/bundle/**/*.msi
+              src-tauri/target/release/bundle/**/*.zip
+              src-tauri/target/release/bundle/**/*.zip.sig
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -278,6 +290,8 @@ jobs:
       - name: Verify release and build bundle
         env:
           TAURI_BUILD_TARGET: ${{ matrix.rust_target }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run verify:release
 
       - name: Inspect build outputs
@@ -285,7 +299,7 @@ jobs:
         shell: bash
         run: |
           find src-tauri/target -maxdepth 6 -type d -name bundle -print || true
-          find src-tauri/target -maxdepth 8 -type f \( -name "*.app" -o -name "*.dmg" -o -name "*.exe" -o -name "*.msi" -o -name "*.zip" \) -print || true
+          find src-tauri/target -maxdepth 8 -type f \( -name "*.app" -o -name "*.dmg" -o -name "*.exe" -o -name "*.msi" -o -name "*.zip" -o -name "*.tar.gz" -o -name "*.sig" \) -print || true
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
@@ -395,10 +409,48 @@ jobs:
             rm -f "${matches_file}"
           }
 
+          copy_updater_pair() {
+            local artifact_pattern="$1"
+            local output="$2"
+            local description="$3"
+            local matches_file
+            local match_count
+            local signature_path
+            local artifact_path
+            matches_file="$(mktemp)"
+            find release-assets -type f -path "${artifact_pattern}.sig" -print | sort > "${matches_file}"
+            match_count="$(wc -l < "${matches_file}" | tr -d ' ')"
+            if [[ "${match_count}" -eq 0 ]]; then
+              echo "::error::${description} signature missing."
+              find release-assets -maxdepth 6 -type f -print | sort
+              rm -f "${matches_file}"
+              exit 1
+            fi
+            if [[ "${match_count}" -gt 1 ]]; then
+              echo "::error::Multiple ${description} signatures found:"
+              cat "${matches_file}"
+              rm -f "${matches_file}"
+              exit 1
+            fi
+            signature_path="$(cat "${matches_file}")"
+            artifact_path="${signature_path%.sig}"
+            if [[ ! -f "${artifact_path}" ]]; then
+              echo "::error::${description} artifact missing for signature ${signature_path}."
+              rm -f "${matches_file}"
+              exit 1
+            fi
+            cp "${artifact_path}" "release-upload/${output}"
+            cp "${signature_path}" "release-upload/${output}.sig"
+            rm -f "${matches_file}"
+          }
+
           copy_single_asset "*/aster-macos-x64/*.dmg" "aster-${RELEASE_VERSION}-macos-x86_64.dmg" "macOS Intel DMG release asset"
           copy_single_asset "*/aster-macos-aarch64/*.dmg" "aster-${RELEASE_VERSION}-macos-aarch64.dmg" "macOS Apple Silicon DMG release asset"
           copy_single_asset "*/aster-windows-x64/*.exe" "aster-${RELEASE_VERSION}-windows-x86_64-setup.exe" "Windows NSIS release asset"
           copy_optional_asset "*/aster-windows-x64/*.msi" "aster-${RELEASE_VERSION}-windows-x86_64.msi"
+          copy_updater_pair "*/aster-macos-x64/*.tar.gz" "aster-${RELEASE_VERSION}-macos-x86_64-updater.tar.gz" "macOS Intel updater"
+          copy_updater_pair "*/aster-macos-aarch64/*.tar.gz" "aster-${RELEASE_VERSION}-macos-aarch64-updater.tar.gz" "macOS Apple Silicon updater"
+          copy_updater_pair "*/aster-windows-x64/*.zip" "aster-${RELEASE_VERSION}-windows-x86_64-updater.zip" "Windows updater"
 
           asset_count="$(find release-upload -type f | wc -l | tr -d ' ')"
           if [[ "${asset_count}" == "0" ]]; then
@@ -418,6 +470,8 @@ jobs:
             echo "::error::Windows installer release asset missing."
             exit 1
           fi
+
+          node scripts/create-updater-manifest.mjs "${RELEASE_VERSION}" "${{ needs.prepare_release.outputs.release_tag }}" release-upload release-upload/latest.json
 
           find release-upload -maxdepth 1 -type f -print | sort
 

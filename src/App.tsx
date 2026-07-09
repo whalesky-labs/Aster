@@ -12,6 +12,8 @@ import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open, type OpenDialogOptions } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 import { ColorBendsBackground } from "./components/ColorBendsBackground";
 import { createI18n, type I18n, type LocaleCode } from "./i18n";
 import "./App.css";
@@ -109,6 +111,24 @@ type HostDiscoveryResult = {
   appVersion: string;
   schemaVersion: number;
   message: string;
+};
+
+type AppUpdateState = {
+  status:
+    | "idle"
+    | "checking"
+    | "available"
+    | "notAvailable"
+    | "downloading"
+    | "installed"
+    | "error";
+  currentVersion?: string | null;
+  latestVersion?: string | null;
+  notes?: string | null;
+  downloadedBytes: number;
+  totalBytes?: number | null;
+  error?: string | null;
+  checkedAt?: string | null;
 };
 
 type DashboardMetrics = {
@@ -1594,6 +1614,46 @@ function connectionStatusHint(
   return i18n.t("connection.hint.standalone");
 }
 
+function softwareUpdateTitle(updateState: AppUpdateState, i18n = defaultI18n) {
+  if (updateState.status === "checking") {
+    return i18n.t("settings.updateStatusChecking");
+  }
+  if (updateState.status === "available") {
+    return i18n.t("settings.updateStatusAvailable", {
+      version: updateState.latestVersion ?? "-",
+    });
+  }
+  if (updateState.status === "downloading") {
+    return i18n.t("settings.updateStatusDownloading");
+  }
+  if (updateState.status === "installed") {
+    return i18n.t("settings.updateStatusInstalled");
+  }
+  if (updateState.status === "error") {
+    return i18n.t("settings.updateStatusError");
+  }
+  if (updateState.status === "notAvailable") {
+    return i18n.t("settings.updateStatusLatest");
+  }
+  return i18n.t("settings.updateStatusIdle");
+}
+
+function softwareUpdateHint(updateState: AppUpdateState, i18n = defaultI18n) {
+  if (updateState.status === "available") {
+    return i18n.t("settings.updateHintAvailable");
+  }
+  if (updateState.status === "downloading") {
+    return i18n.t("settings.updateHintDownloading");
+  }
+  if (updateState.status === "installed") {
+    return i18n.t("settings.updateHintInstalled");
+  }
+  if (updateState.status === "error") {
+    return i18n.t("settings.updateHintError");
+  }
+  return i18n.t("settings.updateHintIdle");
+}
+
 function connectionStatusKind(
   status: AppStatus | null,
   hostStatus: HostServiceStatus | null,
@@ -2037,6 +2097,18 @@ function MainApp() {
   const [clientConnectionCheckedAt, setClientConnectionCheckedAt] = useState<
     string | null
   >(null);
+  const [updateState, setUpdateState] = useState<AppUpdateState>({
+    status: "idle",
+    currentVersion: null,
+    latestVersion: null,
+    notes: null,
+    downloadedBytes: 0,
+    totalBytes: null,
+    error: null,
+    checkedAt: null,
+  });
+  const pendingUpdateRef = useRef<Update | null>(null);
+  const hasCheckedUpdateOnStartupRef = useRef(false);
 
   function clearBusinessState() {
     setCategories([]);
@@ -2599,6 +2671,151 @@ function MainApp() {
     }
   }
 
+  async function createBackupBeforeUpdate() {
+    if (status?.runtime.mode === "client") {
+      return null;
+    }
+    setIsBackupWorking(true);
+    try {
+      const summary = await invoke<BackupSummary>("create_backup", {
+        request: { backupType: "manual" },
+      });
+      setLastBackup(summary);
+      return summary;
+    } finally {
+      setIsBackupWorking(false);
+    }
+  }
+
+  async function checkForAppUpdate(options: { silent?: boolean } = {}) {
+    const silent = options.silent ?? false;
+    try {
+      if (!silent) {
+        setError(null);
+        setNotice(null);
+      }
+      setUpdateState((current) => ({
+        ...current,
+        status: "checking",
+        error: null,
+      }));
+      const update = await check();
+      const checkedAt = new Date().toLocaleString(
+        appearanceSettings.locale === "zh-CN" ? "zh-CN" : "en-US",
+      );
+      if (!update) {
+        pendingUpdateRef.current = null;
+        setUpdateState((current) => ({
+          ...current,
+          status: "notAvailable",
+          currentVersion: status?.appVersion ?? current.currentVersion ?? null,
+          latestVersion: null,
+          notes: null,
+          downloadedBytes: 0,
+          totalBytes: null,
+          error: null,
+          checkedAt,
+        }));
+        if (!silent) {
+          setNotice(i18n.t("settings.updateNotAvailableNotice"));
+        }
+        return;
+      }
+
+      pendingUpdateRef.current = update;
+      setUpdateState((current) => ({
+        ...current,
+        status: "available",
+        currentVersion:
+          update.currentVersion ?? status?.appVersion ?? current.currentVersion,
+        latestVersion: update.version,
+        notes: update.body ?? null,
+        downloadedBytes: 0,
+        totalBytes: null,
+        error: null,
+        checkedAt,
+      }));
+      setNotice(
+        i18n.t("settings.updateAvailableNotice", {
+          version: update.version,
+        }),
+      );
+    } catch (err) {
+      const message = formatError(err);
+      setUpdateState((current) => ({
+        ...current,
+        status: "error",
+        error: message,
+        checkedAt: new Date().toLocaleString(
+          appearanceSettings.locale === "zh-CN" ? "zh-CN" : "en-US",
+        ),
+      }));
+      if (!silent) {
+        setError(message);
+      }
+    }
+  }
+
+  async function downloadAndInstallAppUpdate() {
+    const update = pendingUpdateRef.current;
+    if (!update) {
+      await checkForAppUpdate();
+      return;
+    }
+    try {
+      setError(null);
+      setNotice(null);
+      setUpdateState((current) => ({
+        ...current,
+        status: "downloading",
+        downloadedBytes: 0,
+        totalBytes: null,
+        error: null,
+      }));
+      await createBackupBeforeUpdate();
+      let downloadedBytes = 0;
+      let totalBytes: number | null = null;
+      await update.downloadAndInstall((event) => {
+        if (event.event === "Started") {
+          totalBytes = event.data.contentLength ?? null;
+          downloadedBytes = 0;
+        } else if (event.event === "Progress") {
+          downloadedBytes += event.data.chunkLength;
+        } else if (event.event === "Finished") {
+          if (totalBytes != null) {
+            downloadedBytes = totalBytes;
+          }
+        }
+        setUpdateState((current) => ({
+          ...current,
+          status: "downloading",
+          downloadedBytes,
+          totalBytes,
+        }));
+      });
+      setUpdateState((current) => ({
+        ...current,
+        status: "installed",
+        downloadedBytes:
+          current.totalBytes != null ? current.totalBytes : current.downloadedBytes,
+        error: null,
+      }));
+      setNotice(i18n.t("settings.updateInstalledNotice"));
+    } catch (err) {
+      const message = formatError(err);
+      setUpdateState((current) => ({
+        ...current,
+        status: "error",
+        error: message,
+      }));
+      setError(message);
+    }
+  }
+
+  async function restartAppAfterUpdate() {
+    await relaunch();
+  }
+
   async function loginUser(
     username: string,
     password: string,
@@ -2700,6 +2917,14 @@ function MainApp() {
   useEffect(() => {
     void bootstrapSession();
   }, []);
+
+  useEffect(() => {
+    if (!status?.appVersion || hasCheckedUpdateOnStartupRef.current) {
+      return;
+    }
+    hasCheckedUpdateOnStartupRef.current = true;
+    void checkForAppUpdate({ silent: true });
+  }, [status?.appVersion]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -3249,6 +3474,8 @@ function MainApp() {
             isWorking={isBackupWorking}
             lastBackup={lastBackup}
             onBackup={createManualBackup}
+            onCheckUpdate={() => checkForAppUpdate()}
+            onInstallUpdate={downloadAndInstallAppUpdate}
             onOpenConnectionWizard={() =>
               void openEditorWindow("connectionWizard", {
                 width: 760,
@@ -3257,6 +3484,7 @@ function MainApp() {
             }
             onLogout={logoutUser}
             onRemoveClientConnection={removeClientConnection}
+            onRestartAfterUpdate={restartAppAfterUpdate}
             onStartHostService={startHostRuntime}
             clientConnections={clientConnections}
             hostStatus={hostStatus}
@@ -3264,6 +3492,7 @@ function MainApp() {
             i18n={i18n}
             status={status}
             systemSettings={systemSettings}
+            updateState={updateState}
             onAppearanceChange={setAppearanceSettings}
           />
         ) : null}
@@ -10278,12 +10507,16 @@ function SettingsPage({
   lastBackup,
   onBackup,
   onAppearanceChange,
+  onCheckUpdate,
+  onInstallUpdate,
   onLogout,
   onOpenConnectionWizard,
   onRemoveClientConnection,
+  onRestartAfterUpdate,
   onStartHostService,
   status,
   systemSettings,
+  updateState,
 }: {
   appearanceSettings: AppearanceSettings;
   canManage: boolean;
@@ -10297,12 +10530,16 @@ function SettingsPage({
   lastBackup: BackupSummary | null;
   onBackup: () => Promise<void>;
   onAppearanceChange: React.Dispatch<React.SetStateAction<AppearanceSettings>>;
+  onCheckUpdate: () => Promise<void>;
+  onInstallUpdate: () => Promise<void>;
   onLogout: () => Promise<void>;
   onOpenConnectionWizard: () => void;
   onRemoveClientConnection: (client: ClientConnectionInfo) => Promise<void>;
+  onRestartAfterUpdate: () => Promise<void>;
   onStartHostService: () => Promise<void>;
   status: AppStatus | null;
   systemSettings: SystemSettings | null;
+  updateState: AppUpdateState;
 }) {
   const settingsIsClientMode = status?.runtime.mode === "client";
   const canOpenBusinessSettings = canManage;
@@ -10342,6 +10579,14 @@ function SettingsPage({
       suffix: "",
     },
   ];
+  const updateIsBusy =
+    updateState.status === "checking" || updateState.status === "downloading";
+  const updateProgress =
+    updateState.totalBytes && updateState.totalBytes > 0
+      ? Math.min(100, (updateState.downloadedBytes / updateState.totalBytes) * 100)
+      : updateState.status === "downloading"
+        ? null
+        : 0;
 
   return (
     <section className="settings-page">
@@ -10505,6 +10750,109 @@ function SettingsPage({
               </div>
             </div>
           ))}
+        </article>
+      </div>
+
+      <div className="settings-group">
+        <h3 className="settings-group-title">
+          {i18n.t("settings.softwareUpdate")}
+        </h3>
+        <article className="surface settings-feature-panel">
+          <div className="settings-feature-header">
+            <div>
+              <span className="settings-feature-kicker">
+                {i18n.t("settings.updateChannel")}
+              </span>
+              <h4>{softwareUpdateTitle(updateState, i18n)}</h4>
+              <p>{softwareUpdateHint(updateState, i18n)}</p>
+            </div>
+            <div className="settings-feature-actions">
+              <button
+                className="ghost-button"
+                disabled={updateIsBusy}
+                type="button"
+                onClick={() => void onCheckUpdate()}
+              >
+                {updateState.status === "checking"
+                  ? i18n.t("settings.checkingUpdate")
+                  : i18n.t("settings.checkUpdate")}
+              </button>
+              {updateState.status === "available" ? (
+                <button
+                  className="primary-button"
+                  disabled={updateIsBusy || isWorking}
+                  type="button"
+                  onClick={() => void onInstallUpdate()}
+                >
+                  {i18n.t("settings.downloadInstallUpdate")}
+                </button>
+              ) : null}
+              {updateState.status === "installed" ? (
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={() => void onRestartAfterUpdate()}
+                >
+                  {i18n.t("settings.restartToUpdate")}
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          <dl className="settings-metric-list">
+            <div>
+              <dt>{i18n.t("settings.currentVersion")}</dt>
+              <dd>{updateState.currentVersion ?? status?.appVersion ?? "-"}</dd>
+            </div>
+            <div>
+              <dt>{i18n.t("settings.latestVersion")}</dt>
+              <dd>{updateState.latestVersion ?? "-"}</dd>
+            </div>
+            <div>
+              <dt>{i18n.t("settings.updateCheckedAt")}</dt>
+              <dd>{updateState.checkedAt ?? "-"}</dd>
+            </div>
+            <div>
+              <dt>{i18n.t("settings.updateSource")}</dt>
+              <dd>GitHub Releases</dd>
+            </div>
+          </dl>
+
+          {updateState.status === "downloading" ? (
+            <div className="settings-update-progress">
+              <div className="settings-update-progress-track">
+                <span
+                  style={{
+                    width:
+                      updateProgress == null
+                        ? "35%"
+                        : `${Math.max(4, updateProgress)}%`,
+                  }}
+                />
+              </div>
+              <span>
+                {updateProgress == null
+                  ? i18n.t("settings.updateDownloading")
+                  : i18n.t("settings.updateProgress", {
+                      percent: Math.round(updateProgress),
+                    })}
+              </span>
+            </div>
+          ) : null}
+
+          {updateState.notes ? (
+            <div className="settings-result">
+              <strong>{i18n.t("settings.updateNotes")}</strong>
+              <p>{updateState.notes}</p>
+            </div>
+          ) : null}
+
+          {updateState.status === "error" && updateState.error ? (
+            <div className="settings-inline-note warning">
+              <strong>{i18n.t("settings.updateFailed")}</strong>
+              <span>{updateState.error}</span>
+            </div>
+          ) : null}
         </article>
       </div>
 

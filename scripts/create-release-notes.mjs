@@ -57,6 +57,11 @@ const downloads = [
     usage: "Windows 64-bit MSI package",
     purpose: "Windows 64 位 MSI 安装包",
   },
+  {
+    file: "latest.json",
+    usage: "Tauri updater manifest",
+    purpose: "客户端在线更新清单",
+  },
 ].filter((item) => existsSync(join(uploadDir, item.file)));
 
 if (downloads.length === 0) {
