@@ -456,7 +456,7 @@ fn stock_warnings(
          LEFT JOIN units u ON u.id = i.unit_id
          LEFT JOIN stock_balances b ON b.item_id = i.id
          WHERE i.enabled = 1
-           AND i.warning_quantity > 0
+           AND COALESCE(b.quantity, 0) >= 0
            AND COALESCE(b.quantity, 0) <= i.warning_quantity
            AND (?1 IS NULL OR i.category_id = ?1)
            AND (?2 IS NULL OR i.id = ?2)
@@ -509,7 +509,7 @@ fn stock_balances(
             let warning_quantity: f64 = row.get(9)?;
             let stock_status = if quantity < 0.0 {
                 "negative"
-            } else if warning_quantity > 0.0 && quantity <= warning_quantity {
+            } else if quantity <= warning_quantity {
                 "low"
             } else {
                 "normal"

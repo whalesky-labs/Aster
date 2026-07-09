@@ -358,6 +358,7 @@ pub fn remote_list_stock_documents(
     push_query_param(&mut params, "departmentId", query.department_id);
     push_query_param(&mut params, "supplierId", query.supplier_id);
     push_query_param(&mut params, "itemId", query.item_id);
+    push_query_param(&mut params, "handler", query.handler);
     push_query_param(&mut params, "search", query.search);
     let path = if params.is_empty() {
         "/api/stock/documents".to_string()
@@ -1076,6 +1077,7 @@ fn handle_connection_inner(
                 department_id: query_param(path, "departmentId"),
                 supplier_id: query_param(path, "supplierId"),
                 item_id: query_param(path, "itemId"),
+                handler: query_param(path, "handler"),
                 search: query_param(path, "search"),
             };
             let response = db.with_conn(|conn| {

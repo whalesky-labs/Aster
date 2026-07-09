@@ -1616,6 +1616,28 @@ select:focus,
   flex-wrap: wrap;
 }
 
+.management-filter-shell {
+  flex: 1 1 auto;
+}
+
+.table-sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 0;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  font-weight: 700;
+}
+
+.table-sort-button span {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
 .table-utility-toolbar {
   display: flex;
   align-items: center;

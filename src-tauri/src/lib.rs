@@ -8,7 +8,7 @@ mod services;
 use app::state::AppState;
 use commands::app_commands::{
     get_app_status, get_runtime_config, get_system_proxy_candidates, get_system_settings,
-    list_audit_logs, save_system_settings, set_runtime_mode,
+    list_audit_logs, prepare_update_settings_snapshot, save_system_settings, set_runtime_mode,
 };
 use commands::approval_commands::{
     create_approval_request, decide_approval_request, list_approval_requests,
@@ -48,6 +48,8 @@ use commands::user_commands::{
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app_state = AppState::initialize().expect("failed to initialize Aster application state");
+    services::status_service::restore_update_settings_snapshot_if_needed(&app_state)
+        .expect("failed to restore update settings snapshot");
     services::user_service::ensure_default_admin(&app_state)
         .expect("failed to initialize default admin user");
     let _ = services::backup_service::run_startup_backup_if_needed(&app_state);
@@ -67,6 +69,7 @@ pub fn run() {
             get_system_proxy_candidates,
             get_system_settings,
             list_audit_logs,
+            prepare_update_settings_snapshot,
             save_system_settings,
             set_runtime_mode,
             list_approval_requests,

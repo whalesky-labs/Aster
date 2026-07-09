@@ -47,6 +47,11 @@ pub fn save_system_settings(
 }
 
 #[tauri::command]
+pub fn prepare_update_settings_snapshot(state: State<'_, AppState>) -> AppResult<()> {
+    status_service::prepare_update_settings_snapshot(&state)
+}
+
+#[tauri::command]
 pub fn get_system_proxy_candidates() -> Vec<ProxyCandidate> {
     let mut candidates = Vec::new();
     push_env_proxy_candidates(&mut candidates);

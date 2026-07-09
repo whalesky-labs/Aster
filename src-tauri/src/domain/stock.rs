@@ -86,6 +86,7 @@ pub struct StockDocumentQuery {
     pub department_id: Option<String>,
     pub supplier_id: Option<String>,
     pub item_id: Option<String>,
+    pub handler: Option<String>,
     pub search: Option<String>,
 }
 

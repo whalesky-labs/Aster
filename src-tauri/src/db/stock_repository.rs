@@ -493,6 +493,7 @@ pub fn list_stock_documents(
     let department_id = blank_to_none(query.department_id);
     let supplier_id = blank_to_none(query.supplier_id);
     let item_id = blank_to_none(query.item_id);
+    let handler = blank_to_none(query.handler);
     let search = blank_to_none(query.search);
     let search_like = search.as_ref().map(|value| format!("%{}%", value.trim()));
     let mut stmt = conn.prepare(
@@ -552,29 +553,30 @@ pub fn list_stock_documents(
              WHERE line_filter.document_id = d.id
                AND line_filter.item_id = ?6
            ))
+           AND (?7 IS NULL OR d.handler = ?7)
            AND (
-             ?7 IS NULL
-             OR d.document_no LIKE ?7
-             OR COALESCE(d.handler, '') LIKE ?7
-             OR COALESCE(d.purpose, '') LIKE ?7
-             OR COALESCE(d.remark, '') LIKE ?7
-             OR COALESCE(d.department_name, '') LIKE ?7
-             OR COALESCE(d.supplier_name, '') LIKE ?7
+             ?8 IS NULL
+             OR d.document_no LIKE ?8
+             OR COALESCE(d.handler, '') LIKE ?8
+             OR COALESCE(d.purpose, '') LIKE ?8
+             OR COALESCE(d.remark, '') LIKE ?8
+             OR COALESCE(d.department_name, '') LIKE ?8
+             OR COALESCE(d.supplier_name, '') LIKE ?8
              OR EXISTS (
                SELECT 1
                FROM stock_document_lines search_line
                JOIN master_items search_item ON search_item.id = search_line.item_id
                WHERE search_line.document_id = d.id
                  AND (
-                   search_item.code LIKE ?7
-                   OR search_item.name LIKE ?7
-                   OR COALESCE(search_item.spec, '') LIKE ?7
+                   search_item.code LIKE ?8
+                   OR search_item.name LIKE ?8
+                   OR COALESCE(search_item.spec, '') LIKE ?8
                  )
              )
            )
          GROUP BY d.id
          ORDER BY d.business_date DESC, d.created_at DESC
-         LIMIT ?8",
+         LIMIT ?9",
     )?;
     let rows = stmt.query_map(
         params![
@@ -584,6 +586,7 @@ pub fn list_stock_documents(
             department_id,
             supplier_id,
             item_id,
+            handler,
             search_like,
             STOCK_LIST_LIMIT
         ],
@@ -615,8 +618,8 @@ pub fn list_stock_balances(
            AND (
              ?4 IS NULL
              OR (?4 = 'negative' AND COALESCE(b.quantity, 0) < 0)
-             OR (?4 = 'low' AND COALESCE(b.quantity, 0) >= 0 AND i.warning_quantity > 0 AND COALESCE(b.quantity, 0) <= i.warning_quantity)
-             OR (?4 = 'normal' AND COALESCE(b.quantity, 0) >= 0 AND (i.warning_quantity <= 0 OR COALESCE(b.quantity, 0) > i.warning_quantity))
+             OR (?4 = 'low' AND COALESCE(b.quantity, 0) >= 0 AND COALESCE(b.quantity, 0) <= i.warning_quantity)
+             OR (?4 = 'normal' AND COALESCE(b.quantity, 0) >= 0 AND COALESCE(b.quantity, 0) > i.warning_quantity)
            )
          ORDER BY i.enabled DESC, i.code ASC
          LIMIT ?5",
@@ -628,7 +631,7 @@ pub fn list_stock_balances(
             let warning_quantity: f64 = row.get(9)?;
             let stock_status = if quantity < 0.0 {
                 "negative"
-            } else if warning_quantity > 0.0 && quantity <= warning_quantity {
+            } else if quantity <= warning_quantity {
                 "low"
             } else {
                 "normal"
@@ -2971,6 +2974,17 @@ mod tests {
         .unwrap();
         assert_eq!(item_search_docs.len(), 2);
 
+        let handler_docs = list_stock_documents(
+            &conn,
+            StockDocumentQuery {
+                handler: Some("采购筛选".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(handler_docs.len(), 1);
+        assert_eq!(handler_docs[0].id, inbound.document.id);
+
         let detail = get_stock_document_detail(&conn, &inbound.document.id).unwrap();
         assert_eq!(detail.lines.len(), 1);
         assert_eq!(detail.lines[0].item_name, "筛选物品A");
@@ -3043,6 +3057,7 @@ mod tests {
              VALUES
                ('item-normal', 'NORM', '正常库存', 'cat-stock-filter', 'unit-piece', 1, 3),
                ('item-low', 'LOW', '低库存', 'cat-stock-filter', 'unit-piece', 1, 5),
+               ('item-zero-low', 'ZERO', '零库存预警', NULL, 'unit-piece', 1, 0),
                ('item-negative', 'NEG', '负库存', NULL, 'unit-piece', 1, 0)",
             [],
         )
@@ -3052,6 +3067,7 @@ mod tests {
              VALUES
                ('balance-normal', 'item-normal', 10, 10, 1),
                ('balance-low', 'item-low', 4, 4, 1),
+               ('balance-zero-low', 'item-zero-low', 0, 0, 0),
                ('balance-negative', 'item-negative', -1, -1, 1)",
             [],
         )
@@ -3087,8 +3103,10 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(low_balances.len(), 1);
-        assert_eq!(low_balances[0].item_code, "LOW");
+        assert_eq!(low_balances.len(), 2);
+        assert!(low_balances.iter().any(|row| row.item_code == "LOW"));
+        assert!(low_balances.iter().any(|row| row.item_code == "ZERO"));
+        assert!(low_balances.iter().all(|row| row.item_code != "NEG"));
 
         let item_movements = list_stock_movements(
             &conn,

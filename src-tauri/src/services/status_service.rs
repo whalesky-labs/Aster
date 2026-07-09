@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::app::state::AppState;
 use crate::db::backup_repository;
@@ -12,6 +12,19 @@ use crate::domain::status::{
 use crate::error::{AppError, AppResult};
 
 const CLIENT_DEVICE_ID_KEY: &str = "client_device_id";
+const UPDATE_SETTINGS_SNAPSHOT_FILE: &str = "aster-update-settings-snapshot.json";
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct UpdateSettingsSnapshot {
+    created_at: String,
+    settings: Vec<UpdateSettingValue>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct UpdateSettingValue {
+    key: String,
+    value: String,
+}
 
 pub fn get_runtime_config(state: &AppState) -> AppResult<RuntimeConfig> {
     state.db.with_conn(|conn| {
@@ -62,6 +75,103 @@ pub fn set_runtime_mode(state: &AppState, mode: RuntimeMode) -> AppResult<Runtim
     })?;
     crate::services::host_service::ensure_host_service_for_mode(state, env!("CARGO_PKG_VERSION"))?;
     get_runtime_config(state)
+}
+
+pub fn prepare_update_settings_snapshot(state: &AppState) -> AppResult<()> {
+    crate::services::user_service::require_admin(state)?;
+    write_update_settings_snapshot(state)
+}
+
+pub fn restore_update_settings_snapshot_if_needed(state: &AppState) -> AppResult<()> {
+    let snapshot_path = update_settings_snapshot_path(state);
+    if !snapshot_path.exists() {
+        return Ok(());
+    }
+
+    let text = fs::read_to_string(&snapshot_path)?;
+    let snapshot: UpdateSettingsSnapshot = serde_json::from_str(&text)
+        .map_err(|error| AppError::Validation(format!("读取更新前设置快照失败：{error}")))?;
+
+    let restored_count = state.db.with_conn(|conn| {
+        let mut restored_count = 0;
+        for entry in &snapshot.settings {
+            if !protected_update_setting_keys().contains(&entry.key.as_str()) {
+                continue;
+            }
+            let should_restore = repository::get_setting(conn, &entry.key)?
+                .map(|value| value.trim().is_empty())
+                .unwrap_or(true);
+            if should_restore {
+                repository::set_setting(conn, &entry.key, &entry.value)?;
+                restored_count += 1;
+            }
+        }
+        Ok(restored_count)
+    })?;
+
+    if restored_count == 0 {
+        let _ = fs::remove_file(snapshot_path);
+    }
+    Ok(())
+}
+
+fn write_update_settings_snapshot(state: &AppState) -> AppResult<()> {
+    let settings = state.db.with_conn(|conn| {
+        let mut settings = Vec::new();
+        for key in protected_update_setting_keys() {
+            if let Some(value) =
+                repository::get_setting(conn, key)?.filter(|value| !value.trim().is_empty())
+            {
+                settings.push(UpdateSettingValue {
+                    key: key.to_string(),
+                    value,
+                });
+            }
+        }
+        Ok(settings)
+    })?;
+
+    if settings.is_empty() {
+        return Ok(());
+    }
+
+    fs::create_dir_all(&state.paths.data_dir)?;
+    let snapshot = UpdateSettingsSnapshot {
+        created_at: chrono::Utc::now().to_rfc3339(),
+        settings,
+    };
+    let text = serde_json::to_string_pretty(&snapshot)
+        .map_err(|error| AppError::Validation(format!("生成更新前设置快照失败：{error}")))?;
+    fs::write(update_settings_snapshot_path(state), text)?;
+    Ok(())
+}
+
+fn update_settings_snapshot_path(state: &AppState) -> PathBuf {
+    state.paths.data_dir.join(UPDATE_SETTINGS_SNAPSHOT_FILE)
+}
+
+fn protected_update_setting_keys() -> &'static [&'static str] {
+    &[
+        "hotel_name",
+        "current_period",
+        "default_month",
+        "allow_negative_stock",
+        "quantity_decimals",
+        "amount_decimals",
+        "default_export_dir",
+        "default_backup_dir",
+        "auto_backup_enabled",
+        "interval_backup_enabled",
+        "interval_backup_hours",
+        "smtp_enabled",
+        "smtp_host",
+        "smtp_port",
+        "smtp_username",
+        "smtp_password",
+        "smtp_from_email",
+        "smtp_from_name",
+        "second_backup_dir",
+    ]
 }
 
 fn stable_client_device_id(conn: &rusqlite::Connection) -> AppResult<String> {
@@ -819,6 +929,75 @@ mod tests {
                 assert_eq!(settings.current_period, "2026-06");
                 assert_eq!(settings.default_export_dir, "/host/export");
                 assert_eq!(settings.default_backup_dir, "/host/backup");
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn update_settings_snapshot_restores_missing_business_directory_settings() {
+        let state = test_state();
+        set_admin_user(&state);
+        let export_dir = state.paths.data_dir.join("snapshot-exports");
+        let backup_dir = state.paths.data_dir.join("snapshot-backups");
+        fs::create_dir_all(&export_dir).unwrap();
+        fs::create_dir_all(&backup_dir).unwrap();
+
+        state
+            .db
+            .with_conn(|conn| {
+                repository::set_setting(conn, "hotel_name", "升级前酒店")?;
+                repository::set_setting(conn, "current_period", "2026-07")?;
+                repository::set_setting(conn, "default_month", "2026-07")?;
+                repository::set_setting(
+                    conn,
+                    "default_export_dir",
+                    &export_dir.display().to_string(),
+                )?;
+                repository::set_setting(
+                    conn,
+                    "default_backup_dir",
+                    &backup_dir.display().to_string(),
+                )?;
+                repository::set_setting(conn, "allow_negative_stock", "true")?;
+                repository::set_setting(conn, "interval_backup_hours", "12")
+            })
+            .unwrap();
+
+        prepare_update_settings_snapshot(&state).unwrap();
+        state
+            .db
+            .with_conn(|conn| {
+                repository::delete_setting(conn, "hotel_name")?;
+                repository::delete_setting(conn, "default_export_dir")?;
+                repository::delete_setting(conn, "default_backup_dir")?;
+                repository::delete_setting(conn, "allow_negative_stock")
+            })
+            .unwrap();
+
+        restore_update_settings_snapshot_if_needed(&state).unwrap();
+
+        let expected_export_dir = export_dir.display().to_string();
+        let expected_backup_dir = backup_dir.display().to_string();
+        state
+            .db
+            .with_conn(|conn| {
+                assert_eq!(
+                    repository::get_setting(conn, "hotel_name")?.as_deref(),
+                    Some("升级前酒店")
+                );
+                assert_eq!(
+                    repository::get_setting(conn, "default_export_dir")?.as_deref(),
+                    Some(expected_export_dir.as_str())
+                );
+                assert_eq!(
+                    repository::get_setting(conn, "default_backup_dir")?.as_deref(),
+                    Some(expected_backup_dir.as_str())
+                );
+                assert_eq!(
+                    repository::get_setting(conn, "allow_negative_stock")?.as_deref(),
+                    Some("true")
+                );
+                Ok(())
             })
             .unwrap();
     }

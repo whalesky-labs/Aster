@@ -49,7 +49,7 @@ pub fn dashboard_metrics(
          FROM stock_balances b
          JOIN master_items i ON i.id = b.item_id
          WHERE i.enabled = 1
-           AND i.warning_quantity > 0
+           AND b.quantity >= 0
            AND b.quantity <= i.warning_quantity",
         [],
         |row| row.get(0),

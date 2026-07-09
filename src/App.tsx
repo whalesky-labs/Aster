@@ -1,5 +1,6 @@
 import {
   type CSSProperties,
+  type KeyboardEvent,
   type ReactNode,
   useEffect,
   useMemo,
@@ -31,6 +32,17 @@ const animatedExpressionModules = import.meta.glob("./assets/images/**/*.png", {
   eager: true,
   import: "default",
 }) as Record<string, string>;
+
+function submitOnEnter(
+  event: KeyboardEvent<HTMLDivElement>,
+  onSubmit: () => void,
+) {
+  if (event.key !== "Enter") return;
+  const target = event.target as HTMLElement;
+  if (target.tagName === "TEXTAREA") return;
+  event.preventDefault();
+  onSubmit();
+}
 
 type RuntimeMode = "standalone" | "host" | "client";
 type ThemeMode = "auto" | "light" | "dark";
@@ -389,6 +401,7 @@ type StockDocumentQuery = {
   departmentId?: string | null;
   supplierId?: string | null;
   itemId?: string | null;
+  handler?: string | null;
   search?: string | null;
 };
 
@@ -1564,10 +1577,36 @@ function effectiveDraftAmount(
       : 0;
 }
 
-function normalizeSearchText(value?: string | number | null) {
+function normalizeSearchText(value?: string | number | boolean | null) {
   return String(value ?? "")
     .trim()
     .toLowerCase();
+}
+
+function matchesSearchText(
+  search: string,
+  values: Array<string | number | boolean | null | undefined>,
+) {
+  const query = normalizeSearchText(search);
+  if (!query) return true;
+  return values.some((value) => normalizeSearchText(value).includes(query));
+}
+
+function uniqueTextOptions(values: Array<string | null | undefined>) {
+  const seen = new Set<string>();
+  const options: string[] = [];
+  values.forEach((value) => {
+    const text = String(value ?? "").trim();
+    if (!text || seen.has(text)) return;
+    seen.add(text);
+    options.push(text);
+  });
+  return options;
+}
+
+function userDisplayName(user?: CurrentUser | UserAccount | null) {
+  if (!user) return "";
+  return user.displayName?.trim() || user.username;
 }
 
 function itemSearchText(item: Item) {
@@ -2133,6 +2172,11 @@ function MainApp() {
       documentType: "outbound",
       month: currentMonthString(),
     });
+  const [adjustmentDocumentQuery, setAdjustmentDocumentQuery] =
+    useState<StockDocumentQuery>({
+      documentType: "adjustment",
+      month: currentMonthString(),
+    });
   const [stockBalances, setStockBalances] = useState<StockBalanceRow[]>([]);
   const [stockMovements, setStockMovements] = useState<StockMovementRow[]>([]);
   const [stockBalanceQuery, setStockBalanceQuery] = useState<StockBalanceQuery>(
@@ -2193,6 +2237,10 @@ function MainApp() {
     });
     setOutboundDocumentQuery({
       documentType: "outbound",
+      month: currentMonthString(),
+    });
+    setAdjustmentDocumentQuery({
+      documentType: "adjustment",
       month: currentMonthString(),
     });
     setStockBalances([]);
@@ -2308,7 +2356,7 @@ function MainApp() {
         query: outboundDocumentQuery,
       }),
       invoke<StockDocument[]>("list_stock_documents", {
-        query: { documentType: "adjustment" },
+        query: adjustmentDocumentQuery,
       }),
       invoke<StockBalanceRow[]>("list_stock_balances", {
         query: stockBalanceQuery,
@@ -2345,13 +2393,15 @@ function MainApp() {
       setInboundDocumentQuery(query);
     } else if (query.documentType === "outbound") {
       setOutboundDocumentQuery(query);
+    } else if (query.documentType === "adjustment") {
+      setAdjustmentDocumentQuery(query);
     }
     await loadStockDocuments(query);
   }
 
   async function applyStockBalanceQuery(query: StockBalanceQuery) {
     const normalizedQuery: StockBalanceQuery = {
-      search: query.search?.trim() || null,
+      search: null,
       categoryId: query.categoryId || null,
       itemId: query.itemId || null,
       stockStatus: query.stockStatus || null,
@@ -3314,6 +3364,10 @@ function MainApp() {
             departments={departments.filter((item) => item.enabled)}
             documentType="inbound"
             documents={inboundDocuments}
+            handlerOptions={uniqueTextOptions([
+              ...userAccounts.map(userDisplayName),
+              userDisplayName(currentUser),
+            ])}
             items={items.filter((item) => item.enabled)}
             onQueryChange={async (query) => {
               try {
@@ -3342,6 +3396,10 @@ function MainApp() {
             departments={departments.filter((item) => item.enabled)}
             documentType="outbound"
             documents={outboundDocuments}
+            handlerOptions={uniqueTextOptions([
+              ...userAccounts.map(userDisplayName),
+              userDisplayName(currentUser),
+            ])}
             items={items.filter((item) => item.enabled)}
             onQueryChange={async (query) => {
               try {
@@ -3422,7 +3480,21 @@ function MainApp() {
           <AdjustmentPage
             canWrite={canWriteStock}
             documents={adjustmentDocuments}
+            handlerOptions={uniqueTextOptions([
+              ...userAccounts.map(userDisplayName),
+              userDisplayName(currentUser),
+            ])}
+            items={items.filter((item) => item.enabled)}
+            onQueryChange={async (query) => {
+              try {
+                setError(null);
+                await applyStockDocumentQuery(query);
+              } catch (err) {
+                setError(formatError(err));
+              }
+            }}
             onVoid={voidDocument}
+            query={adjustmentDocumentQuery}
           />
         ) : null}
 
@@ -3854,6 +3926,7 @@ function EditorWindowApp({
   const [departments, setDepartments] = useState<Department[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [items, setItems] = useState<Item[]>([]);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [stockBalances, setStockBalances] = useState<StockBalanceRow[]>([]);
   const [stockBatches, setStockBatches] = useState<StockBatchRow[]>([]);
   const [stockDocumentDetail, setStockDocumentDetail] =
@@ -3935,11 +4008,17 @@ function EditorWindowApp({
         );
       }
       if (editor === "stockDocument") {
-        setStockBalances(
-          await invoke<StockBalanceRow[]>("list_stock_balances", {
+        const [nextBalances, nextUser] = await Promise.all([
+          invoke<StockBalanceRow[]>("list_stock_balances", {
             query: {},
           }),
-        );
+          invoke<CurrentUser | null>("get_current_user"),
+        ]);
+        setStockBalances(nextBalances);
+        setCurrentUser(nextUser);
+      }
+      if (editor === "adjustment") {
+        setCurrentUser(await invoke<CurrentUser | null>("get_current_user"));
       }
       if (editor === "stockDocumentDetail" && id) {
         setStockDocumentDetail(
@@ -4139,6 +4218,7 @@ function EditorWindowApp({
         error: null,
       }));
       await createEditorBackupBeforeUpdate();
+      await invoke("prepare_update_settings_snapshot");
       let downloadedBytes = 0;
       let totalBytes: number | null = null;
       await update.downloadAndInstall((event) => {
@@ -4515,6 +4595,7 @@ function EditorWindowApp({
     content = (
       <StockDocumentEditor
         balances={stockBalances}
+        currentUser={currentUser}
         departments={enabledDepartments}
         disabled={isSaving || isLoading}
         documentType={documentType}
@@ -4612,6 +4693,7 @@ function EditorWindowApp({
   } else if (editor === "adjustment") {
     content = (
       <AdjustmentEditor
+        currentUser={currentUser}
         disabled={isSaving || isLoading}
         items={enabledItems}
         onSubmit={(request) =>
@@ -6656,6 +6738,7 @@ function RestoreBackupEditor({
 
 function StockDocumentEditor({
   balances,
+  currentUser,
   departments,
   disabled,
   documentType,
@@ -6666,6 +6749,7 @@ function StockDocumentEditor({
   suppliers,
 }: {
   balances: StockBalanceRow[];
+  currentUser: CurrentUser | null;
   departments: Department[];
   disabled: boolean;
   documentType: "inbound" | "outbound";
@@ -6675,6 +6759,7 @@ function StockDocumentEditor({
   onSubmit: (request: StockDocumentDraft) => Promise<void>;
   suppliers: Supplier[];
 }) {
+  const defaultHandler = userDisplayName(currentUser);
   const emptyLine: StockDocumentLineDraft = {
     itemId: "",
     quantity: 1,
@@ -6695,7 +6780,7 @@ function StockDocumentEditor({
     businessDate: currentDateTimeString(),
     departmentId: "",
     supplierId: "",
-    handler: "",
+    handler: defaultHandler,
     purpose: "",
     remark: "",
     approvalRequestId: "",
@@ -6715,6 +6800,13 @@ function StockDocumentEditor({
     () => new Map(balances.map((balance) => [balance.itemId, balance])),
     [balances],
   );
+
+  useEffect(() => {
+    if (!defaultHandler) return;
+    setDraft((current) =>
+      current.handler?.trim() ? current : { ...current, handler: defaultHandler },
+    );
+  }, [defaultHandler]);
 
   function availableStockInfo(itemId: string) {
     if (!itemId) return { label: "-", empty: true };
@@ -6917,8 +7009,9 @@ function StockDocumentEditor({
         )}
         <Field label="经办人">
           <input
+            readOnly
+            disabled
             value={draft.handler}
-            onChange={(e) => setDraft({ ...draft, handler: e.target.value })}
           />
         </Field>
         <Field label={isOutbound ? "用途" : "备注"}>
@@ -7148,6 +7241,7 @@ function ItemSearchSelect({
   emptyLabel = "全部",
   items,
   onChange,
+  onCommit,
   placeholder = "搜索编码、条码或物品名称",
   value,
 }: {
@@ -7156,6 +7250,7 @@ function ItemSearchSelect({
   emptyLabel?: string;
   items: Item[];
   onChange: (itemId: string) => void;
+  onCommit?: (itemId: string) => void;
   placeholder?: string;
   value: string;
 }) {
@@ -7231,14 +7326,32 @@ function ItemSearchSelect({
 
   function selectItem(item: Item) {
     onChange(item.id);
+    onCommit?.(item.id);
     setQuery(itemDisplayName(item));
     setOpen(false);
   }
 
   function clearSelection() {
     onChange("");
+    onCommit?.("");
     setQuery("");
     setOpen(true);
+  }
+
+  function commitCurrentQuery() {
+    if (disabled) return;
+    if (value) {
+      onCommit?.(value);
+      setOpen(false);
+      return;
+    }
+    const firstOption = options[0];
+    if (firstOption) {
+      selectItem(firstOption);
+    } else if (allowEmpty) {
+      onCommit?.("");
+      setOpen(false);
+    }
   }
 
   const menu =
@@ -7250,6 +7363,7 @@ function ItemSearchSelect({
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => {
               onChange("");
+              onCommit?.("");
               setQuery("");
               setOpen(false);
             }}
@@ -7305,6 +7419,14 @@ function ItemSearchSelect({
             }
           }}
           onFocus={() => setOpen(true)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              commitCurrentQuery();
+            } else if (event.key === "Escape") {
+              setOpen(false);
+            }
+          }}
           placeholder={placeholder}
           value={query}
         />
@@ -7327,14 +7449,17 @@ function ItemSearchSelect({
 }
 
 function AdjustmentEditor({
+  currentUser,
   disabled,
   items,
   onSubmit,
 }: {
+  currentUser: CurrentUser | null;
   disabled: boolean;
   items: Item[];
   onSubmit: (request: AdjustmentDraft) => Promise<void>;
 }) {
+  const defaultHandler = userDisplayName(currentUser);
   const emptyLine: AdjustmentLineDraft = {
     itemId: "",
     direction: "out",
@@ -7346,7 +7471,7 @@ function AdjustmentEditor({
   const [draft, setDraft] = useState<AdjustmentDraft>({
     businessDate: currentDateTimeString(),
     adjustmentType: "damage",
-    handler: "",
+    handler: defaultHandler,
     reason: "",
     lines: [emptyLine],
   });
@@ -7355,6 +7480,13 @@ function AdjustmentEditor({
     0,
   );
   const correction = draft.adjustmentType === "correction";
+
+  useEffect(() => {
+    if (!defaultHandler) return;
+    setDraft((current) =>
+      current.handler?.trim() ? current : { ...current, handler: defaultHandler },
+    );
+  }, [defaultHandler]);
 
   function updateAdjustmentType(type: AdjustmentDraft["adjustmentType"]) {
     const direction = type === "gain" ? "in" : "out";
@@ -7421,8 +7553,9 @@ function AdjustmentEditor({
         </Field>
         <Field label="经办人">
           <input
+            readOnly
+            disabled
             value={draft.handler}
-            onChange={(e) => setDraft({ ...draft, handler: e.target.value })}
           />
         </Field>
         <Field label="调整原因">
@@ -7461,20 +7594,12 @@ function AdjustmentEditor({
             {draft.lines.map((line, index) => (
               <tr key={index}>
                 <td>
-                  <select
-                    className="table-input"
+                  <ItemSearchSelect
+                    disabled={disabled}
+                    items={items}
                     value={line.itemId}
-                    onChange={(e) =>
-                      updateLine(index, { itemId: e.target.value })
-                    }
-                  >
-                    <option value="">请选择物品</option>
-                    {items.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.code} · {item.name}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(itemId) => updateLine(index, { itemId })}
+                  />
                 </td>
                 <td>
                   <select
@@ -7942,6 +8067,21 @@ function UsersPage({
 }) {
   const isAdmin =
     currentUser?.roles.some((role) => role.code === "admin") ?? false;
+  const [search, setSearch] = useState("");
+  const filteredUsers = useMemo(
+    () =>
+      users.filter((user) =>
+        matchesSearchText(search, [
+          user.username,
+          user.displayName,
+          user.email,
+          user.departmentName,
+          user.roles.map((role) => role.name).join(" "),
+          user.enabled ? "启用" : "停用",
+        ]),
+      ),
+    [search, users],
+  );
 
   if (!isAdmin) {
     return (
@@ -7954,14 +8094,30 @@ function UsersPage({
 
   return (
     <section className="table-panel">
-      <div className="table-toolbar">
-        <h2>用户列表</h2>
-        <button
-          className="primary-button"
-          onClick={() => openEditorWindow("user")}
+      <div className="table-toolbar table-filter-toolbar">
+        <form
+          className="filter-shell"
+          onSubmit={(event) => event.preventDefault()}
         >
-          新增用户
-        </button>
+          <div className="filter-fields">
+            <Field label="搜索">
+              <input
+                placeholder="用户名、显示名称、邮箱、部门、角色"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </Field>
+          </div>
+          <div className="filter-actions">
+            <button
+              className="primary-button"
+              onClick={() => openEditorWindow("user")}
+              type="button"
+            >
+              新增用户
+            </button>
+          </div>
+        </form>
       </div>
       <table>
         <thead>
@@ -7976,7 +8132,7 @@ function UsersPage({
           </tr>
         </thead>
         <tbody>
-          {users.map((user) => (
+          {filteredUsers.map((user) => (
             <tr key={user.id}>
               <td>{user.username}</td>
               <td>{user.displayName}</td>
@@ -8000,7 +8156,7 @@ function UsersPage({
               </td>
             </tr>
           ))}
-          {users.length === 0 ? <EmptyRow colSpan={7} /> : null}
+          {filteredUsers.length === 0 ? <EmptyRow colSpan={7} /> : null}
         </tbody>
       </table>
     </section>
@@ -8163,16 +8319,39 @@ function DepartmentsPage({
     expectedUpdatedAt: string,
   ) => Promise<void>;
 }) {
+  const [search, setSearch] = useState("");
+  const filteredDepartments = useMemo(
+    () =>
+      departments.filter((item) =>
+        matchesSearchText(search, [
+          item.code,
+          item.name,
+          item.manager,
+          item.remark,
+          item.enabled ? "启用" : "停用",
+        ]),
+      ),
+    [departments, search],
+  );
+
   return (
     <MasterTablePanel
       actions={
-        <button
-          className="primary-button"
-          disabled={!canWrite}
-          onClick={() => openEditorWindow("department")}
-        >
-          新增部门
-        </button>
+        <ManagementSearchToolbar
+          action={
+            <button
+              className="primary-button"
+              disabled={!canWrite}
+              onClick={() => openEditorWindow("department")}
+              type="button"
+            >
+              新增部门
+            </button>
+          }
+          onSearchChange={setSearch}
+          placeholder="搜索编码、名称、负责人、备注"
+          search={search}
+        />
       }
       description="部门用于出库领用和部门报表统计。"
       hideHeading
@@ -8190,7 +8369,7 @@ function DepartmentsPage({
           </tr>
         </thead>
         <tbody>
-          {departments.map((item) => (
+          {filteredDepartments.map((item) => (
             <tr key={item.id}>
               <td>{item.code}</td>
               <td>{item.name}</td>
@@ -8222,7 +8401,7 @@ function DepartmentsPage({
               </td>
             </tr>
           ))}
-          {departments.length === 0 ? <EmptyRow colSpan={6} /> : null}
+          {filteredDepartments.length === 0 ? <EmptyRow colSpan={6} /> : null}
         </tbody>
       </table>
     </MasterTablePanel>
@@ -8242,6 +8421,20 @@ function CategoriesPage({
     expectedUpdatedAt: string,
   ) => Promise<void>;
 }) {
+  const [search, setSearch] = useState("");
+  const filteredCategories = useMemo(
+    () =>
+      categories.filter((item) =>
+        matchesSearchText(search, [
+          item.name,
+          parentName(item.parentId),
+          item.parentId ? "小类" : "大类",
+          item.enabled ? "启用" : "停用",
+        ]),
+      ),
+    [categories, search],
+  );
+
   function parentName(parentId?: string | null) {
     if (!parentId) return "大类";
     return categories.find((item) => item.id === parentId)?.name ?? "-";
@@ -8250,13 +8443,21 @@ function CategoriesPage({
   return (
     <MasterTablePanel
       actions={
-        <button
-          className="primary-button"
-          disabled={!canWrite}
-          onClick={() => openEditorWindow("category")}
-        >
-          新增分类
-        </button>
+        <ManagementSearchToolbar
+          action={
+            <button
+              className="primary-button"
+              disabled={!canWrite}
+              onClick={() => openEditorWindow("category")}
+              type="button"
+            >
+              新增分类
+            </button>
+          }
+          onSearchChange={setSearch}
+          placeholder="搜索分类、上级分类、类型"
+          search={search}
+        />
       }
       description="分类支持大类和小类，用于物品筛选、预算规则和报表统计。"
       hideHeading
@@ -8274,7 +8475,7 @@ function CategoriesPage({
           </tr>
         </thead>
         <tbody>
-          {categories.map((item) => (
+          {filteredCategories.map((item) => (
             <tr key={item.id}>
               <td>{item.name}</td>
               <td>{item.parentId ? "小类" : "大类"}</td>
@@ -8303,7 +8504,7 @@ function CategoriesPage({
               </td>
             </tr>
           ))}
-          {categories.length === 0 ? <EmptyRow colSpan={6} /> : null}
+          {filteredCategories.length === 0 ? <EmptyRow colSpan={6} /> : null}
         </tbody>
       </table>
     </MasterTablePanel>
@@ -8328,16 +8529,37 @@ function SimpleNamePage({
   ) => Promise<void>;
   title: string;
 }) {
+  const [search, setSearch] = useState("");
+  const filteredItems = useMemo(
+    () =>
+      items.filter((item) =>
+        matchesSearchText(search, [
+          item.name,
+          item.sortOrder,
+          item.enabled ? "启用" : "停用",
+        ]),
+      ),
+    [items, search],
+  );
+
   return (
     <MasterTablePanel
       actions={
-        <button
-          className="primary-button"
-          disabled={!canWrite}
-          onClick={() => openEditorWindow("unit")}
-        >
-          新增单位
-        </button>
+        <ManagementSearchToolbar
+          action={
+            <button
+              className="primary-button"
+              disabled={!canWrite}
+              onClick={() => openEditorWindow("unit")}
+              type="button"
+            >
+              新增单位
+            </button>
+          }
+          onSearchChange={setSearch}
+          placeholder="搜索名称、排序、状态"
+          search={search}
+        />
       }
       description={description}
       hideHeading
@@ -8353,7 +8575,7 @@ function SimpleNamePage({
           </tr>
         </thead>
         <tbody>
-          {items.map((item) => (
+          {filteredItems.map((item) => (
             <tr key={item.id}>
               <td>{item.name}</td>
               <td>{item.sortOrder}</td>
@@ -8380,7 +8602,7 @@ function SimpleNamePage({
               </td>
             </tr>
           ))}
-          {items.length === 0 ? <EmptyRow colSpan={4} /> : null}
+          {filteredItems.length === 0 ? <EmptyRow colSpan={4} /> : null}
         </tbody>
       </table>
     </MasterTablePanel>
@@ -8409,6 +8631,39 @@ function SuppliersPage({
   const [activeTab, setActiveTab] = useState<"suppliers" | "purchases">(
     "suppliers",
   );
+  const [search, setSearch] = useState("");
+  const filteredSuppliers = useMemo(
+    () =>
+      suppliers.filter((item) =>
+        matchesSearchText(search, [
+          item.name,
+          item.contact,
+          item.phone,
+          item.address,
+          item.remark,
+          item.enabled ? "启用" : "停用",
+        ]),
+      ),
+    [search, suppliers],
+  );
+  const filteredPurchaseRecords = useMemo(
+    () =>
+      purchaseRecords.filter((record) =>
+        matchesSearchText(search, [
+          record.movementDate,
+          record.documentNo,
+          record.itemCode,
+          record.itemName,
+          record.spec,
+          record.unitName,
+          record.quantity,
+          record.unitPrice,
+          record.amount,
+          record.remark,
+        ]),
+      ),
+    [purchaseRecords, search],
+  );
 
   async function openPurchaseRecords(supplier: Supplier) {
     await onSelect(supplier);
@@ -8418,29 +8673,43 @@ function SuppliersPage({
   return (
     <MasterTablePanel
       actions={
-        <div className="supplier-toolbar">
-          <div className="segmented supplier-tabs">
+        <ManagementSearchToolbar
+          action={
             <button
-              className={activeTab === "suppliers" ? "selected" : ""}
-              onClick={() => setActiveTab("suppliers")}
+              className="primary-button"
+              disabled={!canWrite}
+              onClick={() => openEditorWindow("supplier")}
+              type="button"
             >
-              供应商档案
+              新增供应商
             </button>
-            <button
-              className={activeTab === "purchases" ? "selected" : ""}
-              onClick={() => setActiveTab("purchases")}
-            >
-              采购记录
-            </button>
-          </div>
-          <button
-            className="primary-button"
-            disabled={!canWrite}
-            onClick={() => openEditorWindow("supplier")}
-          >
-            新增供应商
-          </button>
-        </div>
+          }
+          extra={
+            <div className="segmented supplier-tabs">
+              <button
+                className={activeTab === "suppliers" ? "selected" : ""}
+                onClick={() => setActiveTab("suppliers")}
+                type="button"
+              >
+                供应商档案
+              </button>
+              <button
+                className={activeTab === "purchases" ? "selected" : ""}
+                onClick={() => setActiveTab("purchases")}
+                type="button"
+              >
+                采购记录
+              </button>
+            </div>
+          }
+          onSearchChange={setSearch}
+          placeholder={
+            activeTab === "suppliers"
+              ? "搜索名称、联系人、电话、地址"
+              : "搜索单号、物品、规格、备注"
+          }
+          search={search}
+        />
       }
       description="供应商用于入库单和采购记录查询。"
       hideHeading
@@ -8459,7 +8728,7 @@ function SuppliersPage({
             </tr>
           </thead>
           <tbody>
-            {suppliers.map((item) => (
+            {filteredSuppliers.map((item) => (
               <tr key={item.id}>
                 <td>{item.name}</td>
                 <td>{item.contact ?? "-"}</td>
@@ -8494,7 +8763,7 @@ function SuppliersPage({
                 </td>
               </tr>
             ))}
-            {suppliers.length === 0 ? <EmptyRow colSpan={6} /> : null}
+            {filteredSuppliers.length === 0 ? <EmptyRow colSpan={6} /> : null}
           </tbody>
         </table>
       ) : (
@@ -8521,7 +8790,7 @@ function SuppliersPage({
               </tr>
             </thead>
             <tbody>
-              {purchaseRecords.map((record, index) => (
+              {filteredPurchaseRecords.map((record, index) => (
                 <tr
                   key={`${record.documentNo ?? "doc"}-${record.itemCode}-${index}`}
                 >
@@ -8538,7 +8807,9 @@ function SuppliersPage({
                   <td>{record.remark ?? "-"}</td>
                 </tr>
               ))}
-              {purchaseRecords.length === 0 ? <EmptyRow colSpan={9} /> : null}
+              {filteredPurchaseRecords.length === 0 ? (
+                <EmptyRow colSpan={9} />
+              ) : null}
             </tbody>
           </table>
         </div>
@@ -8564,31 +8835,53 @@ function BudgetRulesPage({
   ) => Promise<void>;
   rules: BudgetRule[];
 }) {
+  const [search, setSearch] = useState("");
+  const filteredRules = useMemo(
+    () =>
+      rules.filter((rule) =>
+        matchesSearchText(search, [
+          rule.periodMonth,
+          rule.departmentName,
+          rule.categoryName || "全部分类",
+          rule.amountLimit,
+          rule.usedAmount,
+          rule.amountLimit - rule.usedAmount,
+          rule.enabled ? "启用" : "停用",
+        ]),
+      ),
+    [rules, search],
+  );
+
   return (
     <MasterTablePanel
       actions={
-        <button
-          className="primary-button"
-          disabled={!canManage}
-          onClick={() =>
-            openEditorWindow("budget", { extra: { periodMonth: month } })
+        <ManagementSearchToolbar
+          action={
+            <button
+              className="primary-button"
+              disabled={!canManage}
+              onClick={() =>
+                openEditorWindow("budget", { extra: { periodMonth: month } })
+              }
+              type="button"
+            >
+              新增预算
+            </button>
           }
-        >
-          新增预算
-        </button>
+          extra={
+            <Field label="月份">
+              <MonthSelect compact value={month} onChange={onMonthChange} />
+            </Field>
+          }
+          onSearchChange={setSearch}
+          placeholder="搜索部门、分类、金额、状态"
+          search={search}
+        />
       }
       description="预算按部门、月份控制内部领用金额，可选分类做精细控制，超出预算时出库确认会被阻止。"
       hideHeading
       title="预算控制"
     >
-      <div className="table-toolbar">
-        <h2>预算规则</h2>
-        <MonthSelect
-          compact
-          value={month}
-          onChange={onMonthChange}
-        />
-      </div>
       <table>
         <thead>
           <tr>
@@ -8603,7 +8896,7 @@ function BudgetRulesPage({
           </tr>
         </thead>
         <tbody>
-          {rules.map((rule) => {
+          {filteredRules.map((rule) => {
             const remaining = rule.amountLimit - rule.usedAmount;
             return (
               <tr key={rule.id}>
@@ -8643,7 +8936,7 @@ function BudgetRulesPage({
               </tr>
             );
           })}
-          {rules.length === 0 ? <EmptyRow colSpan={8} /> : null}
+          {filteredRules.length === 0 ? <EmptyRow colSpan={8} /> : null}
         </tbody>
       </table>
     </MasterTablePanel>
@@ -8664,14 +8957,47 @@ function ApprovalsPage({
   ) => Promise<void>;
 }) {
   const [decisionNote, setDecisionNote] = useState("");
+  const [search, setSearch] = useState("");
+  const filteredApprovals = useMemo(
+    () =>
+      approvals.filter((item) =>
+        matchesSearchText(search, [
+          item.id,
+          approvalTypeLabel(item.entityType),
+          item.entityId,
+          item.reason,
+          approvalStatusLabel(item.status),
+          item.createdAt,
+          item.decidedAt,
+        ]),
+      ),
+    [approvals, search],
+  );
+
   return (
     <section className="table-panel">
-      <div className="table-toolbar">
-        <input
-          value={decisionNote}
-          onChange={(e) => setDecisionNote(e.target.value)}
-          placeholder="审批意见"
-        />
+      <div className="table-toolbar table-filter-toolbar">
+        <form
+          className="filter-shell"
+          onSubmit={(event) => event.preventDefault()}
+        >
+          <div className="filter-fields">
+            <Field label="搜索">
+              <input
+                placeholder="搜索类型、对象、原因、状态"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </Field>
+            <Field label="审批意见">
+              <input
+                value={decisionNote}
+                onChange={(e) => setDecisionNote(e.target.value)}
+                placeholder="填写通过或驳回意见"
+              />
+            </Field>
+          </div>
+        </form>
       </div>
       <table>
         <thead>
@@ -8687,7 +9013,7 @@ function ApprovalsPage({
           </tr>
         </thead>
         <tbody>
-          {approvals.map((item) => (
+          {filteredApprovals.map((item) => (
             <tr key={item.id}>
               <td className="path-cell">{item.id}</td>
               <td>{approvalTypeLabel(item.entityType)}</td>
@@ -8730,7 +9056,7 @@ function ApprovalsPage({
               </td>
             </tr>
           ))}
-          {approvals.length === 0 ? <EmptyRow colSpan={8} /> : null}
+          {filteredApprovals.length === 0 ? <EmptyRow colSpan={8} /> : null}
         </tbody>
       </table>
     </section>
@@ -8742,6 +9068,7 @@ function StockDocumentPage({
   departments,
   documentType,
   documents,
+  handlerOptions,
   items,
   onConfirmDraft,
   onQueryChange,
@@ -8753,6 +9080,7 @@ function StockDocumentPage({
   departments: Department[];
   documentType: "inbound" | "outbound";
   documents: StockDocument[];
+  handlerOptions: string[];
   items: Item[];
   onConfirmDraft: (
     documentId: string,
@@ -8801,6 +9129,7 @@ function StockDocumentPage({
       <DocumentList
         departments={departments}
         documents={documents}
+        handlerOptions={handlerOptions}
         items={items}
         isOutbound={isOutbound}
         canVoid={canWrite}
@@ -8862,6 +9191,7 @@ function DocumentList({
   canVoid = true,
   departments = [],
   documents,
+  handlerOptions = [],
   items = [],
   isOutbound,
   onConfirmDraft,
@@ -8877,6 +9207,7 @@ function DocumentList({
   canVoid?: boolean;
   departments?: Department[];
   documents: StockDocument[];
+  handlerOptions?: string[];
   items?: Item[];
   isOutbound: boolean;
   onConfirmDraft?: (
@@ -8911,10 +9242,19 @@ function DocumentList({
   }, [query]);
 
   const partyLabel = isOutbound ? "领用部门" : "供应商";
+  const isAdjustment = filterDraft.documentType === "adjustment";
   const partyValue = isOutbound
     ? (filterDraft.departmentId ?? "")
     : (filterDraft.supplierId ?? "");
   const partyOptions = isOutbound ? departments : suppliers;
+  const effectiveHandlerOptions = useMemo(
+    () =>
+      uniqueTextOptions([
+        ...handlerOptions,
+        ...documents.map((document) => document.handler),
+      ]),
+    [documents, handlerOptions],
+  );
 
   function updateFilter(next: Partial<StockDocumentQuery>) {
     setFilterDraft({ ...filterDraft, ...next });
@@ -8922,16 +9262,28 @@ function DocumentList({
 
   function applyFilters() {
     if (!query || !onQueryChange) return;
+    applyFiltersWithDraft(filterDraft);
+  }
+
+  function applyFiltersWithDraft(draft: StockDocumentQuery) {
+    if (!query || !onQueryChange) return;
     onQueryChange({
-      ...filterDraft,
+      ...draft,
       documentType: query.documentType,
-      outboundKind: isOutbound ? filterDraft.outboundKind || null : null,
-      month: filterDraft.month || currentMonthString(),
-      departmentId: isOutbound ? filterDraft.departmentId || null : null,
-      supplierId: isOutbound ? null : filterDraft.supplierId || null,
-      itemId: filterDraft.itemId || null,
-      search: filterDraft.search?.trim() || null,
+      outboundKind: isOutbound ? draft.outboundKind || null : null,
+      month: draft.month || currentMonthString(),
+      departmentId: isOutbound ? draft.departmentId || null : null,
+      supplierId: !isOutbound && !isAdjustment ? draft.supplierId || null : null,
+      itemId: draft.itemId || null,
+      handler: draft.handler || null,
+      search: draft.search?.trim() || null,
     });
+  }
+
+  function updateItemFilter(itemId: string) {
+    const nextDraft = { ...filterDraft, itemId };
+    setFilterDraft(nextDraft);
+    applyFiltersWithDraft(nextDraft);
   }
 
   function resetFilters() {
@@ -8952,7 +9304,10 @@ function DocumentList({
         </div>
       ) : null}
       {query && onQueryChange ? (
-        <div className="document-filters">
+        <div
+          className="document-filters"
+          onKeyDown={(event) => submitOnEnter(event, applyFilters)}
+        >
           <div className="filter-fields">
             <Field label="月份">
               <MonthSelect
@@ -8960,24 +9315,26 @@ function DocumentList({
                 onChange={(month) => updateFilter({ month })}
               />
             </Field>
-            <Field label={partyLabel}>
-              <select
-                value={partyValue}
-                onChange={(e) =>
-                  isOutbound
-                    ? updateFilter({ departmentId: e.target.value })
-                    : updateFilter({ supplierId: e.target.value })
-                }
-              >
-                <option value="">全部</option>
-                {partyOptions.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            {isOutbound ? (
+            {isAdjustment ? null : (
+              <Field label={partyLabel}>
+                <select
+                  value={partyValue}
+                  onChange={(e) =>
+                    isOutbound
+                      ? updateFilter({ departmentId: e.target.value })
+                      : updateFilter({ supplierId: e.target.value })
+                  }
+                >
+                  <option value="">全部</option>
+                  {partyOptions.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            )}
+            {isAdjustment ? null : isOutbound ? (
               <Field label="出库类型">
                 <select
                   value={filterDraft.outboundKind ?? ""}
@@ -8996,6 +9353,19 @@ function DocumentList({
                 </select>
               </Field>
             ) : null}
+            <Field label="经办人">
+              <select
+                value={filterDraft.handler ?? ""}
+                onChange={(e) => updateFilter({ handler: e.target.value })}
+              >
+                <option value="">全部</option>
+                {effectiveHandlerOptions.map((handler) => (
+                  <option key={handler} value={handler}>
+                    {handler}
+                  </option>
+                ))}
+              </select>
+            </Field>
             <Field label="物品">
               <ItemSearchSelect
                 allowEmpty
@@ -9004,11 +9374,12 @@ function DocumentList({
                 items={items}
                 value={filterDraft.itemId ?? ""}
                 onChange={(itemId) => updateFilter({ itemId })}
+                onCommit={updateItemFilter}
               />
             </Field>
             <Field label="关键字">
               <input
-                placeholder="单号/物品/经办人/备注"
+                placeholder="单号/物品/备注"
                 value={filterDraft.search ?? ""}
                 onChange={(e) => updateFilter({ search: e.target.value })}
               />
@@ -9471,14 +9842,61 @@ function StockBalancePage({
   query: StockBalanceQuery;
 }) {
   const [filterDraft, setFilterDraft] = useState<StockBalanceQuery>(query);
-  useEffect(() => setFilterDraft(query), [query]);
+  const [quantitySort, setQuantitySort] = useState<"asc" | "desc" | null>(
+    null,
+  );
+  useEffect(() => setFilterDraft({ ...query, search: null }), [query]);
+  const searchItems = useMemo(() => {
+    if (!filterDraft.categoryId) return items;
+    return items.filter((item) => item.categoryId === filterDraft.categoryId);
+  }, [filterDraft.categoryId, items]);
+  const sortedBalances = useMemo(() => {
+    if (!quantitySort) return balances;
+    return [...balances].sort((left, right) => {
+      const diff = left.quantity - right.quantity;
+      return quantitySort === "asc" ? diff : -diff;
+    });
+  }, [balances, quantitySort]);
+
+  function toggleQuantitySort() {
+    setQuantitySort((current) =>
+      current === "asc" ? "desc" : current === "desc" ? null : "asc",
+    );
+  }
 
   function updateFilter(next: Partial<StockBalanceQuery>) {
-    setFilterDraft({ ...filterDraft, ...next });
+    setFilterDraft((current) => ({ ...current, ...next }));
+  }
+
+  function updateCategoryFilter(categoryId: string) {
+    setFilterDraft((current) => {
+      const selectedItem = current.itemId
+        ? items.find((item) => item.id === current.itemId)
+        : null;
+      const shouldClearItem =
+        Boolean(categoryId) &&
+        Boolean(selectedItem) &&
+        selectedItem?.categoryId !== categoryId;
+      return {
+        ...current,
+        categoryId,
+        itemId: shouldClearItem ? "" : current.itemId,
+      };
+    });
   }
 
   function applyFilters() {
-    onQueryChange(filterDraft);
+    applyFiltersWithDraft(filterDraft);
+  }
+
+  function applyFiltersWithDraft(draft: StockBalanceQuery) {
+    onQueryChange({ ...draft, search: null });
+  }
+
+  function updateItemFilter(itemId: string) {
+    const nextDraft = { ...filterDraft, itemId, search: null };
+    setFilterDraft(nextDraft);
+    applyFiltersWithDraft(nextDraft);
   }
 
   function resetFilters() {
@@ -9489,19 +9907,15 @@ function StockBalancePage({
 
   return (
     <section className="table-panel">
-      <div className="document-filters">
+      <div
+        className="document-filters"
+        onKeyDown={(event) => submitOnEnter(event, applyFilters)}
+      >
         <div className="filter-fields">
-          <Field label="关键字">
-            <input
-              placeholder="编码/名称/规格"
-              value={filterDraft.search ?? ""}
-              onChange={(e) => updateFilter({ search: e.target.value })}
-            />
-          </Field>
           <Field label="分类">
             <select
               value={filterDraft.categoryId ?? ""}
-              onChange={(e) => updateFilter({ categoryId: e.target.value })}
+              onChange={(e) => updateCategoryFilter(e.target.value)}
             >
               <option value="">全部</option>
               {categories.map((item) => (
@@ -9516,9 +9930,10 @@ function StockBalancePage({
               allowEmpty
               disabled={false}
               emptyLabel="全部物品"
-              items={items}
+              items={searchItems}
               value={filterDraft.itemId ?? ""}
               onChange={(itemId) => updateFilter({ itemId })}
+              onCommit={updateItemFilter}
             />
           </Field>
           <Field label="库存状态">
@@ -9553,7 +9968,22 @@ function StockBalancePage({
             <th>物品</th>
             <th>规格</th>
             <th>单位</th>
-            <th>库存</th>
+            <th>
+              <button
+                className="table-sort-button"
+                onClick={toggleQuantitySort}
+                type="button"
+              >
+                库存
+                <span>
+                  {quantitySort === "asc"
+                    ? "↑"
+                    : quantitySort === "desc"
+                      ? "↓"
+                      : "↕"}
+                </span>
+              </button>
+            </th>
             <th>金额</th>
             <th>均价</th>
             <th>预警线</th>
@@ -9564,7 +9994,7 @@ function StockBalancePage({
         <PaginatedTable
           colSpan={10}
           getRowKey={(row) => row.itemId}
-          rows={balances}
+          rows={sortedBalances}
         >
           {(row) => (
             <>
@@ -9622,7 +10052,17 @@ function StockMovementPage({
   }
 
   function applyFilters() {
-    onQueryChange(filterDraft);
+    applyFiltersWithDraft(filterDraft);
+  }
+
+  function applyFiltersWithDraft(draft: StockMovementQuery) {
+    onQueryChange(draft);
+  }
+
+  function updateItemFilter(itemId: string) {
+    const nextDraft = { ...filterDraft, itemId };
+    setFilterDraft(nextDraft);
+    applyFiltersWithDraft(nextDraft);
   }
 
   function resetFilters() {
@@ -9633,7 +10073,10 @@ function StockMovementPage({
 
   return (
     <section className="table-panel">
-      <div className="document-filters">
+      <div
+        className="document-filters"
+        onKeyDown={(event) => submitOnEnter(event, applyFilters)}
+      >
         <div className="filter-fields">
           <Field label="关键字">
             <input
@@ -9650,6 +10093,7 @@ function StockMovementPage({
               items={items}
               value={filterDraft.itemId ?? ""}
               onChange={(itemId) => updateFilter({ itemId })}
+              onCommit={updateItemFilter}
             />
           </Field>
           <Field label="方向">
@@ -10031,15 +10475,23 @@ function StocktakeDetailViewer({
 function AdjustmentPage({
   canWrite,
   documents,
+  handlerOptions,
+  items,
+  onQueryChange,
   onVoid,
+  query,
 }: {
   canWrite: boolean;
   documents: StockDocument[];
+  handlerOptions: string[];
+  items: Item[];
+  onQueryChange: (query: StockDocumentQuery) => Promise<void>;
   onVoid: (
     documentId: string,
     reason: string,
     handler: string,
   ) => Promise<void>;
+  query: StockDocumentQuery;
 }) {
   const [voidReason, setVoidReason] = useState("");
   const [voidHandler, setVoidHandler] = useState("");
@@ -10069,8 +10521,12 @@ function AdjustmentPage({
       <DocumentList
         canVoid={canWrite}
         documents={documents}
+        handlerOptions={handlerOptions}
+        items={items}
         isOutbound={false}
+        onQueryChange={onQueryChange}
         onVoid={onVoid}
+        query={query}
         voidHandler={voidHandler}
         voidReason={voidReason}
       />
@@ -10146,11 +10602,21 @@ function ReportsPage({
   }
 
   function applyFilters() {
+    applyFiltersWithDraft(filterDraft);
+  }
+
+  function applyFiltersWithDraft(draft: ReportQuery) {
     onQueryChange({
-      ...filterDraft,
+      ...draft,
       startDate: null,
       endDate: null,
     });
+  }
+
+  function updateItemFilter(itemId: string) {
+    const nextDraft = { ...filterDraft, itemId };
+    setFilterDraft(nextDraft);
+    applyFiltersWithDraft(nextDraft);
   }
 
   function resetFilters() {
@@ -10193,7 +10659,10 @@ function ReportsPage({
             </button>
           </div>
         </div>
-        <div className="report-filters">
+        <div
+          className="report-filters"
+          onKeyDown={(event) => submitOnEnter(event, applyFilters)}
+        >
           <div className="filter-fields">
             <Field label="月份">
               <MonthSelect
@@ -10238,6 +10707,7 @@ function ReportsPage({
                 items={items}
                 value={filterDraft.itemId ?? ""}
                 onChange={(itemId) => updateFilter({ itemId })}
+                onCommit={updateItemFilter}
               />
             </Field>
             <Field label="供应商">
@@ -11678,15 +12148,35 @@ function BackupRecordsPage({
   backups: BackupRecord[];
   i18n?: I18n;
 }) {
+  const [search, setSearch] = useState("");
+  const filteredBackups = useMemo(
+    () =>
+      backups.filter((backup) =>
+        matchesSearchText(search, [
+          backup.createdAt,
+          backupTypeLabel(backup.backupType, i18n),
+          backup.status,
+          backup.hostName,
+          backup.os,
+          backup.appVersion,
+          backup.schemaVersion,
+          backup.databaseSize,
+          backup.sha256,
+          backup.backupFile,
+          backup.errorMessage,
+        ]),
+      ),
+    [backups, i18n, search],
+  );
+
   return (
     <section className="table-panel">
-      <div className="table-toolbar">
-        <div>
-          <h2>备份记录</h2>
-          <span className="table-note">
-            手动备份、导入前备份、恢复前保护备份和自动备份记录
-          </span>
-        </div>
+      <div className="table-toolbar table-filter-toolbar">
+        <ManagementSearchToolbar
+          onSearchChange={setSearch}
+          placeholder="搜索类型、状态、主机、文件、错误"
+          search={search}
+        />
       </div>
       <table>
         <thead>
@@ -11707,7 +12197,7 @@ function BackupRecordsPage({
         <PaginatedTable
           colSpan={11}
           getRowKey={(backup) => backup.id}
-          rows={backups}
+          rows={filteredBackups}
         >
           {(backup) => (
             <>
@@ -11747,15 +12237,30 @@ function LogsPage({
   auditLogs: AuditLogRow[];
   i18n?: I18n;
 }) {
+  const [search, setSearch] = useState("");
+  const filteredAuditLogs = useMemo(
+    () =>
+      auditLogs.filter((log) =>
+        matchesSearchText(search, [
+          log.createdAt,
+          auditActionLabel(log.action, i18n),
+          auditEntityLabel(log.entityType, i18n),
+          log.entityId,
+          log.summary,
+          log.operator,
+        ]),
+      ),
+    [auditLogs, i18n, search],
+  );
+
   return (
     <section className="table-panel">
-      <div className="table-toolbar">
-        <div>
-          <h2>操作日志</h2>
-          <span className="table-note">
-            系统操作、导入、备份、用户和业务变更记录
-          </span>
-        </div>
+      <div className="table-toolbar table-filter-toolbar">
+        <ManagementSearchToolbar
+          onSearchChange={setSearch}
+          placeholder="搜索动作、对象、摘要、操作人"
+          search={search}
+        />
       </div>
       <table>
         <thead>
@@ -11770,7 +12275,7 @@ function LogsPage({
         <PaginatedTable
           colSpan={5}
           getRowKey={(log) => log.id}
-          rows={auditLogs}
+          rows={filteredAuditLogs}
         >
           {(log) => (
             <>
@@ -11820,6 +12325,39 @@ function MasterTablePanel({
       </div>
       {children}
     </section>
+  );
+}
+
+function ManagementSearchToolbar({
+  action,
+  extra,
+  onSearchChange,
+  placeholder,
+  search,
+}: {
+  action?: React.ReactNode;
+  extra?: React.ReactNode;
+  onSearchChange: (value: string) => void;
+  placeholder: string;
+  search: string;
+}) {
+  return (
+    <form
+      className="filter-shell management-filter-shell"
+      onSubmit={(event) => event.preventDefault()}
+    >
+      <div className="filter-fields">
+        {extra}
+        <Field label="搜索">
+          <input
+            placeholder={placeholder}
+            value={search}
+            onChange={(event) => onSearchChange(event.target.value)}
+          />
+        </Field>
+      </div>
+      {action ? <div className="filter-actions">{action}</div> : null}
+    </form>
   );
 }
 
