@@ -253,6 +253,17 @@ function verifyUpdaterArtifact(bundleDir, extension, description) {
   verifiedArtifacts.push(artifactInfo(archive), artifactInfo(signature));
 }
 
+function verifyWindowsUpdaterArtifact(bundleDir) {
+  const signature = findSingleArtifact(
+    bundleDir,
+    (path) => path.endsWith(".exe.sig") && /[/\\]nsis[/\\]/.test(path),
+    "Windows NSIS updater signature",
+  );
+  const installer = signature.slice(0, -4);
+  assertFile(installer, "Windows NSIS updater installer missing");
+  verifiedArtifacts.push(artifactInfo(installer), artifactInfo(signature));
+}
+
 function writeEvidenceReport(status = "passed", failure = null) {
   const evidenceDir = join(root, "docs", "release-evidence");
   mkdirSync(evidenceDir, { recursive: true });
@@ -335,7 +346,7 @@ if (process.platform === "darwin") {
     verifiedArtifacts.push(artifactInfo(path));
   }
   if (hasUpdaterSigningKey) {
-    verifyUpdaterArtifact(resolvedBundleDir, ".zip", "Windows");
+    verifyWindowsUpdaterArtifact(resolvedBundleDir);
   }
 } else {
   console.log(`\n[verify-release] Build completed on ${process.platform}; installer artifact checks are only defined for macOS and Windows.`);

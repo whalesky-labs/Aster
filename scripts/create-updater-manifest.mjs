@@ -34,8 +34,8 @@ const assetMap = [
   },
   {
     platform: "windows-x86_64",
-    archive: `aster-${version}-windows-x86_64-updater.zip`,
-    signature: `aster-${version}-windows-x86_64-updater.zip.sig`,
+    archive: `aster-${version}-windows-x86_64-setup.exe`,
+    signature: `aster-${version}-windows-x86_64-setup.exe.sig`,
   },
 ];
 

@@ -225,13 +225,13 @@ jobs:
             release_asset_name: windows-x86_64
             artifact_path: |
               src-tauri/target/*/release/bundle/**/*.exe
+              src-tauri/target/*/release/bundle/**/*.exe.sig
               src-tauri/target/*/release/bundle/**/*.msi
-              src-tauri/target/*/release/bundle/**/*.zip
-              src-tauri/target/*/release/bundle/**/*.zip.sig
+              src-tauri/target/*/release/bundle/**/*.msi.sig
               src-tauri/target/release/bundle/**/*.exe
+              src-tauri/target/release/bundle/**/*.exe.sig
               src-tauri/target/release/bundle/**/*.msi
-              src-tauri/target/release/bundle/**/*.zip
-              src-tauri/target/release/bundle/**/*.zip.sig
+              src-tauri/target/release/bundle/**/*.msi.sig
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -450,7 +450,7 @@ jobs:
           copy_optional_asset "*/aster-windows-x64/*.msi" "aster-${RELEASE_VERSION}-windows-x86_64.msi"
           copy_updater_pair "*/aster-macos-x64/*.tar.gz" "aster-${RELEASE_VERSION}-macos-x86_64-updater.tar.gz" "macOS Intel updater"
           copy_updater_pair "*/aster-macos-aarch64/*.tar.gz" "aster-${RELEASE_VERSION}-macos-aarch64-updater.tar.gz" "macOS Apple Silicon updater"
-          copy_updater_pair "*/aster-windows-x64/*.zip" "aster-${RELEASE_VERSION}-windows-x86_64-updater.zip" "Windows updater"
+          copy_updater_pair "*/aster-windows-x64/*.exe" "aster-${RELEASE_VERSION}-windows-x86_64-setup.exe" "Windows NSIS updater"
 
           asset_count="$(find release-upload -type f | wc -l | tr -d ' ')"
           if [[ "${asset_count}" == "0" ]]; then

@@ -19,6 +19,10 @@
 - GitHub Actions 发布流程会把安装包、updater 包、签名文件和 `latest.json` 一起上传到 Release，并将 `latest.json` 写入发布说明下载表。
 - 优化 README 顶部产品定位文案，改为更贴近酒店物资流转、库存成本管理和本地化部署场景的企业级表达。
 
+### 修复
+
+- 修复 Windows x64 发布校验仍查找旧版 updater zip 签名的问题，改为使用 Tauri 2 生成的 NSIS 安装包 `.exe.sig`，确保 Windows 在线更新资产能正常进入 Release 和 `latest.json`。
+
 ## [0.1.7] - 2026-07-09
 
 ### 新增
