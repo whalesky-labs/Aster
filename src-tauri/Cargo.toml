@@ -25,7 +25,7 @@ tauri-plugin-process = "2"
 tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rusqlite = { version = "0.32.1", features = ["bundled"] }
+rusqlite = { version = "0.32.1", features = ["bundled", "hooks"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 uuid = { version = "1.23.4", features = ["v4", "serde"] }
 directories = "6.0.0"
@@ -35,9 +35,16 @@ rust_xlsxwriter = "0.95.0"
 calamine = "0.35.0"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 sha2 = "0.10.9"
+hmac = "0.12.1"
 pbkdf2 = { version = "0.12.2", features = ["simple"] }
 rand = "0.8.5"
 lettre = { version = "0.11.22", default-features = false, features = ["builder", "smtp-transport", "rustls-tls", "pool", "hostname"] }
+keyring = { version = "3.6.3", features = ["apple-native", "windows-native"] }
+rustls = "0.23"
+rcgen = "0.14"
+opaque-ke = { version = "4", features = ["ristretto255", "serde", "argon2"] }
+base64 = "0.22"
+rand_core = "0.6"
 
 [dev-dependencies]
 tempfile = "3.27.0"

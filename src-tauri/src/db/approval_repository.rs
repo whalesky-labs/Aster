@@ -1,19 +1,29 @@
 use rusqlite::{params, Connection};
 use uuid::Uuid;
 
+use crate::db::pagination::{self, FETCH_SIZE};
 use crate::domain::approvals::{ApprovalRequest, CreateApprovalRequest};
+use crate::domain::pagination::Page;
 use crate::error::{AppError, AppResult};
 
 pub fn list_approval_requests(conn: &Connection) -> AppResult<Vec<ApprovalRequest>> {
+    pagination::collect_all(|cursor| list_approval_requests_page(conn, cursor))
+}
+
+pub fn list_approval_requests_page(
+    conn: &Connection,
+    cursor: Option<&str>,
+) -> AppResult<Page<ApprovalRequest>> {
+    let offset = pagination::offset(conn, "approvals", cursor)?;
     let mut stmt = conn.prepare(
         "SELECT id, entity_type, entity_id, status, requested_by, decided_by,
                 reason, decision_note, created_at, decided_at
          FROM approval_requests
-         ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, created_at DESC
-         LIMIT 200",
+         ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, created_at DESC, id DESC
+         LIMIT ?1 OFFSET ?2",
     )?;
-    let rows = stmt.query_map([], map_approval)?;
-    collect_rows(rows)
+    let rows = stmt.query_map(params![FETCH_SIZE, offset], map_approval)?;
+    pagination::page(conn, "approvals", offset, collect_rows(rows)?)
 }
 
 pub fn create_approval_request(
@@ -69,6 +79,31 @@ pub fn get_approval_request(conn: &Connection, id: &str) -> AppResult<ApprovalRe
         params![id],
         map_approval,
     )?)
+}
+
+fn map_approval(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApprovalRequest> {
+    Ok(ApprovalRequest {
+        id: row.get(0)?,
+        entity_type: row.get(1)?,
+        entity_id: row.get(2)?,
+        status: row.get(3)?,
+        requested_by: row.get(4)?,
+        decided_by: row.get(5)?,
+        reason: row.get(6)?,
+        decision_note: row.get(7)?,
+        created_at: row.get(8)?,
+        decided_at: row.get(9)?,
+    })
+}
+
+fn collect_rows<T>(
+    rows: rusqlite::MappedRows<'_, impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>>,
+) -> AppResult<Vec<T>> {
+    let mut output = Vec::new();
+    for row in rows {
+        output.push(row?);
+    }
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -135,29 +170,4 @@ mod tests {
             .unwrap();
         assert_eq!(status, "approved");
     }
-}
-
-fn map_approval(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApprovalRequest> {
-    Ok(ApprovalRequest {
-        id: row.get(0)?,
-        entity_type: row.get(1)?,
-        entity_id: row.get(2)?,
-        status: row.get(3)?,
-        requested_by: row.get(4)?,
-        decided_by: row.get(5)?,
-        reason: row.get(6)?,
-        decision_note: row.get(7)?,
-        created_at: row.get(8)?,
-        decided_at: row.get(9)?,
-    })
-}
-
-fn collect_rows<T>(
-    rows: rusqlite::MappedRows<'_, impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>>,
-) -> AppResult<Vec<T>> {
-    let mut output = Vec::new();
-    for row in rows {
-        output.push(row?);
-    }
-    Ok(output)
 }

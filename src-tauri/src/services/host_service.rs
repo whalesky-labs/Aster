@@ -1,28 +1,31 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::db::approval_repository;
+use crate::application::pairing_service::{
+    self, PairFinishRequest, PairFinishResponse, PairStartRequest, PairStartResponse,
+    PairingRuntime, VerifiedPairing,
+};
 use crate::db::connection::Db;
-use crate::db::master_data_repository;
-use crate::db::report_repository;
-use crate::db::repository;
-use crate::db::stock_repository;
-use crate::db::stocktake_repository;
+use crate::db::{
+    approval_repository, master_data_repository, paginated_stock_repository, report_repository,
+    repository, stock_repository, stocktake_repository,
+};
 use crate::domain::approvals::{ApprovalRequest, CreateApprovalRequest, DecideApprovalRequest};
 use crate::domain::backups::BackupRecord;
 use crate::domain::master_data::{
     BudgetRule, Category, Department, Item, SaveBudgetRuleRequest, SaveCategoryRequest,
     SaveDepartmentRequest, SaveItemRequest, SaveSupplierRequest, SaveUnitRequest, Supplier, Unit,
 };
+use crate::domain::pagination::Page;
 use crate::domain::reports::{ReportBundle, ReportQuery};
 use crate::domain::runtime::{
     ClientConnectionInfo, HostConnectionTestRequest, HostConnectionTestResult, HostDiscoveryResult,
@@ -45,7 +48,12 @@ use crate::domain::users::{
     SetUserEnabledRequest, UserAccount,
 };
 use crate::error::{AppError, AppResult};
+use crate::infrastructure::connection_limiter::ConnectionLimiter;
+use crate::infrastructure::http_transport;
+use crate::infrastructure::secure_transport;
 use crate::{app::state::AppState, domain::runtime::RuntimeMode};
+
+use http_transport::{page_path, push_query_param, query_param, url_encode};
 
 #[derive(Default)]
 pub struct HostServiceRuntime {
@@ -54,6 +62,10 @@ pub struct HostServiceRuntime {
     pub port: u16,
     pub pair_code: Option<String>,
     pub clients: HashMap<String, ClientConnectionInfo>,
+    pub client_session_token: Option<String>,
+    pub pairing: PairingRuntime,
+    pub certificate_fingerprint: String,
+    pub security_rate_limiter: crate::application::security_rate_limiter::SecurityRateLimiter,
 }
 
 pub fn ensure_host_service_for_mode(state: &AppState, app_version: &str) -> AppResult<()> {
@@ -94,7 +106,9 @@ fn start_host_service_internal(
         .set_nonblocking(true)
         .map_err(|error| AppError::Validation(format!("主机服务配置失败：{error}")))?;
 
-    let pair_code = generate_pair_code();
+    let tls_identity = secure_transport::load_or_create_host_identity(&state.db)?;
+    let pairing = PairingRuntime::initialize()?;
+    let pair_code = pairing.code().map(str::to_owned);
     {
         let mut runtime = state
             .host_service
@@ -103,15 +117,18 @@ fn start_host_service_internal(
         runtime.running = true;
         runtime.bind_address = bind_address.clone();
         runtime.port = port;
-        runtime.pair_code = Some(pair_code.clone());
+        runtime.pair_code = pair_code;
         runtime.clients.clear();
+        runtime.pairing = pairing;
+        runtime.certificate_fingerprint = tls_identity.fingerprint.clone();
     }
 
     let runtime = Arc::clone(&state.host_service);
     let db = state.db.clone_handle();
     let version = app_version.to_string();
+    let tls_config = tls_identity.server_config;
     thread::spawn(move || {
-        serve(listener, runtime, db, version);
+        serve(listener, runtime, db, version, tls_config);
     });
 
     let runtime = Arc::clone(&state.host_service);
@@ -144,7 +161,9 @@ pub fn stop_host_service_runtime(state: &AppState) {
 
 pub fn list_client_connections(state: &AppState) -> AppResult<Vec<ClientConnectionInfo>> {
     crate::services::user_service::require_admin(state)?;
-    state.db.with_conn(list_client_connections_from_conn)
+    state
+        .db
+        .with_conn(crate::db::client_connection_repository::list)
 }
 
 pub fn remove_client_connection(
@@ -201,6 +220,7 @@ pub fn save_client_config(
         repository::set_setting(conn, "runtime_mode", RuntimeMode::Client.as_str())?;
         if host_changed {
             repository::delete_setting(conn, "client_token")?;
+            repository::delete_setting(conn, "host_certificate_fingerprint")?;
         }
         Ok(())
     })?;
@@ -221,25 +241,50 @@ pub fn pair_with_host(
         .host_address
         .clone()
         .ok_or_else(|| AppError::Validation("请先保存主机地址".to_string()))?;
-    let response: PairResponse = http_post_json_without_token(
+    let client_nonce = pairing_service::random_nonce();
+    let (client_state, ke1) = pairing_service::client_start(&pair_code)?;
+    let (start_response, certificate_fingerprint): (PairStartResponse, String) =
+        http_post_json_for_pairing(
+            &address,
+            config.host_port,
+            "/api/pair/start",
+            &PairStartRequest {
+                client_name,
+                client_device_id: client_device_id.clone(),
+                app_version,
+                client_nonce: client_nonce.clone(),
+                ke1,
+            },
+            None,
+        )?;
+    let ke3 = pairing_service::client_finish(
+        client_state,
+        &pair_code,
+        &start_response,
+        &certificate_fingerprint,
+        &client_device_id,
+        &client_nonce,
+    )?;
+    let (response, final_fingerprint): (PairFinishResponse, String) = http_post_json_for_pairing(
         &address,
         config.host_port,
-        "/api/pair",
-        &PairRequest {
-            pair_code,
-            client_name,
-            client_device_id,
-            app_version,
+        "/api/pair/finish",
+        &PairFinishRequest {
+            exchange_id: start_response.exchange_id,
+            ke3,
         },
+        Some(&certificate_fingerprint),
     )?;
-    if !response.ok {
-        return Err(AppError::Validation(response.message));
+    if final_fingerprint != certificate_fingerprint {
+        return Err(AppError::Validation("配对期间主机证书发生变化".to_string()));
     }
-    let token = response
-        .token
-        .ok_or_else(|| AppError::Validation("主机未返回连接凭据".to_string()))?;
     state.db.with_conn(|conn| {
-        repository::set_setting(conn, "client_token", &token)?;
+        repository::set_setting(conn, "client_token", &response.token)?;
+        repository::set_setting(
+            conn,
+            "host_certificate_fingerprint",
+            &certificate_fingerprint,
+        )?;
         Ok(())
     })?;
     crate::services::status_service::get_runtime_config(state)
@@ -262,11 +307,7 @@ pub fn test_host_connection(
 ) -> AppResult<HostConnectionTestResult> {
     validate_host_port(request.host_port)?;
     let host_address = normalize_host_address(&request.host_address)?;
-    let mut stream = TcpStream::connect((host_address.as_str(), request.host_port))
-        .map_err(|error| AppError::Validation(format!("连接主机失败：{error}")))?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(3)))
-        .map_err(|error| AppError::Validation(format!("连接超时设置失败：{error}")))?;
+    let mut stream = secure_transport::connect(&host_address, request.host_port, None)?.stream;
     stream.write_all(b"GET /api/health HTTP/1.1\r\nHost: aster\r\nConnection: close\r\n\r\n")?;
     let mut response = String::new();
     stream.read_to_string(&mut response)?;
@@ -365,7 +406,9 @@ pub fn remote_list_stock_documents(
     } else {
         format!("/api/stock/documents?{}", params.join("&"))
     };
-    http_get_json(&config, &path)
+    crate::application::remote_pagination::collect_all(|cursor| {
+        http_get_json(&config, &page_path(&path, cursor))
+    })
 }
 
 pub fn remote_get_stock_document_detail(
@@ -397,7 +440,7 @@ pub fn remote_list_stock_balances(
     } else {
         format!("/api/stock/balances?{}", params.join("&"))
     };
-    http_get_json(&config, &path)
+    collect_remote_pages(&config, &path)
 }
 
 pub fn remote_list_stock_batches(
@@ -405,7 +448,7 @@ pub fn remote_list_stock_batches(
     item_id: String,
 ) -> AppResult<Vec<StockBatchRow>> {
     let config = client_runtime_config(state)?;
-    http_get_json(
+    collect_remote_pages(
         &config,
         &format!("/api/stock/batches?itemId={}", url_encode(&item_id)),
     )
@@ -427,7 +470,9 @@ pub fn remote_list_stock_movements(
     } else {
         format!("/api/stock/movements?{}", params.join("&"))
     };
-    http_get_json(&config, &path)
+    crate::application::remote_pagination::collect_all(|cursor| {
+        http_get_json(&config, &page_path(&path, cursor))
+    })
 }
 
 pub fn remote_submit_stock_document(
@@ -472,7 +517,7 @@ pub fn remote_void_stock_document(
 
 pub fn remote_list_categories(state: &AppState) -> AppResult<Vec<Category>> {
     let config = client_runtime_config(state)?;
-    http_get_json(&config, "/api/master/categories")
+    collect_remote_pages(&config, "/api/master/categories")
 }
 
 pub fn remote_save_category(state: &AppState, request: SaveCategoryRequest) -> AppResult<Category> {
@@ -500,7 +545,7 @@ pub fn remote_set_category_enabled(
 
 pub fn remote_list_units(state: &AppState) -> AppResult<Vec<Unit>> {
     let config = client_runtime_config(state)?;
-    http_get_json(&config, "/api/master/units")
+    collect_remote_pages(&config, "/api/master/units")
 }
 
 pub fn remote_save_unit(state: &AppState, request: SaveUnitRequest) -> AppResult<Unit> {
@@ -528,7 +573,7 @@ pub fn remote_set_unit_enabled(
 
 pub fn remote_list_departments(state: &AppState) -> AppResult<Vec<Department>> {
     let config = client_runtime_config(state)?;
-    http_get_json(&config, "/api/master/departments")
+    collect_remote_pages(&config, "/api/master/departments")
 }
 
 pub fn remote_save_department(
@@ -559,7 +604,7 @@ pub fn remote_set_department_enabled(
 
 pub fn remote_list_suppliers(state: &AppState) -> AppResult<Vec<Supplier>> {
     let config = client_runtime_config(state)?;
-    http_get_json(&config, "/api/master/suppliers")
+    collect_remote_pages(&config, "/api/master/suppliers")
 }
 
 pub fn remote_list_supplier_purchase_records(
@@ -567,7 +612,7 @@ pub fn remote_list_supplier_purchase_records(
     supplier_id: String,
 ) -> AppResult<Vec<crate::domain::master_data::SupplierPurchaseRecord>> {
     let config = client_runtime_config(state)?;
-    http_get_json(
+    collect_remote_pages(
         &config,
         &format!(
             "/api/master/supplier/purchases?supplierId={}",
@@ -606,7 +651,7 @@ pub fn remote_list_items(state: &AppState, search: Option<String>) -> AppResult<
     } else {
         "/api/master/items".to_string()
     };
-    http_get_json(&config, &path)
+    collect_remote_pages(&config, &path)
 }
 
 pub fn remote_save_item(state: &AppState, request: SaveItemRequest) -> AppResult<Item> {
@@ -645,7 +690,7 @@ pub fn remote_list_budget_rules(
     } else {
         "/api/master/budget-rules".to_string()
     };
-    http_get_json(&config, &path)
+    collect_remote_pages(&config, &path)
 }
 
 pub fn remote_save_budget_rule(
@@ -677,14 +722,17 @@ pub fn remote_set_budget_rule_enabled(
 pub fn remote_get_report_bundle(state: &AppState, query: ReportQuery) -> AppResult<ReportBundle> {
     let config = client_runtime_config(state)?;
     let mut params = vec![format!("month={}", url_encode(&query.month))];
-    push_query_param(&mut params, "startDate", query.start_date);
-    push_query_param(&mut params, "endDate", query.end_date);
-    push_query_param(&mut params, "departmentId", query.department_id);
-    push_query_param(&mut params, "categoryId", query.category_id);
-    push_query_param(&mut params, "itemId", query.item_id);
-    push_query_param(&mut params, "supplierId", query.supplier_id);
-    let path = format!("/api/reports/monthly?{}", params.join("&"));
-    http_get_json(&config, &path)
+    push_query_param(&mut params, "startDate", query.start_date.clone());
+    push_query_param(&mut params, "endDate", query.end_date.clone());
+    push_query_param(&mut params, "departmentId", query.department_id.clone());
+    push_query_param(&mut params, "categoryId", query.category_id.clone());
+    push_query_param(&mut params, "itemId", query.item_id.clone());
+    push_query_param(&mut params, "supplierId", query.supplier_id.clone());
+    let base_path = format!("/api/reports/monthly?{}", params.join("&"));
+    crate::application::report_pagination::collect(&query.month, |section, cursor| {
+        let section_path = format!("{base_path}&section={}", url_encode(section));
+        http_get_json(&config, &page_path(&section_path, cursor))
+    })
 }
 
 pub fn remote_create_stocktake(
@@ -697,7 +745,7 @@ pub fn remote_create_stocktake(
 
 pub fn remote_list_stocktakes(state: &AppState) -> AppResult<Vec<StocktakeDocument>> {
     let config = client_runtime_config(state)?;
-    http_get_json(&config, "/api/stocktakes")
+    collect_remote_pages(&config, "/api/stocktakes")
 }
 
 pub fn remote_get_stocktake_detail(
@@ -729,7 +777,7 @@ pub fn remote_confirm_stocktake(
 
 pub fn remote_list_approval_requests(state: &AppState) -> AppResult<Vec<ApprovalRequest>> {
     let config = client_runtime_config(state)?;
-    http_get_json(&config, "/api/approvals")
+    collect_remote_pages(&config, "/api/approvals")
 }
 
 pub fn remote_create_approval_request(
@@ -755,7 +803,7 @@ pub fn remote_list_audit_logs(state: &AppState, limit: Option<i64>) -> AppResult
     } else {
         "/api/audit-logs".to_string()
     };
-    http_get_json(&config, &path)
+    collect_remote_pages(&config, &path)
 }
 
 pub fn remote_get_app_status(state: &AppState) -> AppResult<AppStatus> {
@@ -770,17 +818,17 @@ pub fn remote_get_system_settings(state: &AppState) -> AppResult<SystemSettings>
 
 pub fn remote_list_backup_records(state: &AppState) -> AppResult<Vec<BackupRecord>> {
     let config = client_runtime_config(state)?;
-    http_get_json(&config, "/api/backups")
+    collect_remote_pages(&config, "/api/backups")
 }
 
 pub fn remote_list_users(state: &AppState) -> AppResult<Vec<UserAccount>> {
     let config = client_runtime_config(state)?;
-    http_get_json(&config, "/api/users")
+    collect_remote_pages(&config, "/api/users")
 }
 
 pub fn remote_list_roles(state: &AppState) -> AppResult<Vec<Role>> {
     let config = client_runtime_config(state)?;
-    http_get_json(&config, "/api/roles")
+    collect_remote_pages(&config, "/api/roles")
 }
 
 pub fn remote_save_user(state: &AppState, request: SaveUserRequest) -> AppResult<UserAccount> {
@@ -795,7 +843,28 @@ pub fn remote_set_user_enabled(state: &AppState, request: SetUserEnabledRequest)
 
 pub fn remote_login(state: &AppState, request: LoginRequest) -> AppResult<CurrentUser> {
     let config = client_runtime_config(state)?;
-    http_post_json(&config, "/api/login", &request)
+    let response: crate::services::remote_session_service::LoginResponse =
+        http_post_json(&config, "/api/login", &request)?;
+    state
+        .host_service
+        .lock()
+        .map_err(|_| AppError::Validation("客户端会话状态异常".to_string()))?
+        .client_session_token = Some(response.session_token);
+    Ok(response.user)
+}
+
+pub fn remote_logout(state: &AppState) -> AppResult<()> {
+    let config = client_runtime_config(state)?;
+    if config.session_token.is_none() {
+        return Ok(());
+    }
+    http_post_json::<_, ()>(&config, "/api/logout", &())?;
+    state
+        .host_service
+        .lock()
+        .map_err(|_| AppError::Validation("客户端会话状态异常".to_string()))?
+        .client_session_token = None;
+    Ok(())
 }
 
 pub fn remote_change_password(state: &AppState, request: ChangePasswordRequest) -> AppResult<()> {
@@ -824,7 +893,9 @@ fn serve(
     runtime: Arc<Mutex<HostServiceRuntime>>,
     db: Db,
     app_version: String,
+    tls_config: Arc<rustls::ServerConfig>,
 ) {
+    let limiter = ConnectionLimiter::new(64, 8);
     loop {
         let running = runtime
             .lock()
@@ -834,12 +905,19 @@ fn serve(
             break;
         }
         match listener.accept() {
-            Ok((stream, _addr)) => {
+            Ok((stream, addr)) => {
+                let source = addr.ip().to_string();
+                let Some(permit) = limiter.try_acquire(&source) else {
+                    drop(stream);
+                    continue;
+                };
                 let runtime = Arc::clone(&runtime);
                 let db = db.clone_handle();
                 let version = app_version.clone();
+                let tls_config = Arc::clone(&tls_config);
                 thread::spawn(move || {
-                    let _ = handle_connection(stream, runtime, db, &version);
+                    let _permit = permit;
+                    let _ = handle_connection(stream, runtime, db, &version, tls_config);
                 });
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -874,9 +952,7 @@ fn serve_discovery(
                 if &buffer[..bytes] != b"ASTER_DISCOVER_V1" {
                     continue;
                 }
-                let schema_version = db
-                    .with_conn(|conn| repository::schema_version(conn))
-                    .unwrap_or_default();
+                let schema_version = db.with_conn(repository::schema_version).unwrap_or_default();
                 let response = DiscoveryResponse {
                     host_address: String::new(),
                     host_port: port,
@@ -898,35 +974,87 @@ fn serve_discovery(
 }
 
 fn handle_connection(
-    mut stream: TcpStream,
+    stream: TcpStream,
     runtime: Arc<Mutex<HostServiceRuntime>>,
     db: Db,
     app_version: &str,
+    tls_config: Arc<rustls::ServerConfig>,
 ) -> AppResult<()> {
-    if let Err(error) = handle_connection_inner(&mut stream, runtime, db, app_version) {
+    let monitor_socket = stream.try_clone()?;
+    let peer_ip = stream
+        .peer_addr()
+        .map(|addr| addr.ip().to_string())
+        .unwrap_or_else(|_| "-".to_string());
+    let mut stream = secure_transport::accept(stream, tls_config)?;
+    let result = match http_transport::read_request(&mut stream) {
+        Ok(request) => {
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let monitor_done = Arc::new(AtomicBool::new(false));
+            let monitor = start_disconnect_monitor(monitor_socket, &cancelled, &monitor_done);
+            let result = crate::db::connection::with_query_control(
+                Duration::from_secs(30),
+                Arc::clone(&cancelled),
+                || handle_connection_inner(&mut stream, runtime, db, app_version, peer_ip, request),
+            );
+            monitor_done.store(true, Ordering::Release);
+            let _ = monitor.join();
+            result
+        }
+        Err(error) => Err(error),
+    };
+    if let Err(error) = result {
+        let status = http_transport::error_status(&error);
+        let message = http_transport::public_error_message(&error);
         write_json(
             &mut stream,
-            400,
-            &serde_json::json!({ "message": error.to_string() }),
+            status,
+            &serde_json::json!({ "message": message }),
         )?;
     }
     Ok(())
 }
 
-fn handle_connection_inner(
-    stream: &mut TcpStream,
+fn start_disconnect_monitor(
+    socket: TcpStream,
+    cancelled: &Arc<AtomicBool>,
+    done: &Arc<AtomicBool>,
+) -> thread::JoinHandle<()> {
+    let cancelled = Arc::clone(cancelled);
+    let done = Arc::clone(done);
+    thread::spawn(move || {
+        let _ = socket.set_read_timeout(Some(Duration::from_millis(100)));
+        let mut byte = [0_u8; 1];
+        while !done.load(Ordering::Acquire) {
+            match socket.peek(&mut byte) {
+                Ok(0) => {
+                    cancelled.store(true, Ordering::Release);
+                    return;
+                }
+                Ok(_) => thread::sleep(Duration::from_millis(25)),
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        || error.kind() == std::io::ErrorKind::TimedOut => {}
+                Err(_) => {
+                    cancelled.store(true, Ordering::Release);
+                    return;
+                }
+            }
+        }
+    })
+}
+
+fn handle_connection_inner<S: Read + Write>(
+    stream: &mut S,
     runtime: Arc<Mutex<HostServiceRuntime>>,
     db: Db,
     app_version: &str,
+    peer_ip: String,
+    request: String,
 ) -> AppResult<()> {
-    let peer_ip = stream
-        .peer_addr()
-        .map(|addr| addr.ip().to_string())
-        .unwrap_or_else(|_| "-".to_string());
-    let request = read_http_request(stream)?;
-    let (method, path) = parse_request_line(&request);
+    let (method, path) = http_transport::request_line(&request);
     let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
     let auth_request = request.clone();
+    enforce_security_rate_limit(&runtime, &path, &peer_ip, &request, body)?;
 
     match (method.as_str(), path.as_str()) {
         ("GET", "/api/health") => {
@@ -937,16 +1065,25 @@ fn handle_connection_inner(
             let response = version_response(&db, app_version)?;
             write_json(stream, 200, &response)?;
         }
-        ("POST", "/api/pair") => {
-            let request: PairRequest = serde_json::from_str(body)
+        ("POST", "/api/pair/start") => {
+            let request: PairStartRequest = serde_json::from_str(body)
                 .map_err(|error| AppError::Validation(format!("配对请求解析失败：{error}")))?;
-            let response = pair_client(&runtime, &db, request, peer_ip)?;
+            let response = begin_pairing(&runtime, request, peer_ip)?;
             write_json(stream, 200, &response)?;
         }
-        ("GET", "/api/clients") => {
-            authenticate_request_and_touch_client(&request, &runtime, &db)?;
-            db.with_conn(|conn| require_remote_admin(&auth_request, conn))?;
-            let clients = db.with_conn(list_client_connections_from_conn)?;
+        ("POST", "/api/pair/finish") => {
+            let request: PairFinishRequest = serde_json::from_str(body)
+                .map_err(|error| AppError::Validation(format!("配对请求解析失败：{error}")))?;
+            let response = finish_pairing(&runtime, &db, request)?;
+            write_json(stream, 200, &response)?;
+        }
+        ("GET", path) if http_transport::route_matches(path, "/api/clients") => {
+            authenticate_request_and_load_client(&request, &runtime, &db)?;
+            let cursor = query_param(path, "cursor");
+            let clients = db.with_conn(|conn| {
+                require_remote_admin(&auth_request, conn)?;
+                crate::db::client_connection_repository::list_page(conn, cursor.as_deref())
+            })?;
             write_json(stream, 200, &clients)?;
         }
         ("GET", "/api/status") => {
@@ -971,27 +1108,30 @@ fn handle_connection_inner(
             })?;
             write_json(stream, 200, &response)?;
         }
-        ("GET", "/api/backups") => {
+        ("GET", path) if http_transport::route_matches(path, "/api/backups") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
+            let cursor = query_param(path, "cursor");
             let response = db.with_conn(|conn| {
                 require_remote_admin(&auth_request, conn)?;
-                crate::db::backup_repository::list_backup_records(conn)
+                crate::db::backup_repository::list_backup_records_page(conn, cursor.as_deref())
             })?;
             write_json(stream, 200, &response)?;
         }
-        ("GET", "/api/users") => {
+        ("GET", path) if http_transport::route_matches(path, "/api/users") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
+            let cursor = query_param(path, "cursor");
             let response = db.with_conn(|conn| {
                 require_remote_admin(&auth_request, conn)?;
-                crate::db::user_repository::list_users(conn)
+                crate::db::user_repository::list_users_page(conn, cursor.as_deref())
             })?;
             write_json(stream, 200, &response)?;
         }
-        ("GET", "/api/roles") => {
+        ("GET", path) if http_transport::route_matches(path, "/api/roles") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
+            let cursor = query_param(path, "cursor");
             let response = db.with_conn(|conn| {
                 require_remote_admin(&auth_request, conn)?;
-                crate::db::user_repository::list_roles(conn)
+                crate::db::user_repository::list_roles_page(conn, cursor.as_deref())
             })?;
             write_json(stream, 200, &response)?;
         }
@@ -1017,11 +1157,15 @@ fn handle_connection_inner(
         }
         ("POST", "/api/login") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
-            let request: LoginRequest = serde_json::from_str(body)
-                .map_err(|error| AppError::Validation(format!("登录请求解析失败：{error}")))?;
             let response =
-                db.with_conn(|conn| crate::services::user_service::login_on_conn(conn, request))?;
+                crate::services::remote_session_service::handle_login(&db, &auth_request, body)?;
+            clear_login_rate_limit(&runtime, &peer_ip, &request, body)?;
             write_json(stream, 200, &response)?;
+        }
+        ("POST", "/api/logout") => {
+            authenticate_request_and_touch_client(&request, &runtime, &db)?;
+            crate::services::remote_session_service::handle_logout(&db, &request)?;
+            write_json(stream, 200, &())?;
         }
         ("POST", "/api/user/password") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
@@ -1059,16 +1203,17 @@ fn handle_connection_inner(
             })?;
             write_json(stream, 200, &())?;
         }
-        ("GET", path) if path.starts_with("/api/audit-logs") => {
+        ("GET", path) if http_transport::route_matches(path, "/api/audit-logs") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
             let limit = query_param(path, "limit").and_then(|value| value.parse::<i64>().ok());
+            let cursor = query_param(path, "cursor");
             let response = db.with_conn(|conn| {
                 require_remote_admin(&auth_request, conn)?;
-                repository::list_audit_logs(conn, limit.unwrap_or(100))
+                repository::list_audit_logs_page(conn, limit.unwrap_or(100), cursor.as_deref())
             })?;
             write_json(stream, 200, &response)?;
         }
-        ("GET", path) if path.starts_with("/api/stock/documents") => {
+        ("GET", path) if http_transport::route_matches(path, "/api/stock/documents") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
             let query = StockDocumentQuery {
                 document_type: query_param(path, "documentType"),
@@ -1080,15 +1225,16 @@ fn handle_connection_inner(
                 handler: query_param(path, "handler"),
                 search: query_param(path, "search"),
             };
-            let response = db.with_conn(|conn| {
+            let cursor = query_param(path, "cursor");
+            let response: Page<StockDocument> = db.with_conn(|conn| {
                 let current = require_remote_permission(&auth_request, conn, "view_reports")?;
                 let mut query = query;
                 query.department_id = remote_department_scope(&current)?.or(query.department_id);
-                stock_repository::list_stock_documents(conn, query)
+                paginated_stock_repository::list_documents_page(conn, query, cursor.as_deref())
             })?;
             write_json(stream, 200, &response)?;
         }
-        ("GET", path) if path.starts_with("/api/stock/document?") => {
+        ("GET", path) if http_transport::route_matches(path, "/api/stock/document") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
             let document_id = query_param(path, "documentId")
                 .ok_or_else(|| AppError::Validation("缺少单据 ID".to_string()))?;
@@ -1098,7 +1244,7 @@ fn handle_connection_inner(
             })?;
             write_json(stream, 200, &response)?;
         }
-        ("GET", path) if path.starts_with("/api/stock/balances") => {
+        ("GET", path) if http_transport::route_matches(path, "/api/stock/balances") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
             let query = StockBalanceQuery {
                 search: query_param(path, "search"),
@@ -1106,23 +1252,25 @@ fn handle_connection_inner(
                 item_id: query_param(path, "itemId"),
                 stock_status: query_param(path, "stockStatus"),
             };
+            let cursor = query_param(path, "cursor");
             let response = db.with_conn(|conn| {
                 require_remote_permission(&auth_request, conn, "view_reports")?;
-                stock_repository::list_stock_balances(conn, query)
+                stock_repository::list_stock_balances_page(conn, query, cursor.as_deref())
             })?;
             write_json(stream, 200, &response)?;
         }
-        ("GET", path) if path.starts_with("/api/stock/batches") => {
+        ("GET", path) if http_transport::route_matches(path, "/api/stock/batches") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
             let item_id = query_param(path, "itemId")
                 .ok_or_else(|| AppError::Validation("缺少物品 ID".to_string()))?;
+            let cursor = query_param(path, "cursor");
             let response = db.with_conn(|conn| {
                 require_remote_permission(&auth_request, conn, "view_reports")?;
-                stock_repository::list_stock_batches(conn, &item_id)
+                stock_repository::list_stock_batches_page(conn, &item_id, cursor.as_deref())
             })?;
             write_json(stream, 200, &response)?;
         }
-        ("GET", path) if path.starts_with("/api/stock/movements") => {
+        ("GET", path) if http_transport::route_matches(path, "/api/stock/movements") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
             let query = StockMovementQuery {
                 search: query_param(path, "search"),
@@ -1131,11 +1279,12 @@ fn handle_connection_inner(
                 direction: query_param(path, "direction"),
                 movement_type: query_param(path, "movementType"),
             };
-            let response = db.with_conn(|conn| {
+            let cursor = query_param(path, "cursor");
+            let response: Page<StockMovementRow> = db.with_conn(|conn| {
                 let current = require_remote_permission(&auth_request, conn, "view_reports")?;
                 let mut query = query;
                 query.department_id = remote_department_scope(&current)?.or(query.department_id);
-                stock_repository::list_stock_movements(conn, query)
+                paginated_stock_repository::list_movements_page(conn, query, cursor.as_deref())
             })?;
             write_json(stream, 200, &response)?;
         }
@@ -1214,11 +1363,12 @@ fn handle_connection_inner(
             })?;
             write_json(stream, 200, &response)?;
         }
-        ("GET", "/api/master/categories") => {
+        ("GET", path) if http_transport::route_matches(path, "/api/master/categories") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
+            let cursor = query_param(path, "cursor");
             let response = db.with_conn(|conn| {
                 require_remote_permission(&auth_request, conn, "view_reports")?;
-                master_data_repository::list_categories(conn)
+                master_data_repository::list_categories_page(conn, cursor.as_deref())
             })?;
             write_json(stream, 200, &response)?;
         }
@@ -1263,11 +1413,12 @@ fn handle_connection_inner(
             })?;
             write_json(stream, 200, &())?;
         }
-        ("GET", "/api/master/units") => {
+        ("GET", path) if http_transport::route_matches(path, "/api/master/units") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
+            let cursor = query_param(path, "cursor");
             let response = db.with_conn(|conn| {
                 require_remote_permission(&auth_request, conn, "view_reports")?;
-                master_data_repository::list_units(conn)
+                master_data_repository::list_units_page(conn, cursor.as_deref())
             })?;
             write_json(stream, 200, &response)?;
         }
@@ -1306,11 +1457,12 @@ fn handle_connection_inner(
             })?;
             write_json(stream, 200, &())?;
         }
-        ("GET", "/api/master/departments") => {
+        ("GET", path) if http_transport::route_matches(path, "/api/master/departments") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
+            let cursor = query_param(path, "cursor");
             let response = db.with_conn(|conn| {
                 require_remote_permission(&auth_request, conn, "view_reports")?;
-                master_data_repository::list_departments(conn)
+                master_data_repository::list_departments_page(conn, cursor.as_deref())
             })?;
             write_json(stream, 200, &response)?;
         }
@@ -1355,21 +1507,27 @@ fn handle_connection_inner(
             })?;
             write_json(stream, 200, &())?;
         }
-        ("GET", "/api/master/suppliers") => {
+        ("GET", path) if http_transport::route_matches(path, "/api/master/suppliers") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
+            let cursor = query_param(path, "cursor");
             let response = db.with_conn(|conn| {
                 require_remote_permission(&auth_request, conn, "view_reports")?;
-                master_data_repository::list_suppliers(conn)
+                master_data_repository::list_suppliers_page(conn, cursor.as_deref())
             })?;
             write_json(stream, 200, &response)?;
         }
-        ("GET", path) if path.starts_with("/api/master/supplier/purchases") => {
+        ("GET", path) if http_transport::route_matches(path, "/api/master/supplier/purchases") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
             let supplier_id = query_param(path, "supplierId")
                 .ok_or_else(|| AppError::Validation("缺少供应商 ID".to_string()))?;
+            let cursor = query_param(path, "cursor");
             let response = db.with_conn(|conn| {
                 require_remote_permission(&auth_request, conn, "view_reports")?;
-                master_data_repository::list_supplier_purchase_records(conn, &supplier_id)
+                master_data_repository::list_supplier_purchase_records_page(
+                    conn,
+                    &supplier_id,
+                    cursor.as_deref(),
+                )
             })?;
             write_json(stream, 200, &response)?;
         }
@@ -1415,12 +1573,13 @@ fn handle_connection_inner(
             })?;
             write_json(stream, 200, &())?;
         }
-        ("GET", path) if path.starts_with("/api/master/items") => {
+        ("GET", path) if http_transport::route_matches(path, "/api/master/items") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
             let search = query_param(path, "search");
+            let cursor = query_param(path, "cursor");
             let response = db.with_conn(|conn| {
                 require_remote_permission(&auth_request, conn, "view_reports")?;
-                master_data_repository::list_items(conn, search)
+                master_data_repository::list_items_page(conn, search, cursor.as_deref())
             })?;
             write_json(stream, 200, &response)?;
         }
@@ -1459,12 +1618,13 @@ fn handle_connection_inner(
             })?;
             write_json(stream, 200, &())?;
         }
-        ("GET", path) if path.starts_with("/api/master/budget-rules") => {
+        ("GET", path) if http_transport::route_matches(path, "/api/master/budget-rules") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
             let month = query_param(path, "month");
+            let cursor = query_param(path, "cursor");
             let response = db.with_conn(|conn| {
                 require_remote_admin(&auth_request, conn)?;
-                master_data_repository::list_budget_rules(conn, month)
+                master_data_repository::list_budget_rules_page(conn, month, cursor.as_deref())
             })?;
             write_json(stream, 200, &response)?;
         }
@@ -1509,7 +1669,7 @@ fn handle_connection_inner(
             })?;
             write_json(stream, 200, &())?;
         }
-        ("GET", path) if path.starts_with("/api/reports/monthly") => {
+        ("GET", path) if http_transport::route_matches(path, "/api/reports/monthly") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
             let month = query_param(path, "month")
                 .ok_or_else(|| AppError::Validation("报表月份不能为空".to_string()))?;
@@ -1531,10 +1691,13 @@ fn handle_connection_inner(
             let category_id = query_param(path, "categoryId");
             let item_id = query_param(path, "itemId");
             let supplier_id = query_param(path, "supplierId");
+            let section = query_param(path, "section")
+                .ok_or_else(|| AppError::Validation("报表分页 section 不能为空".to_string()))?;
+            let cursor = query_param(path, "cursor");
             let response = db.with_conn(|conn| {
                 let current = require_remote_permission(&auth_request, conn, "view_reports")?;
                 let scoped_department_id = remote_department_scope(&current)?.or(department_id);
-                report_repository::get_report_bundle(
+                report_repository::get_report_bundle_page(
                     conn,
                     &ReportQuery {
                         month,
@@ -1545,15 +1708,18 @@ fn handle_connection_inner(
                         item_id,
                         supplier_id,
                     },
+                    &section,
+                    cursor.as_deref(),
                 )
             })?;
             write_json(stream, 200, &response)?;
         }
-        ("GET", "/api/stocktakes") => {
+        ("GET", path) if http_transport::route_matches(path, "/api/stocktakes") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
+            let cursor = query_param(path, "cursor");
             let response = db.with_conn(|conn| {
                 require_remote_permission(&auth_request, conn, "view_reports")?;
-                stocktake_repository::list_stocktakes(conn)
+                stocktake_repository::list_stocktakes_page(conn, cursor.as_deref())
             })?;
             write_json(stream, 200, &response)?;
         }
@@ -1572,7 +1738,7 @@ fn handle_connection_inner(
             })?;
             write_json(stream, 200, &response)?;
         }
-        ("GET", path) if path.starts_with("/api/stocktake?") => {
+        ("GET", path) if http_transport::route_matches(path, "/api/stocktake") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
             let stocktake_id = query_param(path, "stocktakeId")
                 .ok_or_else(|| AppError::Validation("盘点单不能为空".to_string()))?;
@@ -1604,11 +1770,12 @@ fn handle_connection_inner(
             })?;
             write_json(stream, 200, &response)?;
         }
-        ("GET", "/api/approvals") => {
+        ("GET", path) if http_transport::route_matches(path, "/api/approvals") => {
             authenticate_request_and_touch_client(&request, &runtime, &db)?;
+            let cursor = query_param(path, "cursor");
             let response = db.with_conn(|conn| {
                 require_remote_admin(&auth_request, conn)?;
-                approval_repository::list_approval_requests(conn)
+                approval_repository::list_approval_requests_page(conn, cursor.as_deref())
             })?;
             write_json(stream, 200, &response)?;
         }
@@ -1653,12 +1820,72 @@ fn handle_connection_inner(
     Ok(())
 }
 
+fn enforce_security_rate_limit(
+    runtime: &Arc<Mutex<HostServiceRuntime>>,
+    path: &str,
+    peer_ip: &str,
+    request: &str,
+    body: &str,
+) -> AppResult<()> {
+    let Some((operation, source)) = security_limit_key(path, peer_ip, request, body) else {
+        return Ok(());
+    };
+    runtime
+        .lock()
+        .map_err(|_| AppError::Validation("主机安全状态异常".to_string()))?
+        .security_rate_limiter
+        .check(operation, &source)
+}
+
+fn clear_login_rate_limit(
+    runtime: &Arc<Mutex<HostServiceRuntime>>,
+    peer_ip: &str,
+    request: &str,
+    body: &str,
+) -> AppResult<()> {
+    let Some((operation, source)) = security_limit_key("/api/login", peer_ip, request, body) else {
+        return Ok(());
+    };
+    runtime
+        .lock()
+        .map_err(|_| AppError::Validation("主机安全状态异常".to_string()))?
+        .security_rate_limiter
+        .clear(operation, &source);
+    Ok(())
+}
+
+fn security_limit_key<'a>(
+    path: &'a str,
+    peer_ip: &str,
+    request: &str,
+    body: &str,
+) -> Option<(&'a str, String)> {
+    let operation = match path {
+        "/api/pair/start" | "/api/pair/finish" => "pair",
+        "/api/login" => "login",
+        "/api/password-reset/request" | "/api/password-reset/confirm" => "password-reset",
+        _ => return None,
+    };
+    let device = header_value(request, "X-Aster-Client-Token").unwrap_or_default();
+    let username = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.get("username")?.as_str().map(str::to_lowercase))
+        .unwrap_or_default();
+    let source = match operation {
+        "login" => format!("{peer_ip}:{device}:{username}"),
+        "password-reset" => format!("{peer_ip}:{username}"),
+        _ => peer_ip.to_string(),
+    };
+    Some((operation, source))
+}
+
 #[derive(Clone)]
 struct ClientRuntimeConfig {
     address: String,
     port: u16,
     token: String,
-    user_id: Option<String>,
+    session_token: Option<String>,
+    certificate_fingerprint: String,
 }
 
 fn client_runtime_config(state: &AppState) -> AppResult<ClientRuntimeConfig> {
@@ -1673,11 +1900,23 @@ fn client_runtime_config(state: &AppState) -> AppResult<ClientRuntimeConfig> {
         .client_token
         .filter(|token| !token.trim().is_empty())
         .ok_or_else(|| AppError::Validation("未完成主机配对，请先在设置中配对".to_string()))?;
+    let session_token = state
+        .host_service
+        .lock()
+        .map_err(|_| AppError::Validation("客户端会话状态异常".to_string()))?
+        .client_session_token
+        .clone();
+    let certificate_fingerprint = state
+        .db
+        .with_conn(|conn| repository::get_setting(conn, "host_certificate_fingerprint"))?
+        .filter(|fingerprint| !fingerprint.trim().is_empty())
+        .ok_or_else(|| AppError::Validation("主机证书未固定，请重新配对".to_string()))?;
     Ok(ClientRuntimeConfig {
         address,
         port: config.host_port,
         token,
-        user_id: crate::services::user_service::current_user(state)?.map(|user| user.id),
+        session_token,
+        certificate_fingerprint,
     })
 }
 
@@ -1703,16 +1942,7 @@ fn write_host_audit(
 }
 
 fn remote_current_user(request: &str, conn: &rusqlite::Connection) -> AppResult<CurrentUser> {
-    let user_id = header_value(request, "X-Aster-User-Id")
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| AppError::Validation("远程请求缺少当前用户".to_string()))?;
-    let Some((user, _hash)) = crate::db::user_repository::find_user_by_id(conn, &user_id)? else {
-        return Err(AppError::Validation("远程当前用户不存在".to_string()));
-    };
-    if !user.enabled {
-        return Err(AppError::Validation("远程当前用户已停用".to_string()));
-    }
-    Ok(to_remote_current_user(user))
+    crate::services::remote_session_service::current_user(request, conn)
 }
 
 fn require_remote_admin(request: &str, conn: &rusqlite::Connection) -> AppResult<CurrentUser> {
@@ -1720,7 +1950,7 @@ fn require_remote_admin(request: &str, conn: &rusqlite::Connection) -> AppResult
     if current.roles.iter().any(|role| role.code == "admin") {
         Ok(current)
     } else {
-        Err(AppError::Validation("需要管理员权限".to_string()))
+        Err(AppError::Forbidden("需要管理员权限".to_string()))
     }
 }
 
@@ -1737,7 +1967,7 @@ fn require_remote_permission(
     {
         Ok(current)
     } else {
-        Err(AppError::Validation(format!("缺少权限：{permission}")))
+        Err(AppError::Forbidden(format!("缺少权限：{permission}")))
     }
 }
 
@@ -1761,74 +1991,6 @@ fn remote_department_scope(current: &CurrentUser) -> AppResult<Option<String>> {
     } else {
         Ok(None)
     }
-}
-
-fn to_remote_current_user(user: UserAccount) -> CurrentUser {
-    let mut permissions = Vec::new();
-    for role in &user.roles {
-        match role.code.as_str() {
-            "admin" => permissions.extend([
-                "manage_users",
-                "manage_settings",
-                "write_stock",
-                "view_reports",
-                "dangerous_operations",
-            ]),
-            "warehouse" => permissions.extend(["write_stock", "view_reports"]),
-            "department_viewer" => permissions.extend(["view_reports"]),
-            "readonly" => permissions.extend(["view_reports"]),
-            _ => {}
-        }
-    }
-    permissions.sort();
-    permissions.dedup();
-    CurrentUser {
-        id: user.id,
-        username: user.username,
-        display_name: user.display_name,
-        department_id: user.department_id,
-        department_name: user.department_name,
-        roles: user.roles,
-        permissions: permissions.into_iter().map(str::to_string).collect(),
-    }
-}
-
-fn read_http_request(stream: &mut TcpStream) -> AppResult<String> {
-    let mut buffer = Vec::new();
-    let mut temp = [0_u8; 4096];
-    let header_end;
-    loop {
-        let bytes = stream.read(&mut temp)?;
-        if bytes == 0 {
-            header_end = buffer.len();
-            break;
-        }
-        buffer.extend_from_slice(&temp[..bytes]);
-        if let Some(index) = find_header_end(&buffer) {
-            header_end = index;
-            break;
-        }
-        if buffer.len() > 64 * 1024 {
-            return Err(AppError::Validation("HTTP 请求头过大".to_string()));
-        }
-    }
-    let header_text = String::from_utf8_lossy(&buffer[..header_end]).to_string();
-    let content_length = header_value(&header_text, "Content-Length")
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(0);
-    let body_start = header_end + 4;
-    while buffer.len().saturating_sub(body_start) < content_length {
-        let bytes = stream.read(&mut temp)?;
-        if bytes == 0 {
-            break;
-        }
-        buffer.extend_from_slice(&temp[..bytes]);
-    }
-    Ok(String::from_utf8_lossy(&buffer).to_string())
-}
-
-fn find_header_end(buffer: &[u8]) -> Option<usize> {
-    buffer.windows(4).position(|window| window == b"\r\n\r\n")
 }
 
 fn health_response(db: &Db, app_version: &str) -> AppResult<HealthResponse> {
@@ -1859,34 +2021,55 @@ fn version_response(db: &Db, app_version: &str) -> AppResult<VersionResponse> {
     })
 }
 
-fn pair_client(
+fn begin_pairing(
+    runtime: &Arc<Mutex<HostServiceRuntime>>,
+    request: PairStartRequest,
+    client_ip: String,
+) -> AppResult<PairStartResponse> {
+    let mut runtime = runtime
+        .lock()
+        .map_err(|_| AppError::Validation("主机配对状态异常".to_string()))?;
+    let fingerprint = runtime.certificate_fingerprint.clone();
+    runtime.pairing.begin(request, client_ip, &fingerprint)
+}
+
+fn finish_pairing(
     runtime: &Arc<Mutex<HostServiceRuntime>>,
     db: &Db,
-    request: PairRequest,
-    client_ip: String,
-) -> AppResult<PairResponse> {
+    request: PairFinishRequest,
+) -> AppResult<PairFinishResponse> {
+    let verified = {
+        let mut runtime = runtime
+            .lock()
+            .map_err(|_| AppError::Validation("主机配对状态异常".to_string()))?;
+        let verified = runtime.pairing.finish(request)?;
+        runtime.pair_code = runtime.pairing.code().map(str::to_owned);
+        verified
+    };
+    register_paired_client(runtime, db, verified)
+}
+
+fn register_paired_client(
+    runtime: &Arc<Mutex<HostServiceRuntime>>,
+    db: &Db,
+    verified: VerifiedPairing,
+) -> AppResult<PairFinishResponse> {
     let id = Uuid::new_v4().to_string();
     let token = Uuid::new_v4().to_string();
     let now = chrono::Local::now().to_rfc3339();
     let client = ClientConnectionInfo {
         id: id.clone(),
-        client_name: request.client_name,
-        client_device_id: request.client_device_id,
-        client_ip,
-        app_version: request.app_version,
+        client_name: verified.client_name,
+        client_device_id: verified.client_device_id,
+        client_ip: verified.client_ip,
+        app_version: verified.app_version,
         status: "paired".to_string(),
         last_seen_at: now,
     };
     {
-        let mut runtime = runtime.lock().expect("host runtime mutex poisoned");
-        let expected = runtime.pair_code.clone().unwrap_or_default();
-        if request.pair_code.trim() != expected {
-            return Ok(PairResponse {
-                ok: false,
-                token: None,
-                message: "配对码错误".to_string(),
-            });
-        }
+        let mut runtime = runtime
+            .lock()
+            .map_err(|_| AppError::Validation("主机配对状态异常".to_string()))?;
         runtime.clients.insert(
             token.clone(),
             ClientConnectionInfo {
@@ -1894,12 +2077,10 @@ fn pair_client(
                 ..client.clone()
             },
         );
-        runtime.pair_code = Some(generate_pair_code());
     }
     db.with_conn(|conn| upsert_client_connection(conn, &client, &token_hash(&token)))?;
-    Ok(PairResponse {
-        ok: true,
-        token: Some(token),
+    Ok(PairFinishResponse {
+        token,
         message: "配对成功".to_string(),
     })
 }
@@ -1916,39 +2097,6 @@ fn status_from_runtime(runtime: &HostServiceRuntime) -> HostServiceStatus {
         } else {
             "主机服务未启动".to_string()
         },
-    }
-}
-
-fn parse_request_line(request: &str) -> (String, String) {
-    let mut parts = request
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .split_whitespace();
-    (
-        parts.next().unwrap_or_default().to_string(),
-        parts.next().unwrap_or_default().to_string(),
-    )
-}
-
-fn query_param(path: &str, key: &str) -> Option<String> {
-    let query = path.split_once('?')?.1;
-    for pair in query.split('&') {
-        let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
-        if name == key {
-            return Some(url_decode(value));
-        }
-    }
-    None
-}
-
-fn push_query_param(params: &mut Vec<String>, key: &str, value: Option<String>) {
-    let Some(value) = value else {
-        return;
-    };
-    let value = value.trim();
-    if !value.is_empty() {
-        params.push(format!("{key}={}", url_encode(value)));
     }
 }
 
@@ -1985,8 +2133,8 @@ fn validate_pairing_request(
     client_device_id: &str,
 ) -> AppResult<()> {
     let code = pair_code.trim();
-    if code.len() != 6 || !code.chars().all(|item| item.is_ascii_digit()) {
-        return Err(AppError::Validation("配对码必须是 6 位数字".to_string()));
+    if code.len() != 12 || !code.chars().all(|item| item.is_ascii_digit()) {
+        return Err(AppError::Validation("配对码必须是 12 位数字".to_string()));
     }
     if client_name.trim().is_empty() {
         return Err(AppError::Validation("客户端名称不能为空".to_string()));
@@ -1999,14 +2147,14 @@ fn validate_pairing_request(
 
 fn authenticate_request(request: &str, runtime: &Arc<Mutex<HostServiceRuntime>>) -> AppResult<()> {
     let token = header_value(request, "X-Aster-Client-Token")
-        .ok_or_else(|| AppError::Validation("缺少客户端连接凭据".to_string()))?;
+        .ok_or_else(|| AppError::Unauthorized("缺少客户端连接凭据".to_string()))?;
     let mut runtime = runtime.lock().expect("host runtime mutex poisoned");
     let Some(client) = runtime
         .clients
         .values_mut()
         .find(|client| client.id == token)
     else {
-        return Err(AppError::Validation(
+        return Err(AppError::Unauthorized(
             "客户端连接凭据无效，请重新配对".to_string(),
         ));
     };
@@ -2020,13 +2168,23 @@ fn authenticate_request_and_touch_client(
     runtime: &Arc<Mutex<HostServiceRuntime>>,
     db: &Db,
 ) -> AppResult<()> {
+    let client_device_id = authenticate_request_and_load_client(request, runtime, db)?;
+    db.with_conn(|conn| touch_client_connection(conn, &client_device_id, "online"))?;
+    Ok(())
+}
+
+fn authenticate_request_and_load_client(
+    request: &str,
+    runtime: &Arc<Mutex<HostServiceRuntime>>,
+    db: &Db,
+) -> AppResult<String> {
     let token = header_value(request, "X-Aster-Client-Token")
-        .ok_or_else(|| AppError::Validation("缺少客户端连接凭据".to_string()))?;
+        .ok_or_else(|| AppError::Unauthorized("缺少客户端连接凭据".to_string()))?;
     if authenticate_request(request, runtime).is_err() {
         let Some(persisted_client) =
             db.with_conn(|conn| find_client_connection_by_token_hash(conn, &token_hash(&token)))?
         else {
-            return Err(AppError::Validation(
+            return Err(AppError::Unauthorized(
                 "客户端连接凭据无效，请重新配对".to_string(),
             ));
         };
@@ -2041,44 +2199,15 @@ fn authenticate_request_and_touch_client(
             },
         );
     }
-    let client_device_id = {
+    Ok({
         let runtime = runtime.lock().expect("host runtime mutex poisoned");
         runtime
             .clients
             .values()
             .find(|client| client.id == token)
             .map(|client| client.client_device_id.clone())
-            .ok_or_else(|| AppError::Validation("客户端连接凭据无效，请重新配对".to_string()))?
-    };
-    db.with_conn(|conn| touch_client_connection(conn, &client_device_id, "online"))?;
-    Ok(())
-}
-
-fn list_client_connections_from_conn(
-    conn: &rusqlite::Connection,
-) -> AppResult<Vec<ClientConnectionInfo>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, client_name, client_device_id, COALESCE(client_ip, ''),
-                COALESCE(app_version, ''), status, last_seen_at
-         FROM client_connections
-         ORDER BY last_seen_at DESC, updated_at DESC",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok(ClientConnectionInfo {
-            id: row.get(0)?,
-            client_name: row.get(1)?,
-            client_device_id: row.get(2)?,
-            client_ip: row.get(3)?,
-            app_version: row.get(4)?,
-            status: row.get(5)?,
-            last_seen_at: row.get(6)?,
-        })
-    })?;
-    let mut clients = Vec::new();
-    for row in rows {
-        clients.push(row?);
-    }
-    Ok(clients)
+            .ok_or_else(|| AppError::Unauthorized("客户端连接凭据无效，请重新配对".to_string()))?
+    })
 }
 
 fn upsert_client_connection(
@@ -2190,38 +2319,39 @@ fn remove_client_connection_from_conn(
 }
 
 fn token_hash(token: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(token.as_bytes());
-    format!("{:x}", hasher.finalize())
+    crate::services::remote_session_service::token_hash(token)
 }
 
 fn header_value(request: &str, key: &str) -> Option<String> {
-    request.lines().skip(1).find_map(|line| {
-        let (name, value) = line.split_once(':')?;
-        if name.eq_ignore_ascii_case(key) {
-            Some(value.trim().to_string())
-        } else {
-            None
-        }
-    })
+    http_transport::header_value(request, key)
 }
 
 fn http_get_json<T: for<'de> Deserialize<'de>>(
     config: &ClientRuntimeConfig,
     path: &str,
 ) -> AppResult<T> {
-    let mut stream = TcpStream::connect((config.address.as_str(), config.port))
-        .map_err(|error| AppError::Validation(format!("连接主机失败：{error}")))?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(8)))
-        .map_err(|error| AppError::Validation(format!("连接超时设置失败：{error}")))?;
+    let mut stream = secure_transport::connect(
+        &config.address,
+        config.port,
+        Some(&config.certificate_fingerprint),
+    )?
+    .stream;
     let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: aster\r\nX-Aster-Client-Token: {}\r\nX-Aster-User-Id: {}\r\nConnection: close\r\n\r\n",
+        "GET {path} HTTP/1.1\r\nHost: aster\r\nX-Aster-Client-Token: {}\r\n{}Connection: close\r\n\r\n",
         config.token,
-        config.user_id.as_deref().unwrap_or("")
+        session_header(config)
     );
     stream.write_all(request.as_bytes())?;
-    read_http_json(stream)
+    http_transport::read_json_response(stream)
+}
+
+fn collect_remote_pages<T: for<'de> Deserialize<'de>>(
+    config: &ClientRuntimeConfig,
+    path: &str,
+) -> AppResult<Vec<T>> {
+    crate::application::remote_pagination::collect_all(|cursor| {
+        http_get_json(config, &page_path(path, cursor))
+    })
 }
 
 fn http_post_json<T: Serialize, R: for<'de> Deserialize<'de>>(
@@ -2231,120 +2361,54 @@ fn http_post_json<T: Serialize, R: for<'de> Deserialize<'de>>(
 ) -> AppResult<R> {
     let body = serde_json::to_string(body)
         .map_err(|error| AppError::Validation(format!("JSON 序列化失败：{error}")))?;
-    let mut stream = TcpStream::connect((config.address.as_str(), config.port))
-        .map_err(|error| AppError::Validation(format!("连接主机失败：{error}")))?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(8)))
-        .map_err(|error| AppError::Validation(format!("连接超时设置失败：{error}")))?;
+    let mut stream = secure_transport::connect(
+        &config.address,
+        config.port,
+        Some(&config.certificate_fingerprint),
+    )?
+    .stream;
     let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: aster\r\nX-Aster-Client-Token: {}\r\nX-Aster-User-Id: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        "POST {path} HTTP/1.1\r\nHost: aster\r\nX-Aster-Client-Token: {}\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         config.token,
-        config.user_id.as_deref().unwrap_or(""),
-        body.as_bytes().len(),
+        session_header(config),
+        body.len(),
         body
     );
     stream.write_all(request.as_bytes())?;
-    read_http_json(stream)
+    http_transport::read_json_response(stream)
 }
 
-fn http_post_json_without_token<T: Serialize, R: for<'de> Deserialize<'de>>(
+fn session_header(config: &ClientRuntimeConfig) -> String {
+    config
+        .session_token
+        .as_deref()
+        .map(|token| format!("X-Aster-Session-Token: {token}\r\n"))
+        .unwrap_or_default()
+}
+
+fn http_post_json_for_pairing<T: Serialize, R: for<'de> Deserialize<'de>>(
     address: &str,
     port: u16,
     path: &str,
     body: &T,
-) -> AppResult<R> {
+    expected_fingerprint: Option<&str>,
+) -> AppResult<(R, String)> {
     let body = serde_json::to_string(body)
         .map_err(|error| AppError::Validation(format!("JSON 序列化失败：{error}")))?;
-    let mut stream = TcpStream::connect((address, port))
-        .map_err(|error| AppError::Validation(format!("连接主机失败：{error}")))?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(8)))
-        .map_err(|error| AppError::Validation(format!("连接超时设置失败：{error}")))?;
+    let connected = secure_transport::connect(address, port, expected_fingerprint)?;
+    let fingerprint = connected.fingerprint;
+    let mut stream = connected.stream;
     let request = format!(
         "POST {path} HTTP/1.1\r\nHost: aster\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        body.as_bytes().len(),
+        body.len(),
         body
     );
     stream.write_all(request.as_bytes())?;
-    read_http_json(stream)
+    Ok((http_transport::read_json_response(stream)?, fingerprint))
 }
 
-fn read_http_json<T: for<'de> Deserialize<'de>>(mut stream: TcpStream) -> AppResult<T> {
-    let mut response = String::new();
-    stream.read_to_string(&mut response)?;
-    let (head, body) = response
-        .split_once("\r\n\r\n")
-        .ok_or_else(|| AppError::Validation("主机响应格式异常".to_string()))?;
-    if !head.starts_with("HTTP/1.1 200") {
-        let message = serde_json::from_str::<serde_json::Value>(body)
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("message")
-                    .and_then(|message| message.as_str())
-                    .map(str::to_string)
-            })
-            .unwrap_or_else(|| body.to_string());
-        return Err(AppError::Validation(format!("主机返回错误：{message}")));
-    }
-    serde_json::from_str(body)
-        .map_err(|error| AppError::Validation(format!("主机响应解析失败：{error}")))
-}
-
-fn url_encode(value: &str) -> String {
-    value
-        .bytes()
-        .flat_map(|byte| match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                vec![byte as char]
-            }
-            b' ' => vec!['+'],
-            other => format!("%{other:02X}").chars().collect(),
-        })
-        .collect()
-}
-
-fn url_decode(value: &str) -> String {
-    let mut bytes = Vec::new();
-    let mut chars = value.as_bytes().iter().copied().peekable();
-    while let Some(byte) = chars.next() {
-        if byte == b'%' {
-            let hi = chars.next();
-            let lo = chars.next();
-            if let (Some(hi), Some(lo)) = (hi, lo) {
-                if let Ok(hex) = std::str::from_utf8(&[hi, lo]) {
-                    if let Ok(decoded) = u8::from_str_radix(hex, 16) {
-                        bytes.push(decoded);
-                        continue;
-                    }
-                }
-            }
-            bytes.push(byte);
-        } else if byte == b'+' {
-            bytes.push(b' ');
-        } else {
-            bytes.push(byte);
-        }
-    }
-    String::from_utf8_lossy(&bytes).to_string()
-}
-
-fn write_json<T: Serialize>(stream: &mut TcpStream, status: u16, body: &T) -> AppResult<()> {
-    let text = serde_json::to_string(body)
-        .map_err(|error| AppError::Validation(format!("JSON 序列化失败：{error}")))?;
-    let status_text = if status == 200 { "OK" } else { "Not Found" };
-    let response = format!(
-        "HTTP/1.1 {status} {status_text}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        text.as_bytes().len(),
-        text
-    );
-    stream.write_all(response.as_bytes())?;
-    Ok(())
-}
-
-fn generate_pair_code() -> String {
-    let value = (Uuid::new_v4().as_u128() % 900_000) + 100_000;
-    value.to_string()
+fn write_json<T: Serialize>(stream: &mut impl Write, status: u16, body: &T) -> AppResult<()> {
+    http_transport::write_json(stream, status, body)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -2378,23 +2442,6 @@ struct DiscoveryResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct PairRequest {
-    pair_code: String,
-    client_name: String,
-    client_device_id: String,
-    app_version: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PairResponse {
-    ok: bool,
-    token: Option<String>,
-    message: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct SetEnabledRequest {
     id: String,
     enabled: bool,
@@ -2403,74 +2450,24 @@ struct SetEnabledRequest {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
     use std::sync::{Arc, Mutex};
-    use std::thread;
 
     use rusqlite::Connection;
 
     use crate::app::paths::AppPaths;
-    use crate::db::connection::Db;
     use crate::db::migrations;
 
     use super::*;
 
-    fn test_db() -> (tempfile::TempDir, Db) {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let paths = AppPaths {
-            data_dir: dir.path().to_path_buf(),
-            database_path: dir.path().join("aster.sqlite"),
-            backup_dir: dir.path().join("backups"),
-            export_dir: dir.path().join("exports"),
-            import_report_dir: dir.path().join("import-reports"),
-        };
-        std::fs::create_dir_all(&paths.backup_dir).unwrap();
-        std::fs::create_dir_all(&paths.export_dir).unwrap();
-        std::fs::create_dir_all(&paths.import_report_dir).unwrap();
-        (dir, Db::initialize(&paths).unwrap())
-    }
-
-    fn runtime_with_client(token: &str) -> Arc<Mutex<HostServiceRuntime>> {
-        let mut runtime = HostServiceRuntime::default();
-        runtime.clients.insert(
-            "client-test".to_string(),
-            ClientConnectionInfo {
-                id: token.to_string(),
-                client_name: "测试客户端".to_string(),
-                client_device_id: "device-test".to_string(),
-                client_ip: "127.0.0.1".to_string(),
-                app_version: "0.1.0".to_string(),
-                status: "paired".to_string(),
-                last_seen_at: chrono::Local::now().to_rfc3339(),
-            },
-        );
-        Arc::new(Mutex::new(runtime))
-    }
-
-    fn send_test_request(
-        db: Db,
-        runtime: Arc<Mutex<HostServiceRuntime>>,
-        request: String,
-    ) -> String {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
-        let addr = listener.local_addr().expect("test listener addr");
-        let handle = thread::spawn(move || {
-            let (stream, _) = listener.accept().expect("accept test request");
-            handle_connection(stream, runtime, db, "0.1.0").unwrap();
-        });
-        let mut stream = std::net::TcpStream::connect(addr).expect("connect test listener");
-        stream.write_all(request.as_bytes()).expect("write request");
-        stream.shutdown(std::net::Shutdown::Write).ok();
-        let mut response = String::new();
-        stream.read_to_string(&mut response).expect("read response");
-        handle.join().expect("request thread");
-        response
-    }
+    mod session_test_support;
+    use session_test_support::{
+        admin_state, runtime_with_client, send_test_request, session_headers,
+        session_headers_on_conn, test_db,
+    };
 
     #[test]
     fn parse_request_line_extracts_method_and_path() {
-        let (method, path) = parse_request_line("GET /api/health HTTP/1.1\r\n\r\n");
+        let (method, path) = http_transport::request_line("GET /api/health HTTP/1.1\r\n\r\n");
         assert_eq!(method, "GET");
         assert_eq!(path, "/api/health");
     }
@@ -2508,25 +2505,27 @@ mod tests {
     }
 
     #[test]
-    fn pairing_validation_requires_six_digit_code_and_client_identity() {
-        validate_pairing_request("123456", "前台电脑", "device-frontdesk").unwrap();
+    fn pairing_validation_requires_twelve_digit_code_and_client_identity() {
+        validate_pairing_request("123456789012", "前台电脑", "device-frontdesk").unwrap();
         assert!(
             validate_pairing_request("12345", "前台电脑", "device-frontdesk")
                 .unwrap_err()
                 .to_string()
-                .contains("6 位数字")
+                .contains("12 位数字")
         );
         assert!(
             validate_pairing_request("abcdef", "前台电脑", "device-frontdesk")
                 .unwrap_err()
                 .to_string()
-                .contains("6 位数字")
+                .contains("12 位数字")
         );
-        assert!(validate_pairing_request("123456", " ", "device-frontdesk")
-            .unwrap_err()
-            .to_string()
-            .contains("客户端名称不能为空"));
-        assert!(validate_pairing_request("123456", "前台电脑", " ")
+        assert!(
+            validate_pairing_request("123456789012", " ", "device-frontdesk")
+                .unwrap_err()
+                .to_string()
+                .contains("客户端名称不能为空")
+        );
+        assert!(validate_pairing_request("123456789012", "前台电脑", " ")
             .unwrap_err()
             .to_string()
             .contains("设备 ID 不能为空"));
@@ -2553,7 +2552,7 @@ mod tests {
         client.client_ip = "192.168.1.21".to_string();
         upsert_client_connection(&conn, &client, &token_hash("new-persisted-token")).unwrap();
         touch_client_connection(&conn, "device-frontdesk", "online").unwrap();
-        let clients = list_client_connections_from_conn(&conn).unwrap();
+        let clients = crate::db::client_connection_repository::list(&conn).unwrap();
 
         assert_eq!(clients.len(), 1);
         assert_eq!(clients[0].id, "client-db-id-new");
@@ -2575,30 +2574,7 @@ mod tests {
     #[test]
     fn list_client_connections_reads_persisted_host_records() {
         let (_dir, db) = test_db();
-        let state = AppState {
-            paths: AppPaths {
-                data_dir: _dir.path().to_path_buf(),
-                database_path: _dir.path().join("aster.sqlite"),
-                backup_dir: _dir.path().join("backups"),
-                export_dir: _dir.path().join("exports"),
-                import_report_dir: _dir.path().join("import-reports"),
-            },
-            db,
-            session: Arc::new(Mutex::new(Some(CurrentUser {
-                id: "user-admin".to_string(),
-                username: "admin".to_string(),
-                display_name: "管理员".to_string(),
-                department_id: None,
-                department_name: None,
-                roles: vec![Role {
-                    id: "role-admin".to_string(),
-                    code: "admin".to_string(),
-                    name: "管理员".to_string(),
-                }],
-                permissions: vec!["manage_settings".to_string()],
-            }))),
-            host_service: Arc::new(Mutex::new(HostServiceRuntime::default())),
-        };
+        let state = admin_state(&_dir, db);
         state
             .db
             .with_conn(|conn| {
@@ -2628,30 +2604,7 @@ mod tests {
     #[test]
     fn remove_client_connection_revokes_token_and_runtime_client() {
         let (_dir, db) = test_db();
-        let state = AppState {
-            paths: AppPaths {
-                data_dir: _dir.path().to_path_buf(),
-                database_path: _dir.path().join("aster.sqlite"),
-                backup_dir: _dir.path().join("backups"),
-                export_dir: _dir.path().join("exports"),
-                import_report_dir: _dir.path().join("import-reports"),
-            },
-            db,
-            session: Arc::new(Mutex::new(Some(CurrentUser {
-                id: "user-admin".to_string(),
-                username: "admin".to_string(),
-                display_name: "管理员".to_string(),
-                department_id: None,
-                department_name: None,
-                roles: vec![Role {
-                    id: "role-admin".to_string(),
-                    code: "admin".to_string(),
-                    name: "管理员".to_string(),
-                }],
-                permissions: vec!["manage_settings".to_string()],
-            }))),
-            host_service: Arc::new(Mutex::new(HostServiceRuntime::default())),
-        };
+        let state = admin_state(&_dir, db);
         state
             .db
             .with_conn(|conn| {
@@ -2788,7 +2741,7 @@ mod tests {
                 .to_string(),
         );
 
-        assert!(response.contains("远程请求缺少当前用户"));
+        assert!(response.contains("远程请求缺少用户会话"));
     }
 
     #[test]
@@ -2809,11 +2762,12 @@ mod tests {
         })
         .unwrap();
 
+        let headers = session_headers(&db, "token-settings-test", "user-settings-readonly-test")
+            .expect("create session");
         let response = send_test_request(
             db,
             runtime_with_client("token-settings-test"),
-            "GET /api/system-settings HTTP/1.1\r\nX-Aster-Client-Token: token-settings-test\r\nX-Aster-User-Id: user-settings-readonly-test\r\n\r\n"
-                .to_string(),
+            format!("GET /api/system-settings HTTP/1.1\r\n{headers}\r\n\r\n"),
         );
 
         assert!(response.contains("需要管理员权限"));
@@ -2829,7 +2783,7 @@ mod tests {
                 .to_string(),
         );
 
-        assert!(response.contains("远程请求缺少当前用户"));
+        assert!(response.contains("远程请求缺少用户会话"));
     }
 
     #[test]
@@ -2866,8 +2820,14 @@ mod tests {
             "reason": "错误月份"
         })
         .to_string();
+        let invalid_headers = session_headers(
+            &db,
+            "token-approval-invalid-test",
+            "user-approval-warehouse-test",
+        )
+        .expect("create session");
         let invalid_request = format!(
-            "POST /api/approval HTTP/1.1\r\nX-Aster-Client-Token: token-approval-invalid-test\r\nX-Aster-User-Id: user-approval-warehouse-test\r\nContent-Length: {}\r\n\r\n{}",
+            "POST /api/approval HTTP/1.1\r\n{invalid_headers}\r\nContent-Length: {}\r\n\r\n{}",
             invalid_body.len(),
             invalid_body
         );
@@ -2884,8 +2844,14 @@ mod tests {
             "reason": "远程超预算领用"
         })
         .to_string();
+        let create_headers = session_headers(
+            &db,
+            "token-approval-create-test",
+            "user-approval-warehouse-test",
+        )
+        .expect("create session");
         let create_request = format!(
-            "POST /api/approval HTTP/1.1\r\nX-Aster-Client-Token: token-approval-create-test\r\nX-Aster-User-Id: user-approval-warehouse-test\r\nContent-Length: {}\r\n\r\n{}",
+            "POST /api/approval HTTP/1.1\r\n{create_headers}\r\nContent-Length: {}\r\n\r\n{}",
             create_body.len(),
             create_body
         );
@@ -2913,8 +2879,14 @@ mod tests {
             "decisionNote": "远程通过"
         })
         .to_string();
+        let decide_headers = session_headers(
+            &db,
+            "token-approval-decide-test",
+            "user-approval-admin-test",
+        )
+        .expect("create session");
         let decide_request = format!(
-            "POST /api/approval/decision HTTP/1.1\r\nX-Aster-Client-Token: token-approval-decide-test\r\nX-Aster-User-Id: user-approval-admin-test\r\nContent-Length: {}\r\n\r\n{}",
+            "POST /api/approval/decision HTTP/1.1\r\n{decide_headers}\r\nContent-Length: {}\r\n\r\n{}",
             decide_body.len(),
             decide_body
         );
@@ -2965,7 +2937,12 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        let request_headers = "X-Aster-Client-Token: token-remote-route-validation-test\r\nX-Aster-User-Id: user-remote-stock-validation-test";
+        let request_headers = session_headers(
+            &db,
+            "token-remote-route-validation-test",
+            "user-remote-stock-validation-test",
+        )
+        .expect("create session");
 
         let stock_body = serde_json::json!({
             "documentType": "outbound",
@@ -3043,7 +3020,12 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        let headers = "X-Aster-Client-Token: token-remote-master-validation-test\r\nX-Aster-User-Id: user-remote-master-validation-test";
+        let headers = session_headers(
+            &db,
+            "token-remote-master-validation-test",
+            "user-remote-master-validation-test",
+        )
+        .expect("create session");
 
         let unit_body = serde_json::json!({
             "id": null,
@@ -3137,12 +3119,18 @@ mod tests {
             "enabled": true
         })
         .to_string();
+        let headers = session_headers(
+            &db,
+            "token-remote-budget-validation-test",
+            "user-remote-budget-admin-test",
+        )
+        .expect("create session");
 
         let response = send_test_request(
             db,
             runtime_with_client("token-remote-budget-validation-test"),
             format!(
-                "POST /api/master/budget-rule HTTP/1.1\r\nX-Aster-Client-Token: token-remote-budget-validation-test\r\nX-Aster-User-Id: user-remote-budget-admin-test\r\nContent-Length: {}\r\n\r\n{}",
+                "POST /api/master/budget-rule HTTP/1.1\r\n{headers}\r\nContent-Length: {}\r\n\r\n{}",
                 body.len(),
                 body
             ),
@@ -3234,30 +3222,7 @@ mod tests {
     #[test]
     fn save_client_config_clears_pairing_token_when_host_changes() {
         let (_dir, db) = test_db();
-        let state = AppState {
-            paths: AppPaths {
-                data_dir: _dir.path().to_path_buf(),
-                database_path: _dir.path().join("aster.sqlite"),
-                backup_dir: _dir.path().join("backups"),
-                export_dir: _dir.path().join("exports"),
-                import_report_dir: _dir.path().join("import-reports"),
-            },
-            db,
-            session: Arc::new(Mutex::new(Some(CurrentUser {
-                id: "user-admin".to_string(),
-                username: "admin".to_string(),
-                display_name: "管理员".to_string(),
-                department_id: None,
-                department_name: None,
-                roles: vec![Role {
-                    id: "role-admin".to_string(),
-                    code: "admin".to_string(),
-                    name: "管理员".to_string(),
-                }],
-                permissions: vec!["manage_settings".to_string()],
-            }))),
-            host_service: Arc::new(Mutex::new(HostServiceRuntime::default())),
-        };
+        let state = admin_state(&_dir, db);
         state
             .db
             .with_conn(|conn| {
@@ -3319,7 +3284,7 @@ mod tests {
             runtime.running = true;
             runtime.bind_address = "0.0.0.0".to_string();
             runtime.port = 17871;
-            runtime.pair_code = Some("123456".to_string());
+            runtime.pair_code = Some("123456789012".to_string());
             runtime.clients.insert(
                 "client-test".to_string(),
                 ClientConnectionInfo {
@@ -3364,8 +3329,10 @@ mod tests {
         )
         .unwrap();
 
-        let request = "GET /api/test HTTP/1.1\r\nX-Aster-User-Id: user-readonly-test\r\n\r\n";
-        let error = require_remote_permission(request, &conn, "write_stock").unwrap_err();
+        let headers = session_headers_on_conn(&conn, "device-readonly", "user-readonly-test")
+            .expect("create session");
+        let request = format!("GET /api/test HTTP/1.1\r\n{headers}\r\n\r\n");
+        let error = require_remote_permission(&request, &conn, "write_stock").unwrap_err();
         assert!(error.to_string().contains("缺少权限：write_stock"));
     }
 
@@ -3392,8 +3359,10 @@ mod tests {
         )
         .unwrap();
 
-        let request = "GET /api/test HTTP/1.1\r\nX-Aster-User-Id: user-no-report-test\r\n\r\n";
-        let error = require_remote_permission(request, &conn, "view_reports").unwrap_err();
+        let headers = session_headers_on_conn(&conn, "device-no-report", "user-no-report-test")
+            .expect("create session");
+        let request = format!("GET /api/test HTTP/1.1\r\n{headers}\r\n\r\n");
+        let error = require_remote_permission(&request, &conn, "view_reports").unwrap_err();
         assert!(error.to_string().contains("缺少权限：view_reports"));
     }
 
@@ -3415,8 +3384,10 @@ mod tests {
         )
         .unwrap();
 
-        let request = "GET /api/test HTTP/1.1\r\nX-Aster-User-Id: user-warehouse-test\r\n\r\n";
-        require_remote_permission(request, &conn, "write_stock").unwrap();
+        let headers = session_headers_on_conn(&conn, "device-warehouse", "user-warehouse-test")
+            .expect("create session");
+        let request = format!("GET /api/test HTTP/1.1\r\n{headers}\r\n\r\n");
+        require_remote_permission(&request, &conn, "write_stock").unwrap();
     }
 
     #[test]
@@ -3437,9 +3408,14 @@ mod tests {
         )
         .unwrap();
 
-        let request =
-            "GET /api/test HTTP/1.1\r\nX-Aster-User-Id: user-department-viewer-test\r\n\r\n";
-        let current = require_remote_permission(request, &conn, "view_reports").unwrap();
+        let headers = session_headers_on_conn(
+            &conn,
+            "device-department-viewer",
+            "user-department-viewer-test",
+        )
+        .expect("create session");
+        let request = format!("GET /api/test HTTP/1.1\r\n{headers}\r\n\r\n");
+        let current = require_remote_permission(&request, &conn, "view_reports").unwrap();
         let scoped_department_id = remote_department_scope(&current)
             .unwrap()
             .or(Some("dept-restaurant".to_string()));
@@ -3465,8 +3441,10 @@ mod tests {
         )
         .unwrap();
 
-        let request = "GET /api/test HTTP/1.1\r\nX-Aster-User-Id: user-unbound-viewer-test\r\n\r\n";
-        let current = require_remote_permission(request, &conn, "view_reports").unwrap();
+        let headers = session_headers_on_conn(&conn, "device-unbound", "user-unbound-viewer-test")
+            .expect("create session");
+        let request = format!("GET /api/test HTTP/1.1\r\n{headers}\r\n\r\n");
+        let current = require_remote_permission(&request, &conn, "view_reports").unwrap();
         let error = remote_department_scope(&current).unwrap_err();
 
         assert!(error.to_string().contains("部门查看员未绑定所属部门"));
@@ -3520,7 +3498,12 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        let headers = "X-Aster-Client-Token: token-remote-dept-scope-test\r\nX-Aster-User-Id: user-remote-dept-scope-test";
+        let headers = session_headers(
+            &db,
+            "token-remote-dept-scope-test",
+            "user-remote-dept-scope-test",
+        )
+        .expect("create session");
 
         let docs_response = send_test_request(
             db.clone_handle(),
@@ -3578,15 +3561,30 @@ mod tests {
         })
         .unwrap();
 
+        let headers = session_headers(
+            &db,
+            "token-remote-status-scope-test",
+            "user-remote-status-scope-test",
+        )
+        .expect("create session");
         let response = send_test_request(
             db,
             runtime_with_client("token-remote-status-scope-test"),
-            "GET /api/status HTTP/1.1\r\nX-Aster-Client-Token: token-remote-status-scope-test\r\nX-Aster-User-Id: user-remote-status-scope-test\r\n\r\n"
-                .to_string(),
+            format!("GET /api/status HTTP/1.1\r\n{headers}\r\n\r\n"),
         );
 
         assert!(response.contains("\"thisMonthOutboundAmount\":16"));
         assert!(response.contains("行政办"));
         assert!(!response.contains("餐饮"));
+    }
+
+    #[test]
+    fn forged_user_id_header_cannot_replace_session_token() {
+        let conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrations::run(&conn).unwrap();
+        let request = "GET /api/test HTTP/1.1\r\nX-Aster-Client-Token: forged-device\r\nX-Aster-User-Id: user-admin\r\n\r\n";
+        let error = require_remote_admin(request, &conn).unwrap_err();
+        assert!(error.to_string().contains("缺少用户会话"));
     }
 }

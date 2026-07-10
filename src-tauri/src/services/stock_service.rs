@@ -1,4 +1,5 @@
 use crate::app::state::AppState;
+use crate::application::write_limits::validate_line_count;
 use crate::db::stock_repository;
 use crate::domain::runtime::RuntimeMode;
 use crate::domain::stock::{
@@ -8,6 +9,10 @@ use crate::domain::stock::{
     VoidStockDocumentRequest,
 };
 use crate::error::{AppError, AppResult};
+
+pub(crate) use crate::domain::business_datetime::{
+    normalize as normalize_business_datetime, validate as validate_business_datetime,
+};
 
 pub fn submit_stock_document(
     state: &AppState,
@@ -154,40 +159,6 @@ fn runtime_mode(state: &AppState) -> AppResult<RuntimeMode> {
     Ok(crate::services::status_service::get_runtime_config(state)?.mode)
 }
 
-pub(crate) fn normalize_business_datetime(value: &mut String, label: &str) -> AppResult<()> {
-    let normalized = normalized_business_datetime(value, label)?;
-    *value = normalized;
-    Ok(())
-}
-
-pub(crate) fn validate_business_datetime(value: &str, label: &str) -> AppResult<()> {
-    normalized_business_datetime(value, label).map(|_| ())
-}
-
-fn normalized_business_datetime(value: &str, label: &str) -> AppResult<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(AppError::Validation(format!("{label}不能为空")));
-    }
-    let normalized = trimmed.replace('T', " ");
-    let datetime = if normalized.len() == 10 {
-        chrono::NaiveDate::parse_from_str(&normalized, "%Y-%m-%d")
-            .map_err(|_| AppError::Validation(format!("{label}格式必须是 YYYY-MM-DD HH:mm")))?
-            .and_hms_opt(0, 0, 0)
-            .ok_or_else(|| AppError::Validation(format!("{label}格式无效")))?
-    } else if normalized.len() == 16 {
-        chrono::NaiveDateTime::parse_from_str(&normalized, "%Y-%m-%d %H:%M")
-            .map_err(|_| AppError::Validation(format!("{label}格式必须是 YYYY-MM-DD HH:mm")))?
-    } else {
-        chrono::NaiveDateTime::parse_from_str(&normalized, "%Y-%m-%d %H:%M:%S")
-            .map_err(|_| AppError::Validation(format!("{label}格式必须是 YYYY-MM-DD HH:mm:ss")))?
-    };
-    if datetime > chrono::Local::now().naive_local() {
-        return Err(AppError::Validation(format!("{label}不能晚于当前时间")));
-    }
-    Ok(datetime.format("%Y-%m-%d %H:%M:%S").to_string())
-}
-
 pub(crate) fn validate_document(request: &SubmitStockDocumentRequest) -> AppResult<()> {
     if request.document_type != "inbound" && request.document_type != "outbound" {
         return Err(AppError::Validation("单据类型必须是入库或出库".to_string()));
@@ -218,6 +189,7 @@ pub(crate) fn validate_document(request: &SubmitStockDocumentRequest) -> AppResu
     if request.lines.is_empty() {
         return Err(AppError::Validation("单据至少需要一行物品".to_string()));
     }
+    validate_line_count(request.lines.len(), "单据")?;
     for line in &request.lines {
         if line.item_id.trim().is_empty() {
             return Err(AppError::Validation("单据行缺少物品".to_string()));
@@ -269,6 +241,7 @@ pub(crate) fn validate_adjustment(request: &SubmitAdjustmentRequest) -> AppResul
     if request.lines.is_empty() {
         return Err(AppError::Validation("调整单至少需要一行物品".to_string()));
     }
+    validate_line_count(request.lines.len(), "调整单")?;
     for line in &request.lines {
         if line.item_id.trim().is_empty() {
             return Err(AppError::Validation("调整行缺少物品".to_string()));
@@ -370,7 +343,7 @@ mod tests {
     }
 
     fn set_warehouse_user(state: &AppState) {
-        *state.session.lock().expect("session mutex poisoned") = Some(CurrentUser {
+        let user = CurrentUser {
             id: "user-warehouse".to_string(),
             username: "warehouse".to_string(),
             display_name: "仓库员".to_string(),
@@ -382,11 +355,12 @@ mod tests {
                 name: "仓库员".to_string(),
             }],
             permissions: vec!["write_stock".to_string(), "view_reports".to_string()],
-        });
+        };
+        crate::services::test_support::install_session(state, user).unwrap();
     }
 
     fn set_department_viewer(state: &AppState, department_id: &str) {
-        *state.session.lock().expect("session mutex poisoned") = Some(CurrentUser {
+        let user = CurrentUser {
             id: "user-department-viewer".to_string(),
             username: "dept-viewer".to_string(),
             display_name: "部门查看员".to_string(),
@@ -398,7 +372,8 @@ mod tests {
                 name: "部门查看员".to_string(),
             }],
             permissions: vec!["view_reports".to_string()],
-        });
+        };
+        crate::services::test_support::install_session(state, user).unwrap();
     }
 
     #[test]

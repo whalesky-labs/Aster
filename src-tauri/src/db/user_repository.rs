@@ -1,30 +1,44 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use uuid::Uuid;
 
+use crate::db::pagination::{self, FETCH_SIZE};
+use crate::domain::pagination::Page;
 use crate::domain::users::{Role, UserAccount};
 use crate::error::{AppError, AppResult};
 
 pub fn list_roles(conn: &Connection) -> AppResult<Vec<Role>> {
-    let mut stmt = conn.prepare("SELECT id, code, name FROM roles ORDER BY code ASC")?;
-    let rows = stmt.query_map([], |row| {
+    pagination::collect_all(|cursor| list_roles_page(conn, cursor))
+}
+
+pub fn list_roles_page(conn: &Connection, cursor: Option<&str>) -> AppResult<Page<Role>> {
+    let offset = pagination::offset(conn, "roles", cursor)?;
+    let mut stmt = conn
+        .prepare("SELECT id, code, name FROM roles ORDER BY code ASC, id ASC LIMIT ?1 OFFSET ?2")?;
+    let rows = stmt.query_map(params![FETCH_SIZE, offset], |row| {
         Ok(Role {
             id: row.get(0)?,
             code: row.get(1)?,
             name: row.get(2)?,
         })
     })?;
-    collect_rows(rows)
+    pagination::page(conn, "roles", offset, collect_rows(rows)?)
 }
 
 pub fn list_users(conn: &Connection) -> AppResult<Vec<UserAccount>> {
+    pagination::collect_all(|cursor| list_users_page(conn, cursor))
+}
+
+pub fn list_users_page(conn: &Connection, cursor: Option<&str>) -> AppResult<Page<UserAccount>> {
+    let offset = pagination::offset(conn, "users", cursor)?;
     let mut stmt = conn.prepare(
         "SELECT u.id, u.username, u.display_name, u.email, u.department_id, d.name,
                 u.enabled, u.created_at, u.updated_at
          FROM users u
          LEFT JOIN departments d ON d.id = u.department_id
-         ORDER BY u.enabled DESC, u.username ASC",
+         ORDER BY u.enabled DESC, u.username ASC, u.id ASC
+         LIMIT ?1 OFFSET ?2",
     )?;
-    let rows = stmt.query_map([], |row| {
+    let rows = stmt.query_map(params![FETCH_SIZE, offset], |row| {
         Ok(UserAccount {
             id: row.get(0)?,
             username: row.get(1)?,
@@ -42,7 +56,7 @@ pub fn list_users(conn: &Connection) -> AppResult<Vec<UserAccount>> {
     for user in &mut users {
         user.roles = roles_for_user(conn, &user.id)?;
     }
-    Ok(users)
+    pagination::page(conn, "users", offset, users)
 }
 
 pub fn find_user_by_username(
@@ -123,20 +137,21 @@ pub fn find_user_by_id(
     }
 }
 
-pub fn save_user(
-    conn: &Connection,
-    id: Option<String>,
-    username: &str,
-    display_name: &str,
-    email: Option<String>,
-    password_hash: Option<String>,
-    department_id: Option<String>,
-    enabled: bool,
-    role_codes: &[String],
-) -> AppResult<UserAccount> {
-    let user_id = id.unwrap_or_else(new_id);
-    let role_ids = role_ids_for_codes(conn, role_codes)?;
-    if let Some(hash) = password_hash {
+pub struct SaveUserRecord<'a> {
+    pub id: Option<String>,
+    pub username: &'a str,
+    pub display_name: &'a str,
+    pub email: Option<String>,
+    pub password_hash: Option<String>,
+    pub department_id: Option<String>,
+    pub enabled: bool,
+    pub role_codes: &'a [String],
+}
+
+pub fn save_user(conn: &Connection, record: SaveUserRecord<'_>) -> AppResult<UserAccount> {
+    let user_id = record.id.unwrap_or_else(new_id);
+    let role_ids = role_ids_for_codes(conn, record.role_codes)?;
+    if let Some(hash) = record.password_hash {
         conn.execute(
             "INSERT INTO users (id, username, display_name, email, password_hash, department_id, enabled)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
@@ -150,12 +165,12 @@ pub fn save_user(
                updated_at = CURRENT_TIMESTAMP",
             params![
                 user_id,
-                username,
-                display_name,
-                blank_to_none(email.clone()),
+                record.username,
+                record.display_name,
+                blank_to_none(record.email.clone()),
                 hash,
-                blank_to_none(department_id),
-                bool_to_i64(enabled)
+                blank_to_none(record.department_id),
+                bool_to_i64(record.enabled)
             ],
         )?;
     } else {
@@ -171,18 +186,18 @@ pub fn save_user(
                updated_at = CURRENT_TIMESTAMP",
             params![
                 user_id,
-                username,
-                display_name,
-                blank_to_none(email.clone()),
-                blank_to_none(department_id),
-                bool_to_i64(enabled)
+                record.username,
+                record.display_name,
+                blank_to_none(record.email.clone()),
+                blank_to_none(record.department_id),
+                bool_to_i64(record.enabled)
             ],
         )?;
     }
     set_user_roles(conn, &user_id, &role_ids)?;
-    Ok(find_user_by_id(conn, &user_id)?
-        .expect("saved user exists")
-        .0)
+    find_user_by_id(conn, &user_id)?
+        .map(|(user, _)| user)
+        .ok_or_else(|| AppError::Validation("保存用户后无法读取记录".to_string()))
 }
 
 pub fn set_user_enabled(conn: &Connection, user_id: &str, enabled: bool) -> AppResult<()> {
@@ -206,6 +221,28 @@ pub fn update_password_hash(
         params![password_hash, user_id],
     )?;
     Ok(())
+}
+
+pub fn set_must_change_password(
+    conn: &Connection,
+    user_id: &str,
+    must_change_password: bool,
+) -> AppResult<()> {
+    conn.execute(
+        "UPDATE users
+         SET must_change_password = ?1, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?2",
+        params![bool_to_i64(must_change_password), user_id],
+    )?;
+    Ok(())
+}
+
+pub fn must_change_password(conn: &Connection, user_id: &str) -> AppResult<bool> {
+    Ok(conn.query_row(
+        "SELECT must_change_password FROM users WHERE id = ?1",
+        params![user_id],
+        |row| Ok(row.get::<_, i64>(0)? == 1),
+    )?)
 }
 
 pub fn create_password_reset_code(
@@ -381,14 +418,16 @@ mod tests {
 
         let error = save_user(
             &conn,
-            None,
-            "bad-role-user",
-            "错误角色用户",
-            None,
-            Some("hash".to_string()),
-            None,
-            true,
-            &["warehouse".to_string(), "ghost-role".to_string()],
+            SaveUserRecord {
+                id: None,
+                username: "bad-role-user",
+                display_name: "错误角色用户",
+                email: None,
+                password_hash: Some("hash".to_string()),
+                department_id: None,
+                enabled: true,
+                role_codes: &["warehouse".to_string(), "ghost-role".to_string()],
+            },
         )
         .unwrap_err();
 

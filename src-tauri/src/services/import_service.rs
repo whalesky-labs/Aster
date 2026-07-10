@@ -162,7 +162,10 @@ fn parse_item_sheet(
     let mut items = BTreeMap::new();
     for (row_index, row) in range.rows().enumerate().skip(header.row_index + 1) {
         let excel_row = row_index + 1;
-        if row.iter().all(is_empty_cell) {
+        if row
+            .iter()
+            .all(crate::services::import_value_parser::is_empty)
+        {
             continue;
         }
         detect_formula_errors(ITEM_SHEET, excel_row, row, errors);
@@ -265,7 +268,10 @@ fn parse_inbound_sheet(
     let mut rows = Vec::new();
     for (row_index, row) in range.rows().enumerate().skip(header.row_index + 1) {
         let excel_row = row_index + 1;
-        if row.iter().all(is_empty_cell) {
+        if row
+            .iter()
+            .all(crate::services::import_value_parser::is_empty)
+        {
             continue;
         }
         detect_formula_errors(INBOUND_SHEET, excel_row, row, errors);
@@ -309,19 +315,21 @@ fn parse_inbound_sheet(
         let key = item_lookup_key(item_code.as_deref(), &item_name);
         ensure_parsed_item_from_line(
             items,
-            &key,
-            item_code,
-            &item_name,
-            &header,
-            row,
-            INBOUND_SHEET,
-            excel_row,
+            ParsedItemSource {
+                key: &key,
+                code: item_code,
+                name: &item_name,
+                header: &header,
+                row,
+                sheet_name: INBOUND_SHEET,
+                excel_row,
+            },
         );
         let quantity = header.optional_number(row, "数量").unwrap_or(0.0);
         let unit_price = header.optional_number(row, "进货单价").unwrap_or(0.0);
         let amount = header
             .optional_number(row, "进货金额")
-            .unwrap_or_else(|| quantity * unit_price);
+            .unwrap_or(quantity * unit_price);
         if quantity <= 0.0 {
             errors.push(message(
                 "error",
@@ -385,7 +393,10 @@ fn parse_outbound_sheet(
     let mut rows = Vec::new();
     for (row_index, row) in range.rows().enumerate().skip(header.row_index + 1) {
         let excel_row = row_index + 1;
-        if row.iter().all(is_empty_cell) {
+        if row
+            .iter()
+            .all(crate::services::import_value_parser::is_empty)
+        {
             continue;
         }
         detect_formula_errors(OUTBOUND_SHEET, excel_row, row, errors);
@@ -450,13 +461,15 @@ fn parse_outbound_sheet(
         let key = item_lookup_key(item_code.as_deref(), &item_name);
         ensure_parsed_item_from_line(
             items,
-            &key,
-            item_code,
-            &item_name,
-            &header,
-            row,
-            OUTBOUND_SHEET,
-            excel_row,
+            ParsedItemSource {
+                key: &key,
+                code: item_code,
+                name: &item_name,
+                header: &header,
+                row,
+                sheet_name: OUTBOUND_SHEET,
+                excel_row,
+            },
         );
         let quantity = header.optional_number(row, "数量").unwrap_or(0.0);
         if quantity <= 0.0 {
@@ -501,37 +514,53 @@ fn parse_outbound_sheet(
     Ok(rows)
 }
 
+struct ParsedItemSource<'a> {
+    key: &'a str,
+    code: Option<String>,
+    name: &'a str,
+    header: &'a SheetHeader,
+    row: &'a [Data],
+    sheet_name: &'a str,
+    excel_row: usize,
+}
+
 fn ensure_parsed_item_from_line(
     items: &mut BTreeMap<String, ParsedItem>,
-    key: &str,
-    code: Option<String>,
-    name: &str,
-    header: &SheetHeader,
-    row: &[Data],
-    sheet_name: &str,
-    excel_row: usize,
+    source: ParsedItemSource<'_>,
 ) {
-    items.entry(key.to_string()).or_insert_with(|| {
-        let default_price = header
-            .optional_number(row, "参考进价")
-            .unwrap_or_else(|| header.optional_number(row, "进货单价").unwrap_or(0.0));
+    items.entry(source.key.to_string()).or_insert_with(|| {
+        let default_price = source
+            .header
+            .optional_number(source.row, "参考进价")
+            .unwrap_or_else(|| {
+                source
+                    .header
+                    .optional_number(source.row, "进货单价")
+                    .unwrap_or(0.0)
+            });
         ParsedItem {
-            key: key.to_string(),
-            sheet_name: sheet_name.to_string(),
-            row_number: excel_row,
-            code,
-            name: name.to_string(),
-            category_name: header
-                .optional_text(row, "分类")
+            key: source.key.to_string(),
+            sheet_name: source.sheet_name.to_string(),
+            row_number: source.excel_row,
+            code: source.code,
+            name: source.name.to_string(),
+            category_name: source
+                .header
+                .optional_text(source.row, "分类")
                 .filter(|value| !value.is_empty()),
-            spec: header
-                .optional_text(row, "规格")
+            spec: source
+                .header
+                .optional_text(source.row, "规格")
                 .filter(|value| !value.is_empty()),
-            unit_name: header
-                .optional_text(row, "单位")
+            unit_name: source
+                .header
+                .optional_text(source.row, "单位")
                 .filter(|value| !value.is_empty()),
             default_price,
-            sale_price: header.optional_number(row, "参考售价").unwrap_or(0.0),
+            sale_price: source
+                .header
+                .optional_number(source.row, "参考售价")
+                .unwrap_or(0.0),
             warning_quantity: 0.0,
             remark: None,
         }
@@ -1478,27 +1507,11 @@ fn warn_amount_mismatch(
 }
 
 fn data_to_text(data: &Data) -> String {
-    match data {
-        Data::String(value) => value.trim().to_string(),
-        Data::Float(value) => trim_number(*value),
-        Data::Int(value) => value.to_string(),
-        Data::Bool(value) => value.to_string(),
-        Data::DateTime(value) => {
-            let (year, month, day, hour, minute, second, _) = value.to_ymd_hms_milli();
-            format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}")
-        }
-        _ => String::new(),
-    }
+    crate::services::import_value_parser::to_text(data)
 }
 
 fn data_to_number(data: &Data) -> Option<f64> {
-    match data {
-        Data::Float(value) => Some(*value),
-        Data::Int(value) => Some(*value as f64),
-        Data::String(value) => parse_number_text(value),
-        _ => None,
-    }
-    .filter(|value| value.is_finite())
+    crate::services::import_value_parser::to_number(data)
 }
 
 fn data_to_datetime(data: &Data) -> Result<Option<String>, String> {
@@ -1533,34 +1546,6 @@ fn validate_datetime_text(value: &str) -> Result<String, String> {
     crate::services::stock_service::normalize_business_datetime(&mut normalized, "业务时间")
         .map_err(|error| error.to_string())?;
     Ok(normalized)
-}
-
-fn is_empty_cell(data: &Data) -> bool {
-    match data {
-        Data::Empty => true,
-        Data::String(value) => value.trim().is_empty(),
-        _ => false,
-    }
-}
-
-fn parse_number_text(value: &str) -> Option<f64> {
-    let cleaned = value
-        .trim()
-        .replace(',', "")
-        .replace('，', "")
-        .replace('￥', "");
-    if cleaned.is_empty() || cleaned == "-" {
-        return None;
-    }
-    cleaned.parse::<f64>().ok()
-}
-
-fn trim_number(value: f64) -> String {
-    if (value.fract()).abs() < f64::EPSILON {
-        format!("{}", value as i64)
-    } else {
-        value.to_string()
-    }
 }
 
 fn normalized_name(value: &str) -> String {
@@ -2294,28 +2279,28 @@ mod tests {
         fs::create_dir_all(&paths.backup_dir).unwrap();
         fs::create_dir_all(&paths.export_dir).unwrap();
         fs::create_dir_all(&paths.import_report_dir).unwrap();
+        let user = crate::domain::users::CurrentUser {
+            id: "user-warehouse".to_string(),
+            username: "warehouse".to_string(),
+            display_name: "仓库员".to_string(),
+            department_id: None,
+            department_name: None,
+            roles: vec![crate::domain::users::Role {
+                id: "role-warehouse".to_string(),
+                code: "warehouse".to_string(),
+                name: "仓库员".to_string(),
+            }],
+            permissions: vec!["write_stock".to_string(), "view_reports".to_string()],
+        };
         let state = AppState {
             db: Db::initialize(&paths).unwrap(),
             paths,
-            session: std::sync::Arc::new(std::sync::Mutex::new(Some(
-                crate::domain::users::CurrentUser {
-                    id: "user-warehouse".to_string(),
-                    username: "warehouse".to_string(),
-                    display_name: "仓库员".to_string(),
-                    department_id: None,
-                    department_name: None,
-                    roles: vec![crate::domain::users::Role {
-                        id: "role-warehouse".to_string(),
-                        code: "warehouse".to_string(),
-                        name: "仓库员".to_string(),
-                    }],
-                    permissions: vec!["write_stock".to_string(), "view_reports".to_string()],
-                },
-            ))),
+            session: std::sync::Arc::new(std::sync::Mutex::new(None)),
             host_service: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::services::host_service::HostServiceRuntime::default(),
             )),
         };
+        crate::services::test_support::install_session(&state, user).unwrap();
 
         let error = run_excel_import(
             &state,
@@ -2503,33 +2488,34 @@ mod tests {
     }
 
     fn admin_state(paths: AppPaths) -> AppState {
-        AppState {
+        let user = crate::domain::users::CurrentUser {
+            id: "user-admin".to_string(),
+            username: "admin".to_string(),
+            display_name: "管理员".to_string(),
+            department_id: None,
+            department_name: None,
+            roles: vec![crate::domain::users::Role {
+                id: "role-admin".to_string(),
+                code: "admin".to_string(),
+                name: "管理员".to_string(),
+            }],
+            permissions: vec![
+                "manage_users".to_string(),
+                "manage_settings".to_string(),
+                "write_stock".to_string(),
+                "view_reports".to_string(),
+                "dangerous_operations".to_string(),
+            ],
+        };
+        let state = AppState {
             db: Db::initialize(&paths).unwrap(),
             paths,
-            session: std::sync::Arc::new(std::sync::Mutex::new(Some(
-                crate::domain::users::CurrentUser {
-                    id: "user-admin".to_string(),
-                    username: "admin".to_string(),
-                    display_name: "管理员".to_string(),
-                    department_id: None,
-                    department_name: None,
-                    roles: vec![crate::domain::users::Role {
-                        id: "role-admin".to_string(),
-                        code: "admin".to_string(),
-                        name: "管理员".to_string(),
-                    }],
-                    permissions: vec![
-                        "manage_users".to_string(),
-                        "manage_settings".to_string(),
-                        "write_stock".to_string(),
-                        "view_reports".to_string(),
-                        "dangerous_operations".to_string(),
-                    ],
-                },
-            ))),
+            session: std::sync::Arc::new(std::sync::Mutex::new(None)),
             host_service: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::services::host_service::HostServiceRuntime::default(),
             )),
-        }
+        };
+        crate::services::test_support::install_session(&state, user).unwrap();
+        state
     }
 }

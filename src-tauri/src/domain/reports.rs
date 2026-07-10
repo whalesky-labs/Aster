@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReportQuery {
     pub month: String,
@@ -183,6 +183,14 @@ pub struct ReportBundle {
     pub stock_balances: Vec<StockBalanceReportRow>,
     pub stock_warnings: Vec<StockWarningRow>,
     pub stocktake_differences: Vec<StocktakeDifferenceReportRow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportBundlePage {
+    pub section: String,
+    pub bundle: ReportBundle,
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

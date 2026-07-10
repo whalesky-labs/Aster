@@ -12,6 +12,18 @@ pub enum AppError {
     Database(#[from] rusqlite::Error),
     #[error("不支持的运行模式：{0}")]
     InvalidRuntimeMode(String),
+    #[error("{0}")]
+    Unauthorized(String),
+    #[error("{0}")]
+    Forbidden(String),
+    #[error("{0}")]
+    PayloadTooLarge(String),
+    #[error("{0}")]
+    RequestHeaderTooLarge(String),
+    #[error("{0}")]
+    RateLimited(String),
+    #[error("{0}")]
+    Timeout(String),
     #[error("业务校验失败：{0}")]
     Validation(String),
 }

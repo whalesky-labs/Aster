@@ -638,15 +638,13 @@ mod tests {
     use zip::ZipArchive;
 
     use super::*;
-    use crate::app::paths::AppPaths;
-    use crate::db::connection::Db;
-    use crate::db::repository;
     use crate::domain::reports::{
         CategoryConsumptionRow, DepartmentIssueDetailRow, DepartmentIssueSummaryRow,
         InboundDetailRow, ItemConsumptionRow, MonthlyInventoryRow, SalesProfitRow,
         StockBalanceReportRow, StockWarningRow, StocktakeDifferenceReportRow,
     };
     use crate::domain::users::{CurrentUser, Role};
+    use crate::{app::paths::AppPaths, db::connection::Db, db::repository};
 
     fn report_test_state() -> (tempfile::TempDir, AppState) {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -660,26 +658,28 @@ mod tests {
         std::fs::create_dir_all(&paths.backup_dir).unwrap();
         std::fs::create_dir_all(&paths.export_dir).unwrap();
         std::fs::create_dir_all(&paths.import_report_dir).unwrap();
+        let user = CurrentUser {
+            id: "user-report".to_string(),
+            username: "report".to_string(),
+            display_name: "报表用户".to_string(),
+            department_id: None,
+            department_name: None,
+            roles: vec![Role {
+                id: "role-report".to_string(),
+                code: "admin".to_string(),
+                name: "管理员".to_string(),
+            }],
+            permissions: vec!["view_reports".to_string()],
+        };
         let state = AppState {
             db: Db::initialize(&paths).unwrap(),
             paths,
-            session: Arc::new(Mutex::new(Some(CurrentUser {
-                id: "user-report".to_string(),
-                username: "report".to_string(),
-                display_name: "报表用户".to_string(),
-                department_id: None,
-                department_name: None,
-                roles: vec![Role {
-                    id: "role-report".to_string(),
-                    code: "admin".to_string(),
-                    name: "管理员".to_string(),
-                }],
-                permissions: vec!["view_reports".to_string()],
-            }))),
+            session: Arc::new(Mutex::new(None)),
             host_service: Arc::new(Mutex::new(
                 crate::services::host_service::HostServiceRuntime::default(),
             )),
         };
+        crate::services::test_support::install_session(&state, user).unwrap();
         (dir, state)
     }
 

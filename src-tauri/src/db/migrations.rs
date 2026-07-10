@@ -1,7 +1,5 @@
-use rusqlite::{params, Connection};
-
 use crate::error::AppResult;
-
+use rusqlite::{params, Connection};
 const MIGRATIONS: &[(i64, &str, &str)] = &[(
     1,
     "initial_schema",
@@ -34,6 +32,7 @@ pub fn run(conn: &Connection) -> AppResult<()> {
     }
 
     run_compatibility_migrations(conn)?;
+    crate::db::pagination_migrations::run(conn)?;
 
     Ok(())
 }
@@ -48,6 +47,7 @@ fn run_compatibility_migrations(conn: &Connection) -> AppResult<()> {
     if !column_exists(conn, "users", "email")? {
         conn.execute("ALTER TABLE users ADD COLUMN email TEXT", [])?;
     }
+    crate::db::security_migrations::run(conn)?;
     conn.execute(
         "CREATE TABLE IF NOT EXISTS password_reset_codes (
           id TEXT PRIMARY KEY,

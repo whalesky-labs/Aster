@@ -1,75 +1,50 @@
 use rusqlite::{params, Connection};
 
+use crate::db::report_filters::ReportFilters;
 use crate::domain::reports::{
     CategoryConsumptionRow, DepartmentIssueDetailRow, DepartmentIssueSummaryRow, InboundDetailRow,
-    ItemConsumptionRow, MonthlyInventoryRow, ReportBundle, ReportQuery, SalesProfitRow,
-    StockBalanceReportRow, StockWarningRow, StocktakeDifferenceReportRow,
+    ItemConsumptionRow, MonthlyInventoryRow, ReportBundle, ReportBundlePage, ReportQuery,
+    SalesProfitRow, StockBalanceReportRow, StockWarningRow, StocktakeDifferenceReportRow,
 };
 use crate::error::AppResult;
-
-struct ReportFilters<'a> {
-    month: &'a str,
-    start_date: Option<String>,
-    end_date: Option<String>,
-    department_id: Option<&'a str>,
-    category_id: Option<&'a str>,
-    item_id: Option<&'a str>,
-    supplier_id: Option<&'a str>,
-}
-
-impl<'a> From<&'a ReportQuery> for ReportFilters<'a> {
-    fn from(query: &'a ReportQuery) -> Self {
-        Self {
-            month: &query.month,
-            start_date: query.start_date.as_deref().map(start_datetime_bound),
-            end_date: query.end_date.as_deref().map(end_datetime_bound),
-            department_id: query.department_id.as_deref(),
-            category_id: query.category_id.as_deref(),
-            item_id: query.item_id.as_deref(),
-            supplier_id: query.supplier_id.as_deref(),
-        }
-    }
-}
-
-fn start_datetime_bound(value: &str) -> String {
-    if value.len() == 10 {
-        format!("{value} 00:00:00")
-    } else {
-        value.to_string()
-    }
-}
-
-fn end_datetime_bound(value: &str) -> String {
-    if value.len() == 10 {
-        format!("{value} 23:59:59")
-    } else {
-        value.to_string()
-    }
-}
 
 pub fn get_report_bundle(conn: &Connection, query: &ReportQuery) -> AppResult<ReportBundle> {
     let filters = ReportFilters::from(query);
     Ok(ReportBundle {
         month: filters.month.to_string(),
-        monthly_inventory: monthly_inventory(conn, &filters)?,
-        department_summary: department_summary(conn, &filters)?,
-        department_details: department_details(conn, &filters)?,
-        category_consumption: category_consumption(conn, &filters)?,
-        item_consumption_ranking: item_consumption_ranking(conn, &filters)?,
-        inbound_details: inbound_details(conn, &filters)?,
-        outbound_details: department_details(conn, &filters)?,
-        sales_profit: sales_profit(conn, &filters)?,
-        stock_balances: stock_balances(conn, &filters)?,
-        stock_warnings: stock_warnings(conn, &filters)?,
-        stocktake_differences: stocktake_differences(conn, &filters)?,
+        monthly_inventory: monthly_inventory(conn, &filters, None)?,
+        department_summary: department_summary(conn, &filters, None)?,
+        department_details: department_details(conn, &filters, None)?,
+        category_consumption: category_consumption(conn, &filters, None)?,
+        item_consumption_ranking: item_consumption_ranking(conn, &filters, None)?,
+        inbound_details: inbound_details(conn, &filters, None)?,
+        outbound_details: department_details(conn, &filters, None)?,
+        sales_profit: sales_profit(conn, &filters, None)?,
+        stock_balances: stock_balances(conn, &filters, None)?,
+        stock_warnings: stock_warnings(conn, &filters, None)?,
+        stocktake_differences: stocktake_differences(conn, &filters, None)?,
     })
 }
 
-fn monthly_inventory(
+pub fn get_report_bundle_page(
+    conn: &Connection,
+    query: &ReportQuery,
+    section: &str,
+    cursor: Option<&str>,
+) -> AppResult<ReportBundlePage> {
+    crate::db::paginated_report_repository::get_page(conn, query, section, cursor)
+}
+
+fn report_sql(base: &str, offset: Option<i64>) -> String {
+    crate::db::pagination::query(base, offset)
+}
+
+pub(crate) fn monthly_inventory(
     conn: &Connection,
     filters: &ReportFilters<'_>,
+    offset: Option<i64>,
 ) -> AppResult<Vec<MonthlyInventoryRow>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&report_sql(
         "SELECT i.id, i.code, i.name, i.spec, u.name,
                 COALESCE(SUM(CASE WHEN m.direction = 'in' THEN m.quantity ELSE 0 END), 0) AS inbound_qty,
                 COALESCE(SUM(CASE WHEN m.direction = 'in' THEN m.amount ELSE 0 END), 0) AS inbound_amount,
@@ -89,8 +64,9 @@ fn monthly_inventory(
            AND (?5 IS NULL OR i.id = ?5)
            AND (?6 IS NULL OR i.supplier_id = ?6)
          GROUP BY i.id
-         ORDER BY i.code ASC",
-    )?;
+         ORDER BY i.code ASC, i.id ASC",
+        offset,
+    ))?;
     let rows = stmt.query_map(
         params![
             filters.month,
@@ -119,11 +95,12 @@ fn monthly_inventory(
     collect_rows(rows)
 }
 
-fn department_summary(
+pub(crate) fn department_summary(
     conn: &Connection,
     filters: &ReportFilters<'_>,
+    offset: Option<i64>,
 ) -> AppResult<Vec<DepartmentIssueSummaryRow>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&report_sql(
         "SELECT d.id, d.name,
                 COALESCE(SUM(m.quantity), 0),
                 COALESCE(SUM(m.amount), 0)
@@ -139,8 +116,9 @@ fn department_summary(
            AND (?5 IS NULL OR i.category_id = ?5)
            AND (?6 IS NULL OR i.id = ?6)
          GROUP BY d.id
-         ORDER BY d.sort_order ASC, d.name ASC",
-    )?;
+         ORDER BY d.sort_order ASC, d.name ASC, d.id ASC",
+        offset,
+    ))?;
     let rows = stmt.query_map(
         params![
             filters.month,
@@ -162,11 +140,12 @@ fn department_summary(
     collect_rows(rows)
 }
 
-fn department_details(
+pub(crate) fn department_details(
     conn: &Connection,
     filters: &ReportFilters<'_>,
+    offset: Option<i64>,
 ) -> AppResult<Vec<DepartmentIssueDetailRow>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&report_sql(
         "SELECT m.movement_date,
                 CASE
                   WHEN doc.outbound_kind = 'guest_sale' THEN '酒店客人'
@@ -200,8 +179,9 @@ fn department_details(
            AND (?4 IS NULL OR m.department_id = ?4)
            AND (?5 IS NULL OR i.category_id = ?5)
            AND (?6 IS NULL OR i.id = ?6)
-         ORDER BY m.movement_date ASC, d.sort_order ASC, i.code ASC",
-    )?;
+         ORDER BY m.movement_date ASC, d.sort_order ASC, i.code ASC, m.created_at ASC, m.id ASC",
+        offset,
+    ))?;
     let rows = stmt.query_map(
         params![
             filters.month,
@@ -240,8 +220,12 @@ fn department_details(
     collect_rows(rows)
 }
 
-fn sales_profit(conn: &Connection, filters: &ReportFilters<'_>) -> AppResult<Vec<SalesProfitRow>> {
-    let mut stmt = conn.prepare(
+pub(crate) fn sales_profit(
+    conn: &Connection,
+    filters: &ReportFilters<'_>,
+    offset: Option<i64>,
+) -> AppResult<Vec<SalesProfitRow>> {
+    let mut stmt = conn.prepare(&report_sql(
         "SELECT d.business_date, i.code, i.name, i.spec, u.name,
                 l.quantity,
                 COALESCE(l.sale_unit_price, l.unit_price, 0),
@@ -267,8 +251,9 @@ fn sales_profit(conn: &Connection, filters: &ReportFilters<'_>) -> AppResult<Vec
            AND (?3 IS NULL OR d.business_date <= ?3)
            AND (?4 IS NULL OR i.category_id = ?4)
            AND (?5 IS NULL OR i.id = ?5)
-         ORDER BY d.business_date ASC, d.document_no ASC, i.code ASC",
-    )?;
+         ORDER BY d.business_date ASC, d.document_no ASC, i.code ASC, l.id ASC",
+        offset,
+    ))?;
     let rows = stmt.query_map(
         params![
             filters.month,
@@ -304,11 +289,12 @@ fn sales_profit(conn: &Connection, filters: &ReportFilters<'_>) -> AppResult<Vec
     collect_rows(rows)
 }
 
-fn category_consumption(
+pub(crate) fn category_consumption(
     conn: &Connection,
     filters: &ReportFilters<'_>,
+    offset: Option<i64>,
 ) -> AppResult<Vec<CategoryConsumptionRow>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&report_sql(
         "SELECT c.id, COALESCE(c.name, '未分类'),
                 COALESCE(SUM(m.quantity), 0),
                 COALESCE(SUM(m.amount), 0)
@@ -323,8 +309,9 @@ fn category_consumption(
            AND (?5 IS NULL OR i.category_id = ?5)
            AND (?6 IS NULL OR i.id = ?6)
          GROUP BY c.id, c.name
-         ORDER BY COALESCE(SUM(m.amount), 0) DESC, COALESCE(c.name, '未分类') ASC",
-    )?;
+         ORDER BY COALESCE(SUM(m.amount), 0) DESC, COALESCE(c.name, '未分类') ASC, c.id ASC",
+        offset,
+    ))?;
     let rows = stmt.query_map(
         params![
             filters.month,
@@ -346,11 +333,12 @@ fn category_consumption(
     collect_rows(rows)
 }
 
-fn item_consumption_ranking(
+pub(crate) fn item_consumption_ranking(
     conn: &Connection,
     filters: &ReportFilters<'_>,
+    offset: Option<i64>,
 ) -> AppResult<Vec<ItemConsumptionRow>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&report_sql(
         "SELECT i.id, i.code, i.name, i.spec, u.name,
                 COALESCE(SUM(m.quantity), 0),
                 COALESCE(SUM(m.amount), 0)
@@ -365,8 +353,9 @@ fn item_consumption_ranking(
            AND (?5 IS NULL OR i.category_id = ?5)
            AND (?6 IS NULL OR i.id = ?6)
          GROUP BY i.id
-         ORDER BY COALESCE(SUM(m.amount), 0) DESC, COALESCE(SUM(m.quantity), 0) DESC, i.code ASC",
-    )?;
+         ORDER BY COALESCE(SUM(m.amount), 0) DESC, COALESCE(SUM(m.quantity), 0) DESC, i.code ASC, i.id ASC",
+        offset,
+    ))?;
     let rows = stmt.query_map(
         params![
             filters.month,
@@ -391,11 +380,12 @@ fn item_consumption_ranking(
     collect_rows(rows)
 }
 
-fn inbound_details(
+pub(crate) fn inbound_details(
     conn: &Connection,
     filters: &ReportFilters<'_>,
+    offset: Option<i64>,
 ) -> AppResult<Vec<InboundDetailRow>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&report_sql(
         "SELECT m.movement_date, COALESCE(m.supplier_name, s.name), i.code, i.name, i.spec, u.name,
                 m.quantity, m.unit_price, m.amount, doc.document_no, m.remark
          FROM stock_movements m
@@ -410,8 +400,9 @@ fn inbound_details(
            AND (?4 IS NULL OR i.category_id = ?4)
            AND (?5 IS NULL OR i.id = ?5)
            AND (?6 IS NULL OR m.supplier_id = ?6)
-         ORDER BY m.movement_date ASC, s.name ASC, i.code ASC",
-    )?;
+         ORDER BY m.movement_date ASC, s.name ASC, i.code ASC, m.created_at ASC, m.id ASC",
+        offset,
+    ))?;
     let rows = stmt.query_map(
         params![
             filters.month,
@@ -442,11 +433,12 @@ fn inbound_details(
     collect_rows(rows)
 }
 
-fn stock_warnings(
+pub(crate) fn stock_warnings(
     conn: &Connection,
     filters: &ReportFilters<'_>,
+    offset: Option<i64>,
 ) -> AppResult<Vec<StockWarningRow>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&report_sql(
         "SELECT i.id, i.code, i.name, i.spec, u.name,
                 COALESCE(b.quantity, 0),
                 i.warning_quantity,
@@ -461,8 +453,9 @@ fn stock_warnings(
            AND (?1 IS NULL OR i.category_id = ?1)
            AND (?2 IS NULL OR i.id = ?2)
            AND (?3 IS NULL OR i.supplier_id = ?3)
-         ORDER BY (i.warning_quantity - COALESCE(b.quantity, 0)) DESC, i.code ASC",
-    )?;
+         ORDER BY (i.warning_quantity - COALESCE(b.quantity, 0)) DESC, i.code ASC, i.id ASC",
+        offset,
+    ))?;
     let rows = stmt.query_map(
         params![filters.category_id, filters.item_id, filters.supplier_id],
         |row| {
@@ -482,11 +475,12 @@ fn stock_warnings(
     collect_rows(rows)
 }
 
-fn stock_balances(
+pub(crate) fn stock_balances(
     conn: &Connection,
     filters: &ReportFilters<'_>,
+    offset: Option<i64>,
 ) -> AppResult<Vec<StockBalanceReportRow>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&report_sql(
         "SELECT i.id, i.code, i.name, i.spec, u.name,
                 COALESCE(b.quantity, 0),
                 COALESCE(b.amount, 0),
@@ -500,8 +494,9 @@ fn stock_balances(
            AND (?1 IS NULL OR i.category_id = ?1)
            AND (?2 IS NULL OR i.id = ?2)
            AND (?3 IS NULL OR i.supplier_id = ?3)
-         ORDER BY i.code ASC",
-    )?;
+         ORDER BY i.code ASC, i.id ASC",
+        offset,
+    ))?;
     let rows = stmt.query_map(
         params![filters.category_id, filters.item_id, filters.supplier_id],
         |row| {
@@ -532,11 +527,12 @@ fn stock_balances(
     collect_rows(rows)
 }
 
-fn stocktake_differences(
+pub(crate) fn stocktake_differences(
     conn: &Connection,
     filters: &ReportFilters<'_>,
+    offset: Option<i64>,
 ) -> AppResult<Vec<StocktakeDifferenceReportRow>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&report_sql(
         "SELECT d.business_date, d.document_no, st.scope_type, st.status,
                 i.code, i.name, i.spec, u.name,
                 l.book_quantity,
@@ -559,8 +555,9 @@ fn stocktake_differences(
            AND ABS(l.difference_quantity) > 0.000001
            AND (?4 IS NULL OR i.category_id = ?4)
            AND (?5 IS NULL OR i.id = ?5)
-         ORDER BY d.business_date ASC, d.document_no ASC, i.code ASC",
-    )?;
+         ORDER BY d.business_date ASC, d.document_no ASC, i.code ASC, l.id ASC",
+        offset,
+    ))?;
     let rows = stmt.query_map(
         params![
             filters.month,

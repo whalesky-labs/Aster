@@ -1,0 +1,43 @@
+{
+  "maxNewSourceFileLines": 500,
+  "legacyFileLineLimits": {
+    "src/App.css": 3917,
+    "src/App.tsx": 12516,
+    "src/i18n.ts": 736,
+    "src-tauri/src/db/master_data_repository.rs": 1375,
+    "src-tauri/src/db/migrations.rs": 554,
+    "src-tauri/src/db/report_repository.rs": 1107,
+    "src-tauri/src/db/stock_repository.rs": 4257,
+    "src-tauri/src/db/stocktake_repository.rs": 771,
+    "src-tauri/src/services/backup_service.rs": 1334,
+    "src-tauri/src/services/host_service.rs": 3592,
+    "src-tauri/src/services/import_service.rs": 2535,
+    "src-tauri/src/services/master_data_service.rs": 621,
+    "src-tauri/src/services/report_service.rs": 894,
+    "src-tauri/src/services/status_service.rs": 1203,
+    "src-tauri/src/services/stock_service.rs": 548,
+    "src-tauri/src/services/user_service.rs": 1047
+  },
+  "legacyRustPanicMacroCounts": {
+    "src-tauri/src/db/connection.rs": 3,
+    "src-tauri/src/db/approval_repository.rs": 8,
+    "src-tauri/src/db/master_data_repository.rs": 54,
+    "src-tauri/src/db/migrations.rs": 16,
+    "src-tauri/src/db/report_repository.rs": 53,
+    "src-tauri/src/db/repository.rs": 25,
+    "src-tauri/src/db/stock_repository.rs": 202,
+    "src-tauri/src/db/stocktake_repository.rs": 21,
+    "src-tauri/src/db/user_repository.rs": 9,
+    "src-tauri/src/lib.rs": 5,
+    "src-tauri/src/services/approval_service.rs": 13,
+    "src-tauri/src/services/backup_service.rs": 82,
+    "src-tauri/src/services/host_service.rs": 102,
+    "src-tauri/src/services/import_service.rs": 135,
+    "src-tauri/src/services/master_data_service.rs": 5,
+    "src-tauri/src/services/report_service.rs": 14,
+    "src-tauri/src/services/status_service.rs": 35,
+    "src-tauri/src/services/stock_service.rs": 12,
+    "src-tauri/src/services/stocktake_service.rs": 8,
+    "src-tauri/src/services/user_service.rs": 44
+  }
+}

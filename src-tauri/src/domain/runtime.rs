@@ -55,7 +55,7 @@ pub struct HostServiceStatus {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientConnectionInfo {
     pub id: String,

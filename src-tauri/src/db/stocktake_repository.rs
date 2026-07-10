@@ -5,6 +5,8 @@ use crate::db::stock_repository::{
     create_batch_in_movement, create_batch_out_movements, BatchInMovementInput,
     BatchOutMovementInput,
 };
+use crate::db::{paginated_stocktake_repository, pagination};
+use crate::domain::pagination::Page;
 use crate::domain::stocktake::{
     ConfirmStocktakeRequest, CreateStocktakeRequest, StocktakeDetail, StocktakeDocument,
     StocktakeLine, UpdateStocktakeCountsRequest,
@@ -77,26 +79,14 @@ pub fn create_stocktake(
 }
 
 pub fn list_stocktakes(conn: &Connection) -> AppResult<Vec<StocktakeDocument>> {
-    let mut stmt = conn.prepare(
-        "SELECT st.id, st.document_id, d.document_no, d.business_date, st.scope_type,
-                st.status, d.handler, d.remark,
-                COUNT(l.id),
-                SUM(CASE WHEN l.counted_quantity IS NOT NULL THEN 1 ELSE 0 END),
-                SUM(CASE WHEN ABS(l.difference_quantity) > 0.000001 THEN 1 ELSE 0 END),
-                COALESCE(SUM(CASE WHEN l.difference_quantity > 0 THEN l.difference_quantity * COALESCE(b.average_price, i.default_price, 0) ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN l.difference_quantity < 0 THEN ABS(l.difference_quantity) * COALESCE(b.average_price, i.default_price, 0) ELSE 0 END), 0),
-                st.created_at, d.confirmed_at
-         FROM stocktake_documents st
-         JOIN stock_documents d ON d.id = st.document_id
-         LEFT JOIN stocktake_lines l ON l.stocktake_id = st.id
-         LEFT JOIN master_items i ON i.id = l.item_id
-         LEFT JOIN stock_balances b ON b.item_id = l.item_id
-         GROUP BY st.id
-         ORDER BY st.created_at DESC
-         LIMIT 100",
-    )?;
-    let rows = stmt.query_map([], map_stocktake_document)?;
-    collect_rows(rows)
+    pagination::collect_all(|cursor| list_stocktakes_page(conn, cursor))
+}
+
+pub fn list_stocktakes_page(
+    conn: &Connection,
+    cursor: Option<&str>,
+) -> AppResult<Page<StocktakeDocument>> {
+    paginated_stocktake_repository::list_page(conn, cursor)
 }
 
 pub fn get_stocktake_detail(conn: &Connection, stocktake_id: &str) -> AppResult<StocktakeDetail> {

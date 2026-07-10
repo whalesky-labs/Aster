@@ -39,6 +39,9 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      - name: Engineering standards
+        run: npm run verify:engineering
+
       - name: Manual acceptance path tests
         run: npm run test:manual-acceptance
 
@@ -50,6 +53,10 @@ jobs:
 
       - name: Rust format
         run: cargo fmt --check
+        working-directory: src-tauri
+
+      - name: Rust lint
+        run: cargo clippy --all-targets --all-features -- -D warnings
         working-directory: src-tauri
 
       - name: Rust tests

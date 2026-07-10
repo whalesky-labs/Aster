@@ -1,7 +1,3 @@
-use pbkdf2::password_hash::{
-    rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
-};
-use pbkdf2::Pbkdf2;
 use rand::Rng;
 use rusqlite::{params, OptionalExtension};
 
@@ -15,14 +11,10 @@ use crate::domain::users::{
 };
 use crate::error::{AppError, AppResult};
 
-const DEFAULT_ADMIN_PASSWORD: &str = "admin123";
 const PASSWORD_RESET_EXPIRES_MINUTES: i64 = 10;
 
 pub fn ensure_default_admin(state: &AppState) -> AppResult<()> {
-    let hash = hash_password(DEFAULT_ADMIN_PASSWORD)?;
-    state
-        .db
-        .with_conn(|conn| user_repository::ensure_default_admin(conn, &hash))
+    crate::application::authentication_service::ensure_default_admin(state)
 }
 
 pub fn login(state: &AppState, request: LoginRequest) -> AppResult<CurrentUser> {
@@ -35,7 +27,7 @@ pub fn login(state: &AppState, request: LoginRequest) -> AppResult<CurrentUser> 
             crate::services::host_service::remote_login(state, request)?
         }
         crate::domain::runtime::RuntimeMode::Client => {
-            let user = state.db.with_conn(|conn| login_on_conn(conn, request))?;
+            let user = crate::application::authentication_service::login_locally(state, request)?;
             if user.roles.iter().any(|role| role.code == "admin") {
                 user
             } else {
@@ -44,13 +36,18 @@ pub fn login(state: &AppState, request: LoginRequest) -> AppResult<CurrentUser> 
                 ));
             }
         }
-        _ => state.db.with_conn(|conn| login_on_conn(conn, request))?,
+        _ => crate::application::authentication_service::login_locally(state, request)?,
     };
     *state.session.lock().expect("session mutex poisoned") = Some(user.clone());
     Ok(user)
 }
 
 pub fn logout(state: &AppState) -> AppResult<()> {
+    if runtime_mode(state)? == crate::domain::runtime::RuntimeMode::Client
+        && client_has_pairing_token(state)?
+    {
+        crate::services::host_service::remote_logout(state)?;
+    }
     *state.session.lock().expect("session mutex poisoned") = None;
     Ok(())
 }
@@ -61,6 +58,10 @@ pub fn current_user(state: &AppState) -> AppResult<Option<CurrentUser>> {
         .lock()
         .expect("session mutex poisoned")
         .clone())
+}
+
+pub fn password_change_required(state: &AppState) -> AppResult<bool> {
+    crate::application::authentication_service::password_change_required(state)
 }
 
 pub fn list_users(state: &AppState) -> AppResult<Vec<UserAccount>> {
@@ -168,6 +169,7 @@ pub fn require_admin(state: &AppState) -> AppResult<CurrentUser> {
         .expect("session mutex poisoned")
         .clone()
         .ok_or_else(|| AppError::Validation("请先登录管理员账号".to_string()))?;
+    crate::application::authentication_service::require_password_changed(state, &current)?;
     if current.roles.iter().any(|role| role.code == "admin") {
         Ok(current)
     } else {
@@ -182,6 +184,7 @@ pub fn require_permission(state: &AppState, permission: &str) -> AppResult<Curre
         .expect("session mutex poisoned")
         .clone()
         .ok_or_else(|| AppError::Validation("请先登录".to_string()))?;
+    crate::application::authentication_service::require_password_changed(state, &current)?;
     if current
         .permissions
         .iter()
@@ -262,7 +265,7 @@ pub fn login_on_conn(conn: &rusqlite::Connection, request: LoginRequest) -> AppR
     let Some(hash) = hash else {
         return Err(AppError::Validation("用户未设置密码".to_string()));
     };
-    if !verify_password(&request.password, &hash) {
+    if !crate::domain::passwords::verify(&request.password, &hash) {
         return Err(AppError::Validation("用户名或密码错误".to_string()));
     }
     let current = to_current_user(user);
@@ -304,12 +307,18 @@ pub fn change_password_on_conn(
         let Some(old_hash) = old_hash else {
             return Err(AppError::Validation("用户未设置密码".to_string()));
         };
-        if !verify_password(old_password, &old_hash) {
+        if !crate::domain::passwords::verify(old_password, &old_hash) {
             return Err(AppError::Validation("旧密码错误".to_string()));
         }
     }
-    let next_hash = hash_password(&request.new_password)?;
+    let next_hash = crate::domain::passwords::hash(&request.new_password)?;
     user_repository::update_password_hash(conn, &target_user_id, &next_hash)?;
+    user_repository::set_must_change_password(conn, &target_user_id, false)?;
+    crate::db::session_repository::revoke_user(
+        conn,
+        &target_user_id,
+        chrono::Utc::now().timestamp(),
+    )?;
     conn.execute(
         "INSERT INTO audit_logs (id, action, entity_type, entity_id, summary, operator)
          VALUES (?1, 'change_password', 'user', ?2, '修改密码', ?3)",
@@ -327,19 +336,23 @@ pub fn save_user_on_conn(
     validate_user_department_binding(conn, &request)?;
     ensure_admin_would_remain_after_save(conn, &request)?;
     let password_hash = match request.password.as_deref() {
-        Some(password) if !password.trim().is_empty() => Some(hash_password(password)?),
+        Some(password) if !password.trim().is_empty() => {
+            Some(crate::domain::passwords::hash(password)?)
+        }
         _ => None,
     };
     let user = user_repository::save_user(
         conn,
-        request.id,
-        request.username.trim(),
-        request.display_name.trim(),
-        request.email.as_deref().map(str::trim).map(str::to_string),
-        password_hash,
-        request.department_id,
-        request.enabled,
-        &request.role_codes,
+        user_repository::SaveUserRecord {
+            id: request.id,
+            username: request.username.trim(),
+            display_name: request.display_name.trim(),
+            email: request.email.as_deref().map(str::trim).map(str::to_string),
+            password_hash,
+            department_id: request.department_id,
+            enabled: request.enabled,
+            role_codes: &request.role_codes,
+        },
     )?;
     conn.execute(
         "INSERT INTO audit_logs (id, action, entity_type, entity_id, summary, operator)
@@ -383,7 +396,7 @@ pub fn request_password_reset_code_on_conn(
     }
 
     let code = format!("{:06}", rand::thread_rng().gen_range(0..1_000_000));
-    let code_hash = hash_password(&code)?;
+    let code_hash = crate::domain::passwords::hash(&code)?;
     let expires_at = (chrono::Utc::now()
         + chrono::Duration::minutes(PASSWORD_RESET_EXPIRES_MINUTES))
     .naive_utc()
@@ -426,12 +439,13 @@ pub fn reset_password_with_code_on_conn(
     else {
         return Err(AppError::Validation("验证码无效或已过期".to_string()));
     };
-    if !verify_password(code, &code_hash) {
+    if !crate::domain::passwords::verify(code, &code_hash) {
         return Err(AppError::Validation("验证码错误".to_string()));
     }
-    let next_hash = hash_password(&request.new_password)?;
+    let next_hash = crate::domain::passwords::hash(&request.new_password)?;
     user_repository::update_password_hash(conn, &user_id, &next_hash)?;
     user_repository::mark_password_reset_code_used(conn, &code_id)?;
+    crate::db::session_repository::revoke_user(conn, &user_id, chrono::Utc::now().timestamp())?;
     conn.execute(
         "INSERT INTO audit_logs (id, action, entity_type, entity_id, summary, operator)
          VALUES (?1, 'reset_password_with_code', 'user', ?2, ?3, 'system')",
@@ -679,7 +693,7 @@ fn mask_email(email: &str) -> String {
     format!("{prefix}***@{domain}")
 }
 
-fn to_current_user(user: UserAccount) -> CurrentUser {
+pub(crate) fn to_current_user(user: UserAccount) -> CurrentUser {
     let permissions = permissions_for_roles(&user.roles);
     CurrentUser {
         id: user.id,
@@ -712,21 +726,6 @@ fn permissions_for_roles(roles: &[Role]) -> Vec<String> {
     permissions.sort();
     permissions.dedup();
     permissions.into_iter().map(str::to_string).collect()
-}
-
-fn hash_password(password: &str) -> AppResult<String> {
-    let salt = SaltString::generate(&mut OsRng);
-    Pbkdf2
-        .hash_password(password.as_bytes(), &salt)
-        .map(|hash| hash.to_string())
-        .map_err(|error| AppError::Validation(format!("密码哈希失败：{error}")))
-}
-
-fn verify_password(password: &str, encoded_hash: &str) -> bool {
-    let Ok(parsed) = PasswordHash::new(encoded_hash) else {
-        return false;
-    };
-    Pbkdf2.verify_password(password.as_bytes(), &parsed).is_ok()
 }
 
 #[cfg(test)]
@@ -767,9 +766,9 @@ mod tests {
 
     #[test]
     fn password_hash_verifies_only_correct_password() {
-        let hash = hash_password("admin123").unwrap();
-        assert!(verify_password("admin123", &hash));
-        assert!(!verify_password("wrong", &hash));
+        let hash = crate::domain::passwords::hash("admin123").unwrap();
+        assert!(crate::domain::passwords::verify("admin123", &hash));
+        assert!(!crate::domain::passwords::verify("wrong", &hash));
     }
 
     #[test]
@@ -865,7 +864,7 @@ mod tests {
         let conn = Connection::open_in_memory().expect("open in-memory sqlite");
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         migrations::run(&conn).unwrap();
-        let hash = hash_password("admin123").unwrap();
+        let hash = crate::domain::passwords::hash("admin123").unwrap();
         crate::db::user_repository::ensure_default_admin(&conn, &hash).unwrap();
 
         let remove_role_error = save_user_on_conn(
@@ -927,7 +926,7 @@ mod tests {
         let conn = Connection::open_in_memory().expect("open in-memory sqlite");
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         migrations::run(&conn).unwrap();
-        let hash = hash_password("admin123").unwrap();
+        let hash = crate::domain::passwords::hash("admin123").unwrap();
         crate::db::user_repository::ensure_default_admin(&conn, &hash).unwrap();
 
         let current = login_on_conn(

@@ -106,7 +106,7 @@ GitHub Actions 命令完成后，将 `docs/release-evidence/verify-release-win32
 - CPU 架构
 - 生成的安装包路径
 - 首次启动是否成功
-- 默认管理员 `admin / admin123` 是否可登录
+- 默认管理员 `admin / admin123` 首次登录后是否强制改密，改密前业务功能是否受限
 - SQLite 数据库是否创建到系统应用数据目录
 - Excel 导入预览是否可读取旧表
 - 月报 Excel 是否可导出并打开
@@ -141,7 +141,7 @@ chmod +x docs/acceptance-package/runners/run-macos-acceptance.sh
 - CPU 架构
 - `Aster.app` 是否可启动
 - DMG 是否可打开和安装
-- 默认管理员 `admin / admin123` 是否可登录
+- 默认管理员 `admin / admin123` 首次登录后是否强制改密，改密前业务功能是否受限
 - SQLite 数据库是否创建到系统应用数据目录
 - Excel 导入预览是否可读取旧表
 - 月报 Excel 是否可导出并打开
@@ -154,7 +154,7 @@ chmod +x docs/acceptance-package/runners/run-macos-acceptance.sh
 
 - 默认端口为 `17871`，端口必须在 `1024-65535` 范围内。
 - 手动填写主机地址时只填 IP 或主机名，不填写 `http://`、端口或路径。
-- 配对码必须是主机界面显示的 6 位数字，客户端名称和设备 ID 不能为空。
+- 配对码必须是主机界面显示的一次性 12 位数字，客户端名称和设备 ID 不能为空。
 - Windows 作为主机时，确认系统防火墙允许 Aster 或默认端口 `17871` 的局域网入站连接。
 - macOS 作为主机时，确认系统允许 Aster 进行局域网访问。
 
@@ -162,7 +162,7 @@ chmod +x docs/acceptance-package/runners/run-macos-acceptance.sh
 
 1. Windows 设置为主机模式。
 2. 启动主机服务。
-3. 记录主机 IP、端口和 6 位配对码。
+3. 记录主机 IP、端口和 12 位配对码。
 4. macOS 设置为客户端模式。
 5. 使用自动发现或手动填写主机地址。
 6. 完成配对。
@@ -175,7 +175,7 @@ chmod +x docs/acceptance-package/runners/run-macos-acceptance.sh
 
 1. macOS 设置为主机模式。
 2. 启动主机服务。
-3. 记录主机 IP、端口和 6 位配对码。
+3. 记录主机 IP、端口和 12 位配对码。
 4. Windows 设置为客户端模式。
 5. 使用自动发现或手动填写主机地址。
 6. 完成配对。

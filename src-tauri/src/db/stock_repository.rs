@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use rusqlite::{params, Connection, OptionalExtension};
 use uuid::Uuid;
 
+use crate::db::pagination::{self, FETCH_SIZE};
+use crate::domain::pagination::Page;
 use crate::domain::stock::{
     ConfirmStockDocumentDraftRequest, SaveStockDocumentDraftRequest, StockBalanceQuery,
     StockBalanceRow, StockBatchRow, StockDocument, StockDocumentBatchLine, StockDocumentDetail,
@@ -11,8 +13,6 @@ use crate::domain::stock::{
     VoidStockDocumentRequest,
 };
 use crate::error::{AppError, AppResult};
-
-const STOCK_LIST_LIMIT: i64 = 2_000;
 
 pub fn submit_stock_document(
     conn: &mut Connection,
@@ -412,15 +412,17 @@ pub fn void_stock_document(
             } else {
                 "in"
             };
-            apply_balance(
+            crate::db::balance_repository::apply(
                 &tx,
-                &movement.item_id,
-                reverse_direction,
-                movement.quantity,
-                movement.unit_price,
-                movement.amount,
-                movement.unit_price,
-                true,
+                crate::db::balance_repository::BalanceChange {
+                    item_id: &movement.item_id,
+                    direction: reverse_direction,
+                    quantity: movement.quantity,
+                    unit_price: movement.unit_price,
+                    amount: movement.amount,
+                    default_price: movement.unit_price,
+                    allow_negative_stock: true,
+                },
             )?;
             tx.execute(
                 "INSERT INTO stock_movements (
@@ -487,123 +489,36 @@ pub fn list_stock_documents(
     conn: &Connection,
     query: StockDocumentQuery,
 ) -> AppResult<Vec<StockDocument>> {
-    let document_type = blank_to_none(query.document_type);
-    let outbound_kind = blank_to_none(query.outbound_kind);
-    let month = blank_to_none(query.month);
-    let department_id = blank_to_none(query.department_id);
-    let supplier_id = blank_to_none(query.supplier_id);
-    let item_id = blank_to_none(query.item_id);
-    let handler = blank_to_none(query.handler);
-    let search = blank_to_none(query.search);
-    let search_like = search.as_ref().map(|value| format!("%{}%", value.trim()));
-    let mut stmt = conn.prepare(
-        "WITH document_items AS (
-           SELECT ranked.document_id,
-                  GROUP_CONCAT(ranked.item_label, '、') ||
-                    CASE
-                      WHEN totals.item_count > 3 THEN ' 等 ' || totals.item_count || ' 项'
-                      ELSE ''
-                    END AS item_summary
-           FROM (
-             SELECT l.document_id,
-                    i.code || ' · ' || i.name AS item_label,
-                    ROW_NUMBER() OVER (
-                      PARTITION BY l.document_id
-                      ORDER BY MIN(l.created_at), i.code, i.name
-                    ) AS row_number
-             FROM stock_document_lines l
-             JOIN master_items i ON i.id = l.item_id
-             GROUP BY l.document_id, l.item_id
-           ) ranked
-           JOIN (
-             SELECT document_id, COUNT(DISTINCT item_id) AS item_count
-             FROM stock_document_lines
-             GROUP BY document_id
-           ) totals ON totals.document_id = ranked.document_id
-           WHERE ranked.row_number <= 3
-           GROUP BY ranked.document_id
-         )
-         SELECT d.id, d.document_no, d.document_type, d.outbound_kind, d.business_date,
-                d.department_id, COALESCE(d.department_name, dep.name),
-                d.supplier_id, COALESCE(d.supplier_name, sup.name),
-                d.handler, d.purpose, d.approval_request_id, d.status, d.remark,
-                COALESCE(SUM(l.quantity), 0),
-                COALESCE(SUM(CASE
-                  WHEN d.document_type = 'inbound' THEN COALESCE(l.purchase_amount, l.amount)
-                  WHEN d.document_type = 'outbound' AND d.outbound_kind = 'guest_sale' THEN COALESCE(l.sale_amount, l.amount)
-                  ELSE COALESCE(l.cost_amount, l.amount)
-                END), 0),
-                COALESCE(SUM(COALESCE(l.purchase_amount, 0)), 0),
-                COALESCE(SUM(COALESCE(l.sale_amount, 0)), 0),
-                COALESCE(SUM(COALESCE(l.cost_amount, CASE WHEN d.document_type != 'inbound' THEN l.amount ELSE 0 END)), 0),
-                COALESCE(SUM(COALESCE(l.sale_amount, 0) - COALESCE(l.cost_amount, 0)), 0),
-                di.item_summary, d.created_at, d.confirmed_at
-         FROM stock_documents d
-         LEFT JOIN departments dep ON dep.id = d.department_id
-         LEFT JOIN suppliers sup ON sup.id = d.supplier_id
-         LEFT JOIN stock_document_lines l ON l.document_id = d.id
-         LEFT JOIN document_items di ON di.document_id = d.id
-         WHERE (?1 IS NULL OR d.document_type = ?1)
-           AND (?2 IS NULL OR d.outbound_kind = ?2)
-           AND (?3 IS NULL OR strftime('%Y-%m', d.business_date) = ?3)
-           AND (?4 IS NULL OR d.department_id = ?4)
-           AND (?5 IS NULL OR d.supplier_id = ?5)
-           AND (?6 IS NULL OR EXISTS (
-             SELECT 1 FROM stock_document_lines line_filter
-             WHERE line_filter.document_id = d.id
-               AND line_filter.item_id = ?6
-           ))
-           AND (?7 IS NULL OR d.handler = ?7)
-           AND (
-             ?8 IS NULL
-             OR d.document_no LIKE ?8
-             OR COALESCE(d.handler, '') LIKE ?8
-             OR COALESCE(d.purpose, '') LIKE ?8
-             OR COALESCE(d.remark, '') LIKE ?8
-             OR COALESCE(d.department_name, '') LIKE ?8
-             OR COALESCE(d.supplier_name, '') LIKE ?8
-             OR EXISTS (
-               SELECT 1
-               FROM stock_document_lines search_line
-               JOIN master_items search_item ON search_item.id = search_line.item_id
-               WHERE search_line.document_id = d.id
-                 AND (
-                   search_item.code LIKE ?8
-                   OR search_item.name LIKE ?8
-                   OR COALESCE(search_item.spec, '') LIKE ?8
-                 )
-             )
-           )
-         GROUP BY d.id
-         ORDER BY d.business_date DESC, d.created_at DESC
-         LIMIT ?9",
-    )?;
-    let rows = stmt.query_map(
-        params![
-            document_type,
-            outbound_kind,
-            month,
-            department_id,
-            supplier_id,
-            item_id,
-            handler,
-            search_like,
-            STOCK_LIST_LIMIT
-        ],
-        map_document,
-    )?;
-    collect_rows(rows)
+    pagination::collect_all(|cursor| {
+        crate::db::paginated_stock_repository::list_documents_page(conn, query.clone(), cursor)
+    })
 }
 
 pub fn list_stock_balances(
     conn: &Connection,
     query: StockBalanceQuery,
 ) -> AppResult<Vec<StockBalanceRow>> {
+    pagination::collect_all(|cursor| list_stock_balances_page(conn, query.clone(), cursor))
+}
+
+pub fn list_stock_balances_page(
+    conn: &Connection,
+    query: StockBalanceQuery,
+    cursor: Option<&str>,
+) -> AppResult<Page<StockBalanceRow>> {
     let search = query.search.unwrap_or_default();
     let like = format!("%{}%", search.trim());
     let category_id = blank_to_none(query.category_id);
     let item_id = blank_to_none(query.item_id);
     let stock_status = blank_to_none(query.stock_status);
+    let scope = format!(
+        "stock-balances:{}:{}:{}:{}",
+        search.trim().to_lowercase(),
+        category_id.as_deref().unwrap_or_default(),
+        item_id.as_deref().unwrap_or_default(),
+        stock_status.as_deref().unwrap_or_default()
+    );
+    let offset = pagination::offset(conn, &scope, cursor)?;
     let mut stmt = conn.prepare(
         "SELECT i.id, i.code, i.name, i.spec, u.name,
                 COALESCE(b.quantity, 0), COALESCE(b.amount, 0),
@@ -621,11 +536,11 @@ pub fn list_stock_balances(
              OR (?4 = 'low' AND COALESCE(b.quantity, 0) >= 0 AND COALESCE(b.quantity, 0) <= i.warning_quantity)
              OR (?4 = 'normal' AND COALESCE(b.quantity, 0) >= 0 AND COALESCE(b.quantity, 0) > i.warning_quantity)
            )
-         ORDER BY i.enabled DESC, i.code ASC
-         LIMIT ?5",
+         ORDER BY i.enabled DESC, i.code ASC, i.id ASC
+         LIMIT ?5 OFFSET ?6",
     )?;
     let rows = stmt.query_map(
-        params![like, category_id, item_id, stock_status, STOCK_LIST_LIMIT],
+        params![like, category_id, item_id, stock_status, FETCH_SIZE, offset],
         |row| {
             let quantity: f64 = row.get(5)?;
             let warning_quantity: f64 = row.get(9)?;
@@ -651,15 +566,25 @@ pub fn list_stock_balances(
             })
         },
     )?;
-    collect_rows(rows)
+    pagination::page(conn, &scope, offset, collect_rows(rows)?)
 }
 
 pub fn list_stock_batches(conn: &Connection, item_id: &str) -> AppResult<Vec<StockBatchRow>> {
+    pagination::collect_all(|cursor| list_stock_batches_page(conn, item_id, cursor))
+}
+
+pub fn list_stock_batches_page(
+    conn: &Connection,
+    item_id: &str,
+    cursor: Option<&str>,
+) -> AppResult<Page<StockBatchRow>> {
     let item_id = item_id.trim();
     if item_id.is_empty() {
         return Err(AppError::Validation("物品 ID 不能为空".to_string()));
     }
     ensure_opening_batch_from_balance(conn, item_id)?;
+    let scope = format!("stock-batches:{item_id}");
+    let offset = pagination::offset(conn, &scope, cursor)?;
     let mut stmt = conn.prepare(
         "SELECT b.id, b.item_id, i.code, i.name, b.batch_no, b.inbound_date,
                 b.supplier_name, b.original_quantity, b.remaining_quantity,
@@ -669,9 +594,10 @@ pub fn list_stock_batches(conn: &Connection, item_id: &str) -> AppResult<Vec<Sto
          JOIN master_items i ON i.id = b.item_id
          LEFT JOIN stock_documents d ON d.id = b.source_document_id
          WHERE b.item_id = ?1
-         ORDER BY b.inbound_date ASC, b.created_at ASC, b.batch_no ASC",
+         ORDER BY b.inbound_date ASC, b.created_at ASC, b.batch_no ASC, b.id ASC
+         LIMIT ?2 OFFSET ?3",
     )?;
-    let rows = stmt.query_map(params![item_id], |row| {
+    let rows = stmt.query_map(params![item_id, FETCH_SIZE, offset], |row| {
         Ok(StockBatchRow {
             id: row.get(0)?,
             item_id: row.get(1)?,
@@ -691,68 +617,16 @@ pub fn list_stock_batches(conn: &Connection, item_id: &str) -> AppResult<Vec<Sto
             updated_at: row.get(15)?,
         })
     })?;
-    collect_rows(rows)
+    pagination::page(conn, &scope, offset, collect_rows(rows)?)
 }
 
 pub fn list_stock_movements(
     conn: &Connection,
     query: StockMovementQuery,
 ) -> AppResult<Vec<StockMovementRow>> {
-    let search = query.search.unwrap_or_default();
-    let like = format!("%{}%", search.trim());
-    let item_id = blank_to_none(query.item_id);
-    let department_id = blank_to_none(query.department_id);
-    let direction = blank_to_none(query.direction);
-    let movement_type = blank_to_none(query.movement_type);
-    let mut stmt = conn.prepare(
-        "SELECT m.id, m.movement_date, i.code, i.name, m.direction,
-                m.quantity, m.unit_price, m.amount, d.document_no,
-                COALESCE(m.department_name, dep.name),
-                COALESCE(m.supplier_name, sup.name),
-                m.movement_type, m.operator, m.remark, m.created_at
-         FROM stock_movements m
-         JOIN master_items i ON i.id = m.item_id
-         LEFT JOIN stock_documents d ON d.id = m.document_id
-         LEFT JOIN departments dep ON dep.id = m.department_id
-         LEFT JOIN suppliers sup ON sup.id = m.supplier_id
-         WHERE (?1 = '%%' OR i.code LIKE ?1 OR i.name LIKE ?1 OR COALESCE(d.document_no, '') LIKE ?1 OR COALESCE(m.operator, '') LIKE ?1 OR COALESCE(m.remark, '') LIKE ?1)
-           AND (?2 IS NULL OR m.item_id = ?2)
-           AND (?3 IS NULL OR m.department_id = ?3)
-           AND (?4 IS NULL OR m.direction = ?4)
-           AND (?5 IS NULL OR m.movement_type = ?5)
-         ORDER BY m.movement_date DESC, m.created_at DESC
-         LIMIT ?6",
-    )?;
-    let rows = stmt.query_map(
-        params![
-            like,
-            item_id,
-            department_id,
-            direction,
-            movement_type,
-            STOCK_LIST_LIMIT
-        ],
-        |row| {
-            Ok(StockMovementRow {
-                id: row.get(0)?,
-                movement_date: row.get(1)?,
-                item_code: row.get(2)?,
-                item_name: row.get(3)?,
-                direction: row.get(4)?,
-                quantity: row.get(5)?,
-                unit_price: row.get(6)?,
-                amount: row.get(7)?,
-                document_no: row.get(8)?,
-                department_name: row.get(9)?,
-                supplier_name: row.get(10)?,
-                movement_type: row.get(11)?,
-                operator: row.get(12)?,
-                remark: row.get(13)?,
-                created_at: row.get(14)?,
-            })
-        },
-    )?;
-    collect_rows(rows)
+    pagination::collect_all(|cursor| {
+        crate::db::paginated_stock_repository::list_movements_page(conn, query.clone(), cursor)
+    })
 }
 
 pub fn get_stock_document_detail(conn: &Connection, id: &str) -> AppResult<StockDocumentDetail> {
@@ -967,15 +841,17 @@ fn apply_confirmed_document_effects(
         } else {
             apply_outbound_line(
                 tx,
-                document_id,
-                &request,
-                &line,
-                department_id.clone(),
-                snapshot_names.department_name.clone(),
-                supplier_id.clone(),
-                snapshot_names.supplier_name.clone(),
-                allow_negative_stock,
-                item.default_price,
+                OutboundLineInput {
+                    document_id,
+                    request: &request,
+                    line: &line,
+                    department_id: department_id.clone(),
+                    department_name: snapshot_names.department_name.clone(),
+                    supplier_id: supplier_id.clone(),
+                    supplier_name: snapshot_names.supplier_name.clone(),
+                    allow_negative_stock,
+                    default_price: item.default_price,
+                },
             )?;
         }
     }
@@ -1074,36 +950,37 @@ fn apply_inbound_line(
     )
 }
 
-fn apply_outbound_line(
-    conn: &Connection,
-    document_id: &str,
-    request: &SubmitStockDocumentRequest,
-    line: &DocumentLineForConfirm,
+struct OutboundLineInput<'a> {
+    document_id: &'a str,
+    request: &'a SubmitStockDocumentRequest,
+    line: &'a DocumentLineForConfirm,
     department_id: Option<String>,
     department_name: Option<String>,
     supplier_id: Option<String>,
     supplier_name: Option<String>,
     allow_negative_stock: bool,
     default_price: f64,
-) -> AppResult<()> {
+}
+
+fn apply_outbound_line(conn: &Connection, input: OutboundLineInput<'_>) -> AppResult<()> {
     let (actual_unit_price, actual_amount) = create_batch_out_movements(
         conn,
         BatchOutMovementInput {
-            document_id,
-            document_line_id: &line.line_id,
-            item_id: &line.item_id,
-            business_date: &request.business_date,
-            quantity: line.quantity,
-            department_id,
-            department_name,
-            supplier_id,
-            supplier_name,
+            document_id: input.document_id,
+            document_line_id: &input.line.line_id,
+            item_id: &input.line.item_id,
+            business_date: &input.request.business_date,
+            quantity: input.line.quantity,
+            department_id: input.department_id,
+            department_name: input.department_name,
+            supplier_id: input.supplier_id,
+            supplier_name: input.supplier_name,
             movement_type: "outbound",
-            operator: blank_to_none(request.handler.clone())
+            operator: blank_to_none(input.request.handler.clone())
                 .unwrap_or_else(|| "system".to_string()),
-            remark: blank_to_none(line.remark.clone()),
-            allow_negative_stock,
-            fallback_unit_price: line.unit_price.max(default_price),
+            remark: blank_to_none(input.line.remark.clone()),
+            allow_negative_stock: input.allow_negative_stock,
+            fallback_unit_price: input.line.unit_price.max(input.default_price),
         },
     )?;
     conn.execute(
@@ -1111,7 +988,7 @@ fn apply_outbound_line(
          SET unit_price = ?1, amount = ?2,
              cost_unit_price = ?1, cost_amount = ?2
          WHERE id = ?3",
-        params![actual_unit_price, actual_amount, line.line_id],
+        params![actual_unit_price, actual_amount, input.line.line_id],
     )?;
     Ok(())
 }
@@ -1344,15 +1221,17 @@ pub(crate) fn create_batch_out_movements(
                 input.remark
             ],
         )?;
-        apply_balance(
+        crate::db::balance_repository::apply(
             conn,
-            input.item_id,
-            "out",
-            short_quantity,
-            input.fallback_unit_price,
-            short_amount,
-            input.fallback_unit_price,
-            true,
+            crate::db::balance_repository::BalanceChange {
+                item_id: input.item_id,
+                direction: "out",
+                quantity: short_quantity,
+                unit_price: input.fallback_unit_price,
+                amount: short_amount,
+                default_price: input.fallback_unit_price,
+                allow_negative_stock: true,
+            },
         )?;
     } else {
         sync_balance_from_batches(conn, input.item_id)?;
@@ -1364,97 +1243,6 @@ pub(crate) fn create_batch_out_movements(
         round_price(actual_amount / input.quantity)
     };
     Ok((actual_unit_price, actual_amount))
-}
-
-fn apply_balance(
-    conn: &Connection,
-    item_id: &str,
-    direction: &str,
-    quantity: f64,
-    unit_price: f64,
-    amount: f64,
-    default_price: f64,
-    allow_negative_stock: bool,
-) -> AppResult<()> {
-    let existing = conn
-        .query_row(
-            "SELECT quantity, amount, average_price, last_inbound_price
-             FROM stock_balances WHERE item_id = ?1",
-            params![item_id],
-            |row| {
-                Ok((
-                    row.get::<_, f64>(0)?,
-                    row.get::<_, f64>(1)?,
-                    row.get::<_, f64>(2)?,
-                    row.get::<_, f64>(3)?,
-                ))
-            },
-        )
-        .optional()?
-        .unwrap_or((0.0, 0.0, default_price, 0.0));
-
-    let (old_qty, old_amount, old_avg_price, old_last_price) = existing;
-    let (new_qty, new_amount, new_avg_price, new_last_price) = if direction == "in" {
-        let next_qty = old_qty + quantity;
-        let next_amount = old_amount + amount;
-        let next_avg = if next_qty.abs() < f64::EPSILON {
-            0.0
-        } else {
-            round_price(next_amount / next_qty)
-        };
-        (next_qty, round_money(next_amount), next_avg, unit_price)
-    } else {
-        if !allow_negative_stock && old_qty + f64::EPSILON < quantity {
-            return Err(AppError::Validation(format!(
-                "库存不足：当前库存 {old_qty}，出库数量 {quantity}"
-            )));
-        }
-        let price = if old_avg_price > 0.0 {
-            old_avg_price
-        } else {
-            unit_price
-        };
-        let out_amount = if amount > 0.0 {
-            amount
-        } else {
-            round_money(quantity * price)
-        };
-        let next_qty = old_qty - quantity;
-        let next_amount = if allow_negative_stock {
-            old_amount - out_amount
-        } else {
-            (old_amount - out_amount).max(0.0)
-        };
-        let next_avg = if next_qty.abs() < f64::EPSILON {
-            0.0
-        } else {
-            round_price(next_amount / next_qty)
-        };
-        (next_qty, round_money(next_amount), next_avg, old_last_price)
-    };
-
-    conn.execute(
-        "INSERT INTO stock_balances (
-           id, item_id, quantity, amount, average_price, last_inbound_price, updated_at
-         )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP)
-         ON CONFLICT(item_id) DO UPDATE SET
-           quantity = excluded.quantity,
-           amount = excluded.amount,
-           average_price = excluded.average_price,
-           last_inbound_price = excluded.last_inbound_price,
-           updated_at = CURRENT_TIMESTAMP",
-        params![
-            new_id(),
-            item_id,
-            new_qty,
-            new_amount,
-            new_avg_price,
-            new_last_price
-        ],
-    )?;
-
-    Ok(())
 }
 
 fn planned_outbound_costs(
@@ -2154,7 +1942,7 @@ fn next_batch_no(conn: &Connection, document_no: &str) -> AppResult<String> {
     Ok(format!("{document_no}-B{:03}", count + 1))
 }
 
-fn map_document(row: &rusqlite::Row<'_>) -> rusqlite::Result<StockDocument> {
+pub(crate) fn map_document(row: &rusqlite::Row<'_>) -> rusqlite::Result<StockDocument> {
     Ok(StockDocument {
         id: row.get(0)?,
         document_no: row.get(1)?,

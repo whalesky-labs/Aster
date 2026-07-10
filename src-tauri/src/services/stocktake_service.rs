@@ -98,6 +98,7 @@ pub fn export_stocktake_sheet(
 
 pub(crate) fn validate_create_request(request: &CreateStocktakeRequest) -> AppResult<()> {
     crate::services::stock_service::validate_business_datetime(&request.business_date, "盘点日期")?;
+    crate::application::write_limits::validate_line_count(request.item_ids.len(), "盘点范围")?;
     match request.scope_type.as_str() {
         "all" => Ok(()),
         "category" => {
@@ -131,6 +132,7 @@ pub(crate) fn validate_update_counts(request: &UpdateStocktakeCountsRequest) -> 
     if request.lines.is_empty() {
         return Err(AppError::Validation("至少需要提交一行盘点数量".to_string()));
     }
+    crate::application::write_limits::validate_line_count(request.lines.len(), "盘点录入")?;
     Ok(())
 }
 
@@ -273,26 +275,28 @@ mod tests {
         std::fs::create_dir_all(&paths.backup_dir).unwrap();
         std::fs::create_dir_all(&paths.export_dir).unwrap();
         std::fs::create_dir_all(&paths.import_report_dir).unwrap();
+        let user = CurrentUser {
+            id: "user-stocktake".to_string(),
+            username: "stocktake".to_string(),
+            display_name: "盘点用户".to_string(),
+            department_id: None,
+            department_name: None,
+            roles: vec![Role {
+                id: "role-stocktake".to_string(),
+                code: "admin".to_string(),
+                name: "管理员".to_string(),
+            }],
+            permissions: vec!["write_stock".to_string(), "view_reports".to_string()],
+        };
         let state = AppState {
             db: Db::initialize(&paths).unwrap(),
             paths,
-            session: Arc::new(Mutex::new(Some(CurrentUser {
-                id: "user-stocktake".to_string(),
-                username: "stocktake".to_string(),
-                display_name: "盘点用户".to_string(),
-                department_id: None,
-                department_name: None,
-                roles: vec![Role {
-                    id: "role-stocktake".to_string(),
-                    code: "admin".to_string(),
-                    name: "管理员".to_string(),
-                }],
-                permissions: vec!["write_stock".to_string(), "view_reports".to_string()],
-            }))),
+            session: Arc::new(Mutex::new(None)),
             host_service: Arc::new(Mutex::new(
                 crate::services::host_service::HostServiceRuntime::default(),
             )),
         };
+        crate::services::test_support::install_session(&state, user).unwrap();
         (dir, state)
     }
 

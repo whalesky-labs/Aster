@@ -1,17 +1,27 @@
 use rusqlite::{params, Connection};
 
+use crate::db::pagination::{self, FETCH_SIZE};
 use crate::domain::backups::BackupRecord;
+use crate::domain::pagination::Page;
 use crate::error::AppResult;
 
 pub fn list_backup_records(conn: &Connection) -> AppResult<Vec<BackupRecord>> {
+    pagination::collect_all(|cursor| list_backup_records_page(conn, cursor))
+}
+
+pub fn list_backup_records_page(
+    conn: &Connection,
+    cursor: Option<&str>,
+) -> AppResult<Page<BackupRecord>> {
+    let offset = pagination::offset(conn, "backups", cursor)?;
     let mut stmt = conn.prepare(
         "SELECT id, backup_file, backup_type, app_version, schema_version,
                 host_name, os, database_size, sha256, status, error_message, created_at
          FROM backup_jobs
-         ORDER BY created_at DESC
-         LIMIT 100",
+         ORDER BY created_at DESC, id DESC
+         LIMIT ?1 OFFSET ?2",
     )?;
-    let rows = stmt.query_map([], |row| {
+    let rows = stmt.query_map(params![FETCH_SIZE, offset], |row| {
         Ok(BackupRecord {
             id: row.get(0)?,
             backup_file: row.get(1)?,
@@ -32,7 +42,7 @@ pub fn list_backup_records(conn: &Connection) -> AppResult<Vec<BackupRecord>> {
     for row in rows {
         output.push(row?);
     }
-    Ok(output)
+    pagination::page(conn, "backups", offset, output)
 }
 
 pub fn list_auto_backup_records(conn: &Connection) -> AppResult<Vec<BackupRecord>> {
@@ -68,20 +78,55 @@ pub fn list_auto_backup_records(conn: &Connection) -> AppResult<Vec<BackupRecord
     Ok(output)
 }
 
-pub fn insert_backup_record(
+pub struct NewBackupRecord<'a> {
+    pub id: &'a str,
+    pub backup_file: &'a str,
+    pub backup_type: &'a str,
+    pub app_version: &'a str,
+    pub schema_version: i64,
+    pub host_name: &'a str,
+    pub os: &'a str,
+    pub database_size: u64,
+    pub sha256: &'a str,
+    pub status: &'a str,
+    pub error_message: Option<&'a str>,
+}
+
+pub struct SuccessfulBackupRecord<'a> {
+    pub id: &'a str,
+    pub backup_file: &'a str,
+    pub backup_type: &'a str,
+    pub app_version: &'a str,
+    pub schema_version: i64,
+    pub host_name: &'a str,
+    pub os: &'a str,
+    pub database_size: u64,
+    pub sha256: &'a str,
+}
+
+pub fn insert_successful_backup(
     conn: &Connection,
-    id: &str,
-    backup_file: &str,
-    backup_type: &str,
-    app_version: &str,
-    schema_version: i64,
-    host_name: &str,
-    os: &str,
-    database_size: u64,
-    sha256: &str,
-    status: &str,
-    error_message: Option<&str>,
+    record: SuccessfulBackupRecord<'_>,
 ) -> AppResult<()> {
+    insert_backup_record(
+        conn,
+        NewBackupRecord {
+            id: record.id,
+            backup_file: record.backup_file,
+            backup_type: record.backup_type,
+            app_version: record.app_version,
+            schema_version: record.schema_version,
+            host_name: record.host_name,
+            os: record.os,
+            database_size: record.database_size,
+            sha256: record.sha256,
+            status: "success",
+            error_message: None,
+        },
+    )
+}
+
+pub fn insert_backup_record(conn: &Connection, record: NewBackupRecord<'_>) -> AppResult<()> {
     conn.execute(
         "INSERT INTO backup_jobs (
            id, backup_file, backup_type, app_version, schema_version,
@@ -89,17 +134,17 @@ pub fn insert_backup_record(
          )
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
-            id,
-            backup_file,
-            backup_type,
-            app_version,
-            schema_version,
-            host_name,
-            os,
-            database_size as i64,
-            sha256,
-            status,
-            error_message
+            record.id,
+            record.backup_file,
+            record.backup_type,
+            record.app_version,
+            record.schema_version,
+            record.host_name,
+            record.os,
+            record.database_size as i64,
+            record.sha256,
+            record.status,
+            record.error_message
         ],
     )?;
     Ok(())

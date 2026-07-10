@@ -324,19 +324,19 @@ pub fn create_backup_of_type(state: &AppState, backup_type: &str) -> AppResult<B
 
     let second_backup_file = copy_to_second_backup_dir(state, &backup_path)?;
     state.db.with_conn(|conn| {
-        backup_repository::insert_backup_record(
+        backup_repository::insert_successful_backup(
             conn,
-            &backup_id,
-            &backup_path.display().to_string(),
-            backup_type,
-            APP_VERSION,
-            schema_version,
-            &source_host_name,
-            &source_os,
-            database_size,
-            &database_sha256,
-            "success",
-            None,
+            backup_repository::SuccessfulBackupRecord {
+                id: &backup_id,
+                backup_file: &backup_path.display().to_string(),
+                backup_type,
+                app_version: APP_VERSION,
+                schema_version,
+                host_name: &source_host_name,
+                os: &source_os,
+                database_size,
+                sha256: &database_sha256,
+            },
         )
     })?;
     cleanup_auto_backups(state)?;
@@ -697,28 +697,28 @@ mod tests {
         fs::create_dir_all(&paths.backup_dir).unwrap();
         fs::create_dir_all(&paths.export_dir).unwrap();
         fs::create_dir_all(&paths.import_report_dir).unwrap();
+        let user = crate::domain::users::CurrentUser {
+            id: format!("user-{role_code}"),
+            username: role_code.to_string(),
+            display_name: role_code.to_string(),
+            department_id: None,
+            department_name: None,
+            roles: vec![crate::domain::users::Role {
+                id: format!("role-{role_code}"),
+                code: role_code.to_string(),
+                name: role_code.to_string(),
+            }],
+            permissions,
+        };
         let state = AppState {
             db: Db::initialize(&paths).unwrap(),
             paths,
-            session: std::sync::Arc::new(std::sync::Mutex::new(Some(
-                crate::domain::users::CurrentUser {
-                    id: format!("user-{role_code}"),
-                    username: role_code.to_string(),
-                    display_name: role_code.to_string(),
-                    department_id: None,
-                    department_name: None,
-                    roles: vec![crate::domain::users::Role {
-                        id: format!("role-{role_code}"),
-                        code: role_code.to_string(),
-                        name: role_code.to_string(),
-                    }],
-                    permissions,
-                },
-            ))),
+            session: std::sync::Arc::new(std::sync::Mutex::new(None)),
             host_service: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::services::host_service::HostServiceRuntime::default(),
             )),
         };
+        crate::services::test_support::install_session(&state, user).unwrap();
         (dir, state)
     }
 

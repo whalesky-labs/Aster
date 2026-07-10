@@ -4,7 +4,7 @@ use crate::app::state::AppState;
 use crate::domain::users::{
     ChangePasswordRequest, CurrentUser, LoginRequest, RequestPasswordResetCodeRequest,
     RequestPasswordResetCodeResponse, ResetPasswordWithCodeRequest, Role, SaveUserRequest,
-    SetUserEnabledRequest, UserAccount,
+    SavedCredential, SavedCredentialRequest, SetUserEnabledRequest, UserAccount,
 };
 use crate::error::AppResult;
 use crate::services::user_service;
@@ -25,6 +25,32 @@ pub fn logout(state: State<'_, AppState>) -> AppResult<()> {
 #[tauri::command]
 pub fn get_current_user(state: State<'_, AppState>) -> AppResult<Option<CurrentUser>> {
     user_service::current_user(&state)
+}
+
+#[tauri::command]
+pub fn get_password_change_required(state: State<'_, AppState>) -> AppResult<bool> {
+    user_service::password_change_required(&state)
+}
+
+#[tauri::command]
+pub fn load_saved_credential(
+    state: State<'_, AppState>,
+    username: String,
+) -> AppResult<Option<SavedCredential>> {
+    crate::application::credential_service::load(&state, username)
+}
+
+#[tauri::command]
+pub fn save_login_credential(
+    state: State<'_, AppState>,
+    request: SavedCredentialRequest,
+) -> AppResult<()> {
+    crate::application::credential_service::save(&state, request)
+}
+
+#[tauri::command]
+pub fn delete_login_credential(state: State<'_, AppState>, username: String) -> AppResult<()> {
+    crate::application::credential_service::delete(&state, username)
 }
 
 #[tauri::command]

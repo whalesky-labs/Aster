@@ -1,5 +1,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::db::pagination;
+use crate::domain::pagination::Page;
 use crate::domain::status::{AuditLogRow, DashboardMetrics, RecentOperation};
 use crate::error::AppResult;
 
@@ -132,14 +134,32 @@ pub fn recent_operations(
 }
 
 pub fn list_audit_logs(conn: &Connection, limit: i64) -> AppResult<Vec<AuditLogRow>> {
+    pagination::collect_all(|cursor| list_audit_logs_page(conn, limit, cursor))
+}
+
+pub fn list_audit_logs_page(
+    conn: &Connection,
+    limit: i64,
+    cursor: Option<&str>,
+) -> AppResult<Page<AuditLogRow>> {
     let limit = limit.clamp(1, 500);
+    let scope = format!("audit-logs:{limit}");
+    let offset = pagination::offset(conn, &scope, cursor)?;
+    let remaining = (limit - offset).max(0);
+    if remaining == 0 {
+        return Ok(Page {
+            items: Vec::new(),
+            next_cursor: None,
+        });
+    }
+    let fetch = remaining;
     let mut stmt = conn.prepare(
         "SELECT id, action, entity_type, entity_id, summary, operator, created_at
          FROM audit_logs
          ORDER BY created_at DESC, rowid DESC
-         LIMIT ?1",
+         LIMIT ?1 OFFSET ?2",
     )?;
-    let rows = stmt.query_map(params![limit], |row| {
+    let rows = stmt.query_map(params![fetch, offset], |row| {
         Ok(AuditLogRow {
             id: row.get(0)?,
             action: row.get(1)?,
@@ -154,7 +174,10 @@ pub fn list_audit_logs(conn: &Connection, limit: i64) -> AppResult<Vec<AuditLogR
     for row in rows {
         output.push(row?);
     }
-    Ok(output)
+    Ok(Page {
+        items: output,
+        next_cursor: None,
+    })
 }
 
 pub fn integrity_check(conn: &Connection) -> AppResult<String> {

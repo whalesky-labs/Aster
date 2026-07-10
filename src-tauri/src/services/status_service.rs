@@ -723,11 +723,9 @@ fn with_local_directory_settings(
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use crate::app::paths::AppPaths;
-    use crate::app::state::AppState;
-    use crate::db::connection::Db;
     use crate::domain::status::SaveSystemSettingsRequest;
     use crate::domain::users::{CurrentUser, Role};
+    use crate::{app::paths::AppPaths, app::state::AppState, db::connection::Db};
 
     use super::*;
 
@@ -754,7 +752,7 @@ mod tests {
     }
 
     fn set_admin_user(state: &AppState) {
-        *state.session.lock().expect("session mutex poisoned") = Some(CurrentUser {
+        let user = CurrentUser {
             id: "user-admin".to_string(),
             username: "admin".to_string(),
             display_name: "管理员".to_string(),
@@ -769,7 +767,8 @@ mod tests {
                 "dangerous_operations".to_string(),
                 "manage_settings".to_string(),
             ],
-        });
+        };
+        crate::services::test_support::install_session(state, user).unwrap();
     }
 
     #[test]

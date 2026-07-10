@@ -27,7 +27,8 @@
     "release:notes": "node scripts/create-release-notes.mjs",
     "release:updater-manifest": "node scripts/create-updater-manifest.mjs",
     "verify:all-local": "node scripts/verify-all-local.mjs",
-    "verify:readiness": "node scripts/verify-readiness.mjs"
+    "verify:readiness": "node scripts/verify-readiness.mjs",
+    "verify:engineering": "node scripts/check-engineering-standards.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

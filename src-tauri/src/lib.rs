@@ -1,8 +1,10 @@
 mod app;
+mod application;
 mod commands;
 mod db;
 mod domain;
 mod error;
+mod infrastructure;
 mod services;
 
 use app::state::AppState;
@@ -40,9 +42,10 @@ use commands::stocktake_commands::{
     list_stocktakes, update_stocktake_counts,
 };
 use commands::user_commands::{
-    change_password, get_current_user, list_roles, list_user_accounts, login, logout,
-    request_password_reset_code, reset_password_with_code, save_user_account,
-    set_user_account_enabled,
+    change_password, delete_login_credential, get_current_user, get_password_change_required,
+    list_roles, list_user_accounts, load_saved_credential, login, logout,
+    request_password_reset_code, reset_password_with_code, save_login_credential,
+    save_user_account, set_user_account_enabled,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -124,6 +127,10 @@ pub fn run() {
             login,
             logout,
             get_current_user,
+            get_password_change_required,
+            load_saved_credential,
+            save_login_credential,
+            delete_login_credential,
             list_user_accounts,
             list_roles,
             save_user_account,

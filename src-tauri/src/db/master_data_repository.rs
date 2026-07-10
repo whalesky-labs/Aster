@@ -2,33 +2,21 @@ use chrono::{SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use uuid::Uuid;
 
+use crate::db::{paginated_master_data_repository, pagination};
 use crate::domain::master_data::{
     BudgetRule, Category, Department, Item, SaveBudgetRuleRequest, SaveCategoryRequest,
     SaveDepartmentRequest, SaveItemRequest, SaveSupplierRequest, SaveUnitRequest, Supplier,
     SupplierPurchaseRecord, Unit,
 };
+use crate::domain::pagination::Page;
 use crate::error::{AppError, AppResult};
 
-const ITEM_LIST_LIMIT: i64 = 2_000;
-
 pub fn list_categories(conn: &Connection) -> AppResult<Vec<Category>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, parent_id, name, enabled, sort_order, created_at, updated_at
-         FROM categories
-         ORDER BY enabled DESC, sort_order ASC, name ASC",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok(Category {
-            id: row.get(0)?,
-            parent_id: row.get(1)?,
-            name: row.get(2)?,
-            enabled: row.get::<_, i64>(3)? == 1,
-            sort_order: row.get(4)?,
-            created_at: row.get(5)?,
-            updated_at: row.get(6)?,
-        })
-    })?;
-    collect_rows(rows)
+    pagination::collect_all(|cursor| list_categories_page(conn, cursor))
+}
+
+pub fn list_categories_page(conn: &Connection, cursor: Option<&str>) -> AppResult<Page<Category>> {
+    paginated_master_data_repository::categories(conn, cursor)
 }
 
 pub fn save_category(conn: &Connection, request: SaveCategoryRequest) -> AppResult<Category> {
@@ -108,22 +96,11 @@ pub fn set_category_enabled(
 }
 
 pub fn list_units(conn: &Connection) -> AppResult<Vec<Unit>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, name, enabled, sort_order, created_at, updated_at
-         FROM units
-         ORDER BY enabled DESC, sort_order ASC, name ASC",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok(Unit {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            enabled: row.get::<_, i64>(2)? == 1,
-            sort_order: row.get(3)?,
-            created_at: row.get(4)?,
-            updated_at: row.get(5)?,
-        })
-    })?;
-    collect_rows(rows)
+    pagination::collect_all(|cursor| list_units_page(conn, cursor))
+}
+
+pub fn list_units_page(conn: &Connection, cursor: Option<&str>) -> AppResult<Page<Unit>> {
+    paginated_master_data_repository::units(conn, cursor)
 }
 
 pub fn save_unit(conn: &Connection, request: SaveUnitRequest) -> AppResult<Unit> {
@@ -173,25 +150,14 @@ pub fn set_unit_enabled(
 }
 
 pub fn list_departments(conn: &Connection) -> AppResult<Vec<Department>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, code, name, manager, enabled, sort_order, remark, created_at, updated_at
-         FROM departments
-         ORDER BY enabled DESC, sort_order ASC, code ASC",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok(Department {
-            id: row.get(0)?,
-            code: row.get(1)?,
-            name: row.get(2)?,
-            manager: row.get(3)?,
-            enabled: row.get::<_, i64>(4)? == 1,
-            sort_order: row.get(5)?,
-            remark: row.get(6)?,
-            created_at: row.get(7)?,
-            updated_at: row.get(8)?,
-        })
-    })?;
-    collect_rows(rows)
+    pagination::collect_all(|cursor| list_departments_page(conn, cursor))
+}
+
+pub fn list_departments_page(
+    conn: &Connection,
+    cursor: Option<&str>,
+) -> AppResult<Page<Department>> {
+    paginated_master_data_repository::departments(conn, cursor)
 }
 
 pub fn save_department(conn: &Connection, request: SaveDepartmentRequest) -> AppResult<Department> {
@@ -253,25 +219,11 @@ pub fn set_department_enabled(
 }
 
 pub fn list_suppliers(conn: &Connection) -> AppResult<Vec<Supplier>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, name, contact, phone, address, enabled, remark, created_at, updated_at
-         FROM suppliers
-         ORDER BY enabled DESC, name ASC",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok(Supplier {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            contact: row.get(2)?,
-            phone: row.get(3)?,
-            address: row.get(4)?,
-            enabled: row.get::<_, i64>(5)? == 1,
-            remark: row.get(6)?,
-            created_at: row.get(7)?,
-            updated_at: row.get(8)?,
-        })
-    })?;
-    collect_rows(rows)
+    pagination::collect_all(|cursor| list_suppliers_page(conn, cursor))
+}
+
+pub fn list_suppliers_page(conn: &Connection, cursor: Option<&str>) -> AppResult<Page<Supplier>> {
+    paginated_master_data_repository::suppliers(conn, cursor)
 }
 
 pub fn save_supplier(conn: &Connection, request: SaveSupplierRequest) -> AppResult<Supplier> {
@@ -336,77 +288,27 @@ pub fn list_supplier_purchase_records(
     conn: &Connection,
     supplier_id: &str,
 ) -> AppResult<Vec<SupplierPurchaseRecord>> {
-    let mut stmt = conn.prepare(
-        "SELECT m.movement_date, d.document_no, i.code, i.name, i.spec, u.name,
-                m.quantity, m.unit_price, m.amount, m.remark
-         FROM stock_movements m
-         JOIN master_items i ON i.id = m.item_id
-         LEFT JOIN units u ON u.id = i.unit_id
-         LEFT JOIN stock_documents d ON d.id = m.document_id
-         WHERE m.direction = 'in'
-           AND m.supplier_id = ?1
-         ORDER BY m.movement_date DESC, m.created_at DESC
-         LIMIT 200",
-    )?;
-    let rows = stmt.query_map(params![supplier_id], |row| {
-        Ok(SupplierPurchaseRecord {
-            movement_date: row.get(0)?,
-            document_no: row.get(1)?,
-            item_code: row.get(2)?,
-            item_name: row.get(3)?,
-            spec: row.get(4)?,
-            unit_name: row.get(5)?,
-            quantity: row.get(6)?,
-            unit_price: row.get(7)?,
-            amount: row.get(8)?,
-            remark: row.get(9)?,
-        })
-    })?;
-    collect_rows(rows)
+    pagination::collect_all(|cursor| list_supplier_purchase_records_page(conn, supplier_id, cursor))
+}
+
+pub fn list_supplier_purchase_records_page(
+    conn: &Connection,
+    supplier_id: &str,
+    cursor: Option<&str>,
+) -> AppResult<Page<SupplierPurchaseRecord>> {
+    paginated_master_data_repository::supplier_purchases(conn, supplier_id, cursor)
 }
 
 pub fn list_items(conn: &Connection, search: Option<String>) -> AppResult<Vec<Item>> {
-    let search = search.unwrap_or_default();
-    let like = format!("%{}%", search.trim());
-    let mut stmt = conn.prepare(
-        "SELECT i.id, i.code, i.barcode, i.name, i.category_id, c.name, i.spec, i.unit_id, u.name,
-                i.default_price, i.sale_price, i.supplier_id, s.name, i.warning_quantity,
-                i.enabled, i.remark, i.created_at, i.updated_at
-         FROM master_items i
-         LEFT JOIN categories c ON c.id = i.category_id
-         LEFT JOIN units u ON u.id = i.unit_id
-         LEFT JOIN suppliers s ON s.id = i.supplier_id
-         WHERE (?1 = '%%'
-            OR i.code LIKE ?1
-            OR COALESCE(i.barcode, '') LIKE ?1
-            OR i.name LIKE ?1
-            OR COALESCE(i.spec, '') LIKE ?1)
-         ORDER BY i.enabled DESC, i.code ASC
-         LIMIT ?2",
-    )?;
-    let rows = stmt.query_map(params![like, ITEM_LIST_LIMIT], |row| {
-        Ok(Item {
-            id: row.get(0)?,
-            code: row.get(1)?,
-            barcode: row.get(2)?,
-            name: row.get(3)?,
-            category_id: row.get(4)?,
-            category_name: row.get(5)?,
-            spec: row.get(6)?,
-            unit_id: row.get(7)?,
-            unit_name: row.get(8)?,
-            default_price: row.get(9)?,
-            sale_price: row.get(10)?,
-            supplier_id: row.get(11)?,
-            supplier_name: row.get(12)?,
-            warning_quantity: row.get(13)?,
-            enabled: row.get::<_, i64>(14)? == 1,
-            remark: row.get(15)?,
-            created_at: row.get(16)?,
-            updated_at: row.get(17)?,
-        })
-    })?;
-    collect_rows(rows)
+    pagination::collect_all(|cursor| list_items_page(conn, search.clone(), cursor))
+}
+
+pub fn list_items_page(
+    conn: &Connection,
+    search: Option<String>,
+    cursor: Option<&str>,
+) -> AppResult<Page<Item>> {
+    paginated_master_data_repository::items(conn, search, cursor)
 }
 
 pub fn save_item(conn: &Connection, request: SaveItemRequest) -> AppResult<Item> {
@@ -528,41 +430,15 @@ pub fn list_budget_rules(
     conn: &Connection,
     period_month: Option<String>,
 ) -> AppResult<Vec<BudgetRule>> {
-    let mut stmt = conn.prepare(
-        "SELECT b.id, b.department_id, d.name, b.category_id, COALESCE(c.name, '全部分类'), b.period_month,
-                b.amount_limit,
-                COALESCE((
-                  SELECT SUM(m.amount)
-                  FROM stock_movements m
-                  JOIN master_items i ON i.id = m.item_id
-                  WHERE m.direction = 'out'
-                    AND m.department_id = b.department_id
-                    AND (b.category_id IS NULL OR i.category_id = b.category_id)
-                    AND strftime('%Y-%m', m.movement_date) = b.period_month
-                ), 0) AS used_amount,
-                b.enabled, b.created_at, b.updated_at
-         FROM budget_rules b
-         JOIN departments d ON d.id = b.department_id
-         LEFT JOIN categories c ON c.id = b.category_id
-         WHERE (?1 IS NULL OR b.period_month = ?1)
-         ORDER BY b.period_month DESC, d.sort_order ASC, b.category_id IS NOT NULL ASC, c.sort_order ASC, c.name ASC",
-    )?;
-    let rows = stmt.query_map(params![period_month], |row| {
-        Ok(BudgetRule {
-            id: row.get(0)?,
-            department_id: row.get(1)?,
-            department_name: row.get(2)?,
-            category_id: row.get(3)?,
-            category_name: row.get(4)?,
-            period_month: row.get(5)?,
-            amount_limit: row.get(6)?,
-            used_amount: row.get(7)?,
-            enabled: row.get::<_, i64>(8)? == 1,
-            created_at: row.get(9)?,
-            updated_at: row.get(10)?,
-        })
-    })?;
-    collect_rows(rows)
+    pagination::collect_all(|cursor| list_budget_rules_page(conn, period_month.clone(), cursor))
+}
+
+pub fn list_budget_rules_page(
+    conn: &Connection,
+    period_month: Option<String>,
+    cursor: Option<&str>,
+) -> AppResult<Page<BudgetRule>> {
+    paginated_master_data_repository::budget_rules(conn, period_month, cursor)
 }
 
 pub fn save_budget_rule(
@@ -784,16 +660,6 @@ fn get_budget_rule(conn: &Connection, id: &str) -> AppResult<BudgetRule> {
             })
         },
     )?)
-}
-
-fn collect_rows<T>(
-    rows: rusqlite::MappedRows<'_, impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>>,
-) -> AppResult<Vec<T>> {
-    let mut output = Vec::new();
-    for row in rows {
-        output.push(row?);
-    }
-    Ok(output)
 }
 
 fn require_current_version(
@@ -1026,6 +892,17 @@ mod tests {
         assert_eq!(items.len(), 1005);
         assert_eq!(items[0].code, "BULK-0000");
         assert_eq!(items[1004].code, "BULK-1004");
+
+        let first = list_items_page(&conn, None, None).unwrap();
+        assert_eq!(first.items.len(), 500);
+        assert_eq!(first.items[499].code, "BULK-0499");
+        let second = list_items_page(&conn, None, first.next_cursor.as_deref()).unwrap();
+        assert_eq!(second.items.len(), 500);
+        assert_eq!(second.items[0].code, "BULK-0500");
+        let third = list_items_page(&conn, None, second.next_cursor.as_deref()).unwrap();
+        assert_eq!(third.items.len(), 5);
+        assert_eq!(third.items[4].code, "BULK-1004");
+        assert!(third.next_cursor.is_none());
 
         let searched = list_items(&conn, Some("BULK-1004".to_string())).unwrap();
         assert_eq!(searched.len(), 1);
