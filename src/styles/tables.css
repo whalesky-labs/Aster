@@ -1,0 +1,401 @@
+.section-heading,
+.subtable-heading,
+.table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.section-heading {
+  min-height: 0;
+  margin-bottom: 10px;
+  padding: 0 2px 8px;
+  border-bottom: 1px solid var(--native-panel-border);
+}
+
+.section-heading h2,
+.form-panel h2,
+.table-panel h2,
+.import-result h2 {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 14px;
+  line-height: 1.3;
+  font-weight: 680;
+  letter-spacing: -0.01em;
+}
+
+.section-heading span {
+  max-width: 320px;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+.quick-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.quick-action-grid button {
+  min-height: 32px;
+  text-align: center;
+}
+
+.recent-panel,
+.table-panel,
+.chart-panel,
+.stocktake-detail {
+  min-width: 0;
+  overflow: auto;
+}
+
+.compact-table th,
+.compact-table td {
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
+.compact-table td {
+  white-space: nowrap;
+}
+
+.workstream-list {
+  display: grid;
+  gap: 8px;
+}
+
+.workstream {
+  border: 1px solid transparent;
+  border-radius: var(--native-radius-control);
+  padding: 10px;
+  background: var(--native-subpanel-bg);
+}
+
+.workstream strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-main);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.workstream p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.path-list {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  row-gap: 9px;
+  column-gap: 10px;
+  margin: 0;
+}
+
+.path-list dt {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.path-list dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-main);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.role-checks {
+  display: grid;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: var(--native-radius-control);
+  padding: 9px;
+  background: var(--native-subpanel-bg);
+}
+
+.role-checks label,
+.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  color: var(--text-main);
+  font-size: 13px;
+}
+
+.role-checks input,
+.checkbox-field input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+}
+
+.form-panel {
+  padding: 14px;
+}
+
+.form-panel p,
+.placeholder-panel p,
+.report-toolbar p,
+.import-toolbar p {
+  margin: 6px 0 12px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.field {
+  display: grid;
+  gap: 5px;
+}
+
+.field span {
+  font-weight: 500;
+}
+
+.month-select {
+  display: grid;
+  grid-template-columns: minmax(92px, 1fr) minmax(76px, 0.8fr);
+  gap: 8px;
+  min-width: 0;
+}
+
+.month-select.compact {
+  width: 190px;
+}
+
+.month-select select {
+  min-width: 0;
+}
+
+.form-actions,
+.row-actions,
+.report-actions,
+.document-filter-actions,
+.filter-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.form-actions {
+  margin-top: 2px;
+}
+
+.table-panel {
+  overflow: hidden;
+}
+
+.table-toolbar {
+  min-height: 46px;
+  border-bottom: 1px solid var(--native-panel-border);
+  padding: 8px 10px;
+  background: transparent;
+}
+
+.table-toolbar.actions-only {
+  justify-content: stretch;
+}
+
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  width: 100%;
+}
+
+.table-toolbar.actions-only .toolbar-actions {
+  flex: 1 1 auto;
+}
+
+.table-filter-toolbar {
+  display: block;
+}
+
+.filter-shell {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.filter-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+  align-items: end;
+  width: 100%;
+}
+
+.filter-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.table-sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 0;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  font-weight: 700;
+}
+
+.table-sort-button span {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.table-utility-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 40px;
+  border-bottom: 1px solid var(--native-panel-border);
+  padding: 6px 10px;
+  background: var(--native-subpanel-bg);
+}
+
+.table-utility-info {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.table-utility-info span {
+  color: var(--text-main);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.table-utility-info em {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.table-utility-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  flex: 0 0 auto;
+}
+
+.supplier-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+}
+
+.document-action-toolbar {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.document-action-toolbar .void-controls {
+  flex: 0 1 680px;
+}
+
+.table-toolbar form {
+  display: grid;
+  gap: 8px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+th,
+td {
+  height: 34px;
+  border-bottom: 1px solid var(--native-panel-border);
+  padding: 7px 10px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  color: var(--text-muted);
+  background: var(--native-subpanel-bg);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+
+tfoot td {
+  height: auto;
+  padding: 9px 10px;
+  background: var(--native-panel-bg);
+}
+
+.pagination-bar,
+.pagination-actions {
+  display: flex;
+  align-items: center;
+}
+
+.pagination-bar {
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.pagination-actions {
+  gap: 6px;
+}
+
+.pagination-actions button {
+  min-height: 26px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: var(--native-radius-control);
+  color: var(--text-main);
+  background: var(--native-control-bg);
+  font-size: 12px;
+}
+
+.pagination-actions button:disabled {
+  color: var(--text-faint);
+  opacity: 0.55;
+}
+
+.pagination-actions strong {
+  min-width: 58px;
+  color: var(--text-main);
+  text-align: center;
+  font-weight: 600;
+}
+
+td {
+  color: var(--text-main);
+}
+
+.item-summary-cell {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

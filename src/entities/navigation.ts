@@ -1,0 +1,1 @@
+export type NavKey = "dashboard" | "items" | "inbound" | "outbound" | "stock" | "movements" | "stocktake" | "adjustments" | "reports" | "import" | "departments" | "categories" | "units" | "suppliers" | "budgets" | "approvals" | "backups" | "logs" | "settings" | "users";

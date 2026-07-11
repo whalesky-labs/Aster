@@ -1,0 +1,194 @@
+:root {
+  font-family:
+    "SF Pro Text",
+    -apple-system,
+    BlinkMacSystemFont,
+    "PingFang SC",
+    "Microsoft YaHei",
+    "Helvetica Neue",
+    "Segoe UI",
+    sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+  color-scheme: light;
+  color: #14151a;
+  background: #f5f5f7;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+  --bg-main: #f5f5f7;
+  --bg-panel: #fbfbfd;
+  --bg-card: #f5f5f7;
+  --bg-input: #ffffff;
+  --text-main: #14151a;
+  --text-muted: #6d7280;
+  --text-soft: #8b93a3;
+  --stroke-soft: rgba(60, 60, 67, 0.16);
+  --divider-soft: rgba(60, 60, 67, 0.14);
+  --accent: #2f6dff;
+  --accent-strong: color-mix(in srgb, var(--accent) 84%, #000000);
+  --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
+  --accent-hover-bg: color-mix(in srgb, var(--accent) 9%, transparent);
+  --accent-active-bg: color-mix(in srgb, var(--accent) 15%, transparent);
+  --accent-contrast: #ffffff;
+  --success: #1f8f4d;
+  --success-soft: #eef9f1;
+  --warning: #b86a0a;
+  --warning-soft: #fff5e8;
+  --danger: #de3b40;
+  --danger-soft: #fff1f2;
+  --focus-ring: color-mix(in srgb, var(--accent) 28%, transparent);
+  --native-window-bg: #f5f5f7;
+  --native-sidebar-bg: color-mix(in srgb, #f2f2f7 92%, var(--accent) 8%);
+  --native-content-bg: #fbfbfd;
+  --native-panel-bg: #fbfbfd;
+  --native-subpanel-bg: #f5f5f7;
+  --native-control-bg: #ffffff;
+  --native-panel-border: rgba(60, 60, 67, 0.16);
+  --native-row-hover: rgba(60, 60, 67, 0.06);
+  --native-row-active: color-mix(in srgb, var(--accent) 14%, transparent);
+  --native-separator: rgba(60, 60, 67, 0.14);
+  --native-radius-panel: 10px;
+  --native-radius-control: 7px;
+  --native-shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --titlebar-safe-top: 52px;
+  --sidebar-safe-top: 40px;
+  --topbar-safe-top: 15px;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  color: #f5f5f7;
+  background: #1e1e20;
+  --bg-main: #1c1c1e;
+  --bg-panel: #242426;
+  --bg-card: #2c2c2e;
+  --bg-input: #1f1f21;
+  --text-main: #f5f5f7;
+  --text-muted: #a1a1a6;
+  --text-soft: #8e8e93;
+  --stroke-soft: #3a3a3c;
+  --divider-soft: #323234;
+  --accent-strong: color-mix(in srgb, var(--accent) 72%, #ffffff);
+  --accent-soft: color-mix(in srgb, var(--accent) 22%, transparent);
+  --accent-hover-bg: color-mix(in srgb, var(--accent) 16%, transparent);
+  --accent-active-bg: color-mix(in srgb, var(--accent) 24%, transparent);
+  --success: #5ccc88;
+  --success-soft: rgba(92, 204, 136, 0.16);
+  --warning: #ffbf5f;
+  --warning-soft: rgba(255, 191, 95, 0.14);
+  --danger: #ff7e86;
+  --danger-soft: rgba(255, 126, 134, 0.16);
+  --native-window-bg: #1e1e20;
+  --native-sidebar-bg: #252528;
+  --native-content-bg: #1c1c1e;
+  --native-panel-bg: rgba(44, 44, 46, 0.9);
+  --native-subpanel-bg: rgba(37, 37, 40, 0.86);
+  --native-control-bg: #2c2c2e;
+  --native-panel-border: rgba(255, 255, 255, 0.1);
+  --native-row-hover: rgba(255, 255, 255, 0.06);
+  --native-row-active: color-mix(in srgb, var(--accent) 22%, transparent);
+  --native-separator: rgba(255, 255, 255, 0.1);
+  --native-shadow-panel: none;
+}
+
+:root[data-glass-style="transparent"] {
+  --native-panel-bg: color-mix(in srgb, #ffffff 48%, transparent);
+  --native-subpanel-bg: color-mix(in srgb, #ffffff 24%, transparent);
+  --native-control-bg: color-mix(in srgb, #ffffff 72%, transparent);
+  --native-panel-border: rgba(255, 255, 255, 0.72);
+  --native-shadow-panel:
+    0 18px 42px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.88);
+}
+
+:root[data-theme="dark"][data-glass-style="transparent"] {
+  --native-panel-bg: rgba(44, 44, 46, 0.38);
+  --native-subpanel-bg: rgba(37, 37, 40, 0.32);
+  --native-control-bg: rgba(44, 44, 46, 0.64);
+  --native-panel-border: rgba(255, 255, 255, 0.14);
+  --native-shadow-panel:
+    0 24px 54px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+:root[data-theme="dark"] .login-shell {
+  background:
+    radial-gradient(
+      circle at 8% 8%,
+      color-mix(in srgb, var(--accent) 14%, transparent) 0%,
+      transparent 34%
+    ),
+    var(--native-window-bg);
+}
+
+:root[data-theme="dark"] .login-color-bends-bg {
+  opacity: 1;
+}
+
+:root[data-glass-style="tinted"] {
+  --native-panel-bg: color-mix(in srgb, var(--bg-panel) 96%, transparent);
+  --native-subpanel-bg: color-mix(in srgb, var(--bg-card) 92%, transparent);
+  --native-control-bg: var(--bg-input);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  color: var(--text-main);
+  background: var(--native-window-bg);
+}
+
+body {
+  min-width: 1100px;
+  min-height: 720px;
+  overflow: hidden;
+}
+
+body.editor-window {
+  min-width: 0;
+  min-height: 0;
+  height: 100vh;
+  overflow: hidden;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: default;
+  user-select: none;
+}
+
+button:disabled,
+input:disabled,
+select:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--native-window-bg);
+}

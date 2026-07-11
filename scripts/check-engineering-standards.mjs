@@ -26,7 +26,7 @@ function lineCount(text) {
 
 function productionRustPanicCount(file, text) {
   if (!file.endsWith(".rs")) return 0;
-  if (file.includes("/tests/") || file.endsWith("/test_support.rs")) return 0;
+  if (file.includes("/tests/") || file.endsWith("/tests.rs") || file.endsWith("/test_support.rs")) return 0;
   const production = text.split(/\n\s*#\[cfg\(test\)\]/, 1)[0];
   return [...production.matchAll(/\.(?:unwrap|expect)\s*\(|\bpanic!\s*\(/g)].length;
 }

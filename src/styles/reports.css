@@ -1,0 +1,198 @@
+.report-command-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.report-command-main h2 {
+  margin: 3px 0 5px;
+  color: var(--text-main);
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.report-command-main p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.report-kicker {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.report-actions {
+  justify-content: flex-end;
+}
+
+.export-path {
+  border-top: 1px solid var(--native-panel-border);
+  padding: 9px 10px;
+  color: color-mix(in srgb, var(--accent-strong) 82%, var(--text-main));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.report-section {
+  overflow-x: auto;
+}
+
+.report-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.report-group-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  border-top: 1px solid var(--native-panel-border);
+  padding-top: 12px;
+}
+
+.report-group-header h2 {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 15px;
+  font-weight: 720;
+}
+
+.report-group-header p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.report-insight-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.report-insight-card {
+  display: grid;
+  gap: 8px;
+  min-height: 120px;
+  border: 1px solid var(--native-panel-border);
+  border-radius: 8px;
+  padding: 14px;
+  background: var(--surface);
+}
+
+.report-insight-card span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.report-insight-card strong {
+  color: var(--text-main);
+  font-size: 24px;
+  line-height: 1.1;
+}
+
+.report-insight-card p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.chart-panel {
+  overflow: hidden;
+}
+
+.bar-chart {
+  display: grid;
+  gap: 8px;
+  padding: 11px;
+}
+
+.bar-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 160px) minmax(120px, 1fr) 86px;
+  align-items: center;
+  gap: 9px;
+  font-size: 12px;
+}
+
+.bar-row span {
+  overflow: hidden;
+  color: var(--text-main);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar-row strong {
+  color: var(--text-main);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.bar-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--native-subpanel-bg);
+  overflow: hidden;
+}
+
+.bar-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.empty-chart {
+  display: grid;
+  height: 72px;
+  place-items: center;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.import-path-row {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) 104px 90px 74px 104px;
+  gap: 7px;
+}
+
+.path-picker-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 74px;
+  gap: 7px;
+  min-width: 0;
+}
+
+.result-grid {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 8px 10px;
+  font-size: 13px;
+}
+
+.result-grid span {
+  color: var(--text-muted);
+}
+
+.result-grid strong {
+  min-width: 0;
+  color: var(--text-main);
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.table-note {
+  display: block;
+  margin-top: 3px;
+}
+
+.settings-actions {
+  margin-top: 12px;
+}

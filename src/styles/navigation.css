@@ -1,0 +1,235 @@
+.sidebar {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
+  height: 100vh;
+  padding: var(--sidebar-safe-top) 8px 8px;
+  background: transparent;
+  overflow: hidden;
+}
+
+.app-shell[data-platform="windows"] {
+  --sidebar-safe-top: 0px;
+  --topbar-safe-top: 0px;
+}
+
+.module-panel,
+.metric-card,
+.table-panel,
+.settings-block,
+.form-panel,
+.chart-panel,
+.runtime-box,
+.settings-result,
+.client-health {
+  backdrop-filter: blur(18px) saturate(1.08);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 58px;
+  padding: 0 8px 14px;
+}
+
+.brand-mark {
+  display: block;
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+  flex: 0 0 auto;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.brand strong {
+  display: block;
+  margin: 0;
+  color: var(--text-main);
+  font-size: 15px;
+  line-height: 1.2;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.brand span {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.nav-list {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-height: 0;
+  padding-bottom: 12px;
+  overflow: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.nav-list::-webkit-scrollbar {
+  display: none;
+}
+
+.nav-section {
+  display: grid;
+  gap: 3px;
+}
+
+.nav-section-title {
+  display: block;
+  margin: 0;
+  padding: 6px 8px 3px;
+  color: var(--text-soft);
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  border: 0;
+  border-radius: var(--native-radius-control);
+  padding: 5px 8px;
+  color: var(--text-main);
+  background: transparent;
+  font-size: 13px;
+  line-height: 1.25;
+  text-align: left;
+}
+
+.nav-item-icon {
+  display: block;
+  flex: 0 0 17px;
+  width: 17px;
+  height: 17px;
+}
+
+.nav-item-label {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 17px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-item:hover {
+  color: var(--accent);
+  background: var(--accent-hover-bg);
+}
+
+.nav-item.active {
+  color: var(--accent);
+  background: var(--accent-active-bg);
+  font-weight: 600;
+}
+
+.sidebar-footer {
+  display: grid;
+  gap: 8px;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--native-separator);
+}
+
+.sidebar-connection {
+  appearance: none;
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  border-radius: var(--native-radius-control);
+  padding: 7px 8px;
+  color: var(--text-muted);
+  background: transparent;
+  text-align: left;
+}
+
+.sidebar-connection:hover {
+  color: var(--accent);
+  background: var(--accent-hover-bg);
+}
+
+.sidebar-connection-dot {
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: var(--text-soft);
+}
+
+.sidebar-connection-success .sidebar-connection-dot {
+  background: var(--success);
+}
+
+.sidebar-connection-warning .sidebar-connection-dot {
+  background: var(--warning);
+}
+
+.sidebar-connection-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sidebar-connection-copy strong,
+.sidebar-connection-copy em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-connection-copy strong {
+  color: inherit;
+  font-size: 12px;
+  line-height: 1.25;
+  font-style: normal;
+  font-weight: 650;
+}
+
+.sidebar-connection-copy em {
+  color: var(--text-soft);
+  font-size: 11px;
+  line-height: 1.25;
+  font-style: normal;
+}
+
+.sidebar-connection:hover .sidebar-connection-copy em {
+  color: var(--accent);
+}
+
+.content {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-width: 0;
+  height: 100vh;
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+.content-body {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 12px 12px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.content-body::-webkit-scrollbar {
+  display: none;
+}
