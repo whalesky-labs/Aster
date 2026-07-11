@@ -1,8 +1,19 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { join, relative } from "node:path";
 import { arch, platform, release } from "node:os";
 
 const root = process.cwd();
+
+function collectFrontendSources(directory) {
+  return readdirSync(directory, { withFileTypes: true })
+    .flatMap((entry) => {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) return collectFrontendSources(path);
+      if (!entry.isFile() || !/\.(?:ts|tsx)$/.test(entry.name)) return [];
+      return [relative(root, path)];
+    })
+    .sort();
+}
 
 const sources = {
   executionPlan: "docs/ASTER_EXECUTION_PLAN.md",
@@ -17,16 +28,7 @@ const sources = {
   verifyReadiness: "scripts/verify-readiness.mjs",
   acceptanceStatus: "scripts/acceptance-status.mjs",
   verifyNoPlaceholders: "scripts/verify-no-placeholders.mjs",
-  app: [
-    "src/App.tsx",
-    "src/features/dashboard/Dashboard.tsx",
-    "src/features/backups/BackupRecordsPage.tsx",
-    "src/features/reports/ReportsPage.tsx",
-    "src/features/reports/ReportComponents.tsx",
-    "src/features/settings/SettingsPage.tsx",
-    "src/features/stock/StockBalancePage.tsx",
-    "src/features/stock/StockMovementPage.tsx",
-  ],
+  app: collectFrontendSources(join(root, "src")),
   lib: "src-tauri/src/lib.rs",
   tauriConfig: "src-tauri/tauri.conf.json",
   cargoToml: "src-tauri/Cargo.toml",

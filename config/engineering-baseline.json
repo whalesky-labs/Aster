@@ -1,13 +1,11 @@
 {
   "maxNewSourceFileLines": 500,
   "legacyFileLineLimits": {
-    "src/App.tsx": 7158,
     "src/i18n.ts": 736,
     "src-tauri/src/db/master_data_repository.rs": 1375,
     "src-tauri/src/db/migrations.rs": 554,
     "src-tauri/src/db/report_repository.rs": 1107,
     "src-tauri/src/db/stocktake_repository.rs": 771,
-    "src-tauri/src/services/host_service.rs": 1954,
     "src-tauri/src/services/master_data_service.rs": 621,
     "src-tauri/src/services/report_service.rs": 894,
     "src-tauri/src/services/status_service.rs": 1203,
@@ -25,7 +23,7 @@
     "src-tauri/src/db/user_repository.rs": 9,
     "src-tauri/src/lib.rs": 5,
     "src-tauri/src/services/approval_service.rs": 13,
-    "src-tauri/src/services/host_service.rs": 102,
+    "src-tauri/src/services/host_service.rs": 5,
     "src-tauri/src/services/master_data_service.rs": 5,
     "src-tauri/src/services/report_service.rs": 14,
     "src-tauri/src/services/status_service.rs": 35,
