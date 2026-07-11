@@ -8,7 +8,7 @@
 
 .readonly-editor-document,
 .stocktake-detail-document {
-  grid-template-rows: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
   min-height: 0;
 }
 
@@ -16,7 +16,7 @@
 .stocktake-detail-scroll {
   min-height: 0;
   overflow: auto;
-  padding: 18px 20px 84px;
+  padding: 18px 20px;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--text-muted) 38%, transparent)
     transparent;

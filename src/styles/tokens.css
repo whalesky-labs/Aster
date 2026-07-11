@@ -159,6 +159,12 @@ body.editor-window {
   overflow: hidden;
 }
 
+body.editor-window #root {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+}
+
 button,
 input,
 select {

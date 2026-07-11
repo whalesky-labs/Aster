@@ -312,14 +312,14 @@
 }
 
 .software-update-window {
-  grid-template-rows: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
   min-height: 0;
 }
 
 .software-update-scroll {
   min-height: 0;
   overflow: auto;
-  padding: 24px 28px 88px;
+  padding: 24px 28px;
 }
 
 .software-update-window .editor-actions {

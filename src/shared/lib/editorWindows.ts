@@ -11,6 +11,12 @@ export type EditorMode = "create" | "edit";
 
 const openingEditorWindows = new Set<string>();
 
+function editorWindowBackground(): [number, number, number, number] {
+  return document.documentElement.dataset.theme === "dark"
+    ? [28, 28, 30, 255]
+    : [251, 251, 253, 255];
+}
+
 function editorTitle(editor: EditorKind, mode: EditorMode, documentType?: "inbound" | "outbound") {
   if (editor === "stockDocumentDetail") return documentType === "outbound" ? "出库/领用单详情" : "入库单详情";
   if (editor === "stockBatchDetail") return "批次库存";
@@ -65,11 +71,13 @@ export async function openEditorWindow(editor: EditorKind, options: {
   openingEditorWindows.add(label);
   try {
     const size = editorWindowSize(editor);
+    const title = editorTitle(editor, mode, options.documentType);
     const search = new URLSearchParams();
     Object.entries({ documentType: options.documentType, editor, id: options.id, mode, ...options.extra }).forEach(([key, value]) => { if (value) search.set(key, value); });
     const windowRef = new WebviewWindow(label, {
-      center: true, height: options.height ?? size.height, minHeight: size.minHeight,
-      minWidth: size.minWidth, resizable: true, title: editorTitle(editor, mode, options.documentType),
+      backgroundColor: editorWindowBackground(), center: true,
+      height: options.height ?? size.height, minHeight: size.minHeight,
+      minWidth: size.minWidth, resizable: true, title,
       url: `${window.location.pathname}?${search.toString()}`, width: options.width ?? size.width,
     });
     await new Promise<void>((resolve) => {

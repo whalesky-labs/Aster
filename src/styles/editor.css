@@ -1,9 +1,8 @@
 .editor-shell {
-  position: relative;
+  position: absolute;
+  inset: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  width: 100%;
-  height: 100vh;
   overflow: hidden;
   padding: 0;
   background: var(--native-content-bg);
@@ -38,7 +37,7 @@
 }
 
 .editor-form {
-  grid-template-rows: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
 }
 
 .editor-form-grid,
@@ -55,7 +54,7 @@
   align-self: stretch;
   min-height: 0;
   max-height: 100%;
-  padding: 16px 0 72px;
+  padding: 16px 0;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--text-muted) 38%, transparent)
     transparent;
@@ -76,16 +75,12 @@
 
 .document-entry-editor,
 .stocktake-counts-editor {
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 
 .document-entry-editor > .editor-form-grid {
-  padding: 14px 0 72px;
+  padding: 14px 0;
   overflow: visible;
-}
-
-.stocktake-counts-editor {
-  grid-template-rows: auto auto minmax(0, 1fr);
 }
 
 .stocktake-counts-editor > .stocktake-metrics {
@@ -95,7 +90,7 @@
 .editor-table-scroll {
   min-height: 0;
   overflow: auto;
-  padding-bottom: 64px;
+  padding-bottom: 14px;
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
@@ -136,10 +131,6 @@
 }
 
 .editor-actions {
-  position: fixed;
-  right: 0;
-  bottom: 0;
-  left: 0;
   z-index: 3;
   flex: 0 0 auto;
   justify-content: flex-end;
@@ -148,7 +139,6 @@
   border-top: 1px solid var(--native-panel-border);
   padding: 10px 14px 11px;
   background: color-mix(in srgb, var(--native-content-bg) 98%, transparent);
-  backdrop-filter: blur(12px);
 }
 
 .editor-actions strong {
