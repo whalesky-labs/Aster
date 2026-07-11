@@ -17,12 +17,33 @@ const sources = {
   verifyReadiness: "scripts/verify-readiness.mjs",
   acceptanceStatus: "scripts/acceptance-status.mjs",
   verifyNoPlaceholders: "scripts/verify-no-placeholders.mjs",
-  app: "src/App.tsx",
+  app: [
+    "src/App.tsx",
+    "src/features/dashboard/Dashboard.tsx",
+    "src/features/backups/BackupRecordsPage.tsx",
+    "src/features/reports/ReportsPage.tsx",
+    "src/features/reports/ReportComponents.tsx",
+    "src/features/settings/SettingsPage.tsx",
+    "src/features/stock/StockBalancePage.tsx",
+    "src/features/stock/StockMovementPage.tsx",
+  ],
   lib: "src-tauri/src/lib.rs",
   tauriConfig: "src-tauri/tauri.conf.json",
   cargoToml: "src-tauri/Cargo.toml",
   migrations: "src-tauri/migrations/001_initial_schema.sql",
-  stockRepository: "src-tauri/src/db/stock_repository.rs",
+  stockRepository: [
+    "src-tauri/src/db/stock_repository.rs",
+    "src-tauri/src/db/stock_repository/queries.rs",
+    "src-tauri/src/db/stock_repository/persistence.rs",
+    "src-tauri/src/db/stock_repository/movements.rs",
+    "src-tauri/src/db/stock_repository/fifo.rs",
+    "src-tauri/src/db/stock_repository/validation.rs",
+    "src-tauri/src/db/stock_repository/helpers.rs",
+    "src-tauri/src/db/stock_repository/tests/batches.rs",
+    "src-tauri/src/db/stock_repository/tests/documents.rs",
+    "src-tauri/src/db/stock_repository/tests/queries.rs",
+    "src-tauri/src/db/stock_repository/tests/rules.rs",
+  ],
   stocktakeRepository: "src-tauri/src/db/stocktake_repository.rs",
   reportRepository: "src-tauri/src/db/report_repository.rs",
   reportsDomain: "src-tauri/src/domain/reports.rs",
@@ -31,10 +52,34 @@ const sources = {
   masterDataRepository: "src-tauri/src/db/master_data_repository.rs",
   userRepository: "src-tauri/src/db/user_repository.rs",
   approvalRepository: "src-tauri/src/db/approval_repository.rs",
-  backupService: "src-tauri/src/services/backup_service.rs",
+  backupService: [
+    "src-tauri/src/services/backup_service.rs",
+    "src-tauri/src/services/backup_service/archive.rs",
+    "src-tauri/src/services/backup_service/automation.rs",
+    "src-tauri/src/services/backup_service/restore.rs",
+    "src-tauri/src/services/backup_service/tests/archive.rs",
+    "src-tauri/src/services/backup_service/tests/automation.rs",
+  ],
   approvalService: "src-tauri/src/services/approval_service.rs",
-  hostService: "src-tauri/src/services/host_service.rs",
-  importService: "src-tauri/src/services/import_service.rs",
+  hostService: [
+    "src-tauri/src/services/host_service.rs",
+    "src-tauri/src/services/host_service/remote_master_data.rs",
+    "src-tauri/src/services/host_service/remote_operations.rs",
+    "src-tauri/src/services/host_service/remote_stock.rs",
+    "src-tauri/src/services/host_service/tests/connections.rs",
+    "src-tauri/src/services/host_service/tests/permissions.rs",
+    "src-tauri/src/services/host_service/tests/routes.rs",
+  ],
+  importService: [
+    "src-tauri/src/services/import_service.rs",
+    "src-tauri/src/services/import_service/execution.rs",
+    "src-tauri/src/services/import_service/master_data.rs",
+    "src-tauri/src/services/import_service/models.rs",
+    "src-tauri/src/services/import_service/parser.rs",
+    "src-tauri/src/services/import_service/workbook.rs",
+    "src-tauri/src/services/import_service/tests/execution.rs",
+    "src-tauri/src/services/import_service/tests/workbook.rs",
+  ],
   reportService: "src-tauri/src/services/report_service.rs",
   stockService: "src-tauri/src/services/stock_service.rs",
   stocktakeService: "src-tauri/src/services/stocktake_service.rs",
@@ -68,22 +113,26 @@ const cache = new Map();
 const failures = [];
 
 function text(key) {
-  const relativePath = sources[key];
-  if (!relativePath) {
+  const sourcePaths = sources[key];
+  if (!sourcePaths) {
     throw new Error(`Unknown source key: ${key}`);
   }
   if (!cache.has(key)) {
-    const path = join(root, relativePath);
-    if (!existsSync(path)) {
-      failures.push({
-        feature: "source",
-        check: `source file exists: ${relativePath}`,
-        source: relativePath,
-      });
-      cache.set(key, "");
-    } else {
-      cache.set(key, readFileSync(path, "utf8"));
+    const relativePaths = Array.isArray(sourcePaths) ? sourcePaths : [sourcePaths];
+    const contents = [];
+    for (const relativePath of relativePaths) {
+      const path = join(root, relativePath);
+      if (!existsSync(path)) {
+        failures.push({
+          feature: "source",
+          check: `source file exists: ${relativePath}`,
+          source: relativePath,
+        });
+      } else {
+        contents.push(readFileSync(path, "utf8"));
+      }
     }
+    cache.set(key, contents.join("\n"));
   }
   return cache.get(key);
 }
@@ -98,7 +147,7 @@ function has(key, pattern) {
 
 function check(feature, checkName, key, pattern) {
   const ok = has(key, pattern);
-  const source = sources[key];
+  const source = Array.isArray(sources[key]) ? sources[key].join(", ") : sources[key];
   return {
     feature,
     check: checkName,
@@ -331,7 +380,7 @@ const requirements = [
       ["Tauri 注册主机连接命令", "lib", "pair_with_host"],
       ["主机服务包含 TCP 和 UDP 发现", "hostService", "serve_discovery"],
       ["客户端连接参数校验有测试覆盖", "hostService", "host_connection_validation_rejects_common_operator_input_errors"],
-      ["配对码和客户端身份校验有测试覆盖", "hostService", "pairing_validation_requires_six_digit_code_and_client_identity"],
+      ["配对码和客户端身份校验有测试覆盖", "hostService", "pairing_validation_requires_twelve_digit_code_and_client_identity"],
       ["客户端设备 ID 本地稳定持久化", "statusService", "get_runtime_config_generates_stable_client_device_id"],
       ["主机客户端连接记录落库", "hostService", "client_connections_are_persisted_and_touch_updates_status"],
       ["设置页客户端列表读取持久记录", "hostService", "list_client_connections_reads_persisted_host_records"],
