@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import type { CurrentUser, UserAccount } from "../../entities/users";
 import { matchesSearchText } from "../../shared/lib/display";
-import { EmptyRow, Status, TableSearchToolbar } from "../../shared/ui/DataTable";
+import { EmptyRow, Status, TableFeatureToolbar, TableSearchToolbar } from "../../shared/ui/DataTable";
 
 export function UsersPage({
   currentUser,
@@ -34,7 +34,8 @@ export function UsersPage({
 
   return (
     <section className="table-panel">
-      <TableSearchToolbar action={<button className="primary-button" onClick={onCreate} type="button">新增用户</button>} onSearchChange={setSearch} placeholder="用户名、显示名称、邮箱、部门、角色" search={search} />
+      <TableFeatureToolbar action={<button className="primary-button" onClick={onCreate} type="button">新增用户</button>} />
+      <TableSearchToolbar onSearchChange={setSearch} placeholder="用户名、显示名称、邮箱、部门、角色" search={search} />
       <table>
         <thead><tr><th>用户名</th><th>显示名称</th><th>邮箱</th><th>所属部门</th><th>角色</th><th>状态</th><th>操作</th></tr></thead>
         <tbody>

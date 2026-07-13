@@ -34,54 +34,75 @@ export function MasterTablePanel({
 }
 
 export function TableSearchToolbar({
-  action,
-  extra,
   onSearchChange,
   onSubmit,
   placeholder,
   search,
   searchLabel = "搜索",
-  submitLabel,
+  submitLabel = "筛选",
 }: {
-  action?: ReactNode;
-  extra?: ReactNode;
   onSearchChange: (value: string) => void;
-  onSubmit?: () => void | Promise<void>;
+  onSubmit?: (value: string) => void | Promise<void>;
   placeholder: string;
   search: string;
   searchLabel?: string;
   submitLabel?: string;
 }) {
+  const [draft, setDraft] = useState(search);
+  useEffect(() => setDraft(search), [search]);
+
+  function applySearch(value: string) {
+    onSearchChange(value);
+    void onSubmit?.(value);
+  }
+
   return (
-    <div className="table-toolbar table-filter-toolbar">
-      <form
-        className="filter-shell"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void onSubmit?.();
-        }}
-      >
-        <div className="filter-fields">
-          {extra}
-          <Field label={searchLabel}>
-            <input
-              placeholder={placeholder}
-              value={search}
-              onChange={(event) => onSearchChange(event.target.value)}
-            />
-          </Field>
-        </div>
-        {submitLabel || action ? (
-          <div className="filter-actions">
-            {submitLabel ? (
-              <button className="ghost-button" type="submit">
-                {submitLabel}
-              </button>
-            ) : null}
-            {action}
-          </div>
-        ) : null}
-      </form>
+    <form
+      className="document-filters table-search-toolbar"
+      onSubmit={(event) => {
+        event.preventDefault();
+        applySearch(draft.trim());
+      }}
+    >
+      <div className="filter-fields">
+        <Field label={searchLabel}>
+          <input
+            placeholder={placeholder}
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+          />
+        </Field>
+      </div>
+      <div className="filter-actions document-filter-actions">
+        <button
+          className="ghost-button"
+          onClick={() => {
+            setDraft("");
+            applySearch("");
+          }}
+          type="button"
+        >
+          清空
+        </button>
+        <button className="primary-button" type="submit">
+          {submitLabel}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+export function TableFeatureToolbar({
+  action,
+  children,
+}: {
+  action?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="table-toolbar table-feature-toolbar">
+      {children ? <div className="table-feature-controls">{children}</div> : null}
+      {action ? <div className="toolbar-actions">{action}</div> : null}
     </div>
   );
 }

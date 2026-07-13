@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { StocktakeDetail, StocktakeDocument } from "../../entities/stock";
 import { createI18n } from "../../i18n";
 import { closeCurrentEditorWindow, openEditorWindow } from "../../shared/lib/editorWindows";
-import { EmptyRow, MasterTablePanel } from "../../shared/ui/DataTable";
+import { matchesSearchText } from "../../shared/lib/display";
+import { EmptyRow, MasterTablePanel, TableSearchToolbar } from "../../shared/ui/DataTable";
 
 const i18n = createI18n("zh-CN");
 const formatMoney = (value: number) => i18n.formatMoney(value);
@@ -27,25 +28,32 @@ export function StocktakePage({
   canWrite: boolean;
   stocktakes: StocktakeDocument[];
 }) {
+  const [search, setSearch] = useState("");
+  const rows = useMemo(
+    () => stocktakes.filter((stocktake) => matchesSearchText(search, [
+      stocktake.documentNo, stocktake.businessDate, stocktakeScopeLabel(stocktake.scopeType),
+      stocktakeStatusLabel(stocktake.status), stocktake.handler, stocktake.remark,
+    ])),
+    [search, stocktakes],
+  );
   return (
     <MasterTablePanel
       actions={
-        <div className="supplier-toolbar">
-          <button
-            className="primary-button"
-            disabled={!canWrite}
-            onClick={() =>
-              openEditorWindow("stocktakeCreate", { width: 780, height: 620 })
-            }
-          >
-            创建盘点单
-          </button>
-        </div>
+        <button
+          className="primary-button"
+          disabled={!canWrite}
+          onClick={() =>
+            openEditorWindow("stocktakeCreate", { width: 780, height: 620 })
+          }
+        >
+          创建盘点单
+        </button>
       }
       description="盘点记录创建与实盘录入在独立窗口中完成。"
       hideHeading
       title="库存盘点"
     >
+      <TableSearchToolbar onSearchChange={setSearch} placeholder="搜索单号、日期、范围、状态、经办人、备注" search={search} />
       <table>
         <thead>
           <tr>
@@ -60,7 +68,7 @@ export function StocktakePage({
           </tr>
         </thead>
         <tbody>
-          {stocktakes.map((stocktake) => (
+          {rows.map((stocktake) => (
             <tr key={stocktake.id}>
               <td>{stocktake.documentNo}</td>
               <td>{formatDateTime(stocktake.businessDate)}</td>
@@ -102,7 +110,7 @@ export function StocktakePage({
               </td>
             </tr>
           ))}
-          {stocktakes.length === 0 ? <EmptyRow colSpan={8} /> : null}
+          {rows.length === 0 ? <EmptyRow colSpan={8} /> : null}
         </tbody>
       </table>
     </MasterTablePanel>

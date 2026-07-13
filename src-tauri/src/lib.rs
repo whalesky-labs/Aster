@@ -50,6 +50,7 @@ use commands::user_commands::{
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let app_state = AppState::initialize().expect("failed to initialize Aster application state");
     services::status_service::restore_update_settings_snapshot_if_needed(&app_state)
         .expect("failed to restore update settings snapshot");
