@@ -188,7 +188,7 @@ const report = {
 
 mkdirSync(evidenceDir, { recursive: true });
 const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-const reportPath = join(evidenceDir, `readiness-${process.platform}-${timestamp}.json`);
+const reportPath = join(evidenceDir, `readiness-${evidencePlatform}-${timestamp}.json`);
 writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
 
 if (blockers.length > 0) {
