@@ -68,6 +68,10 @@ function sha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+function normalizeManifestPath(path) {
+  return path?.replaceAll("\\", "/");
+}
+
 function latestEvidenceName(prefix) {
   const evidenceDir = join(root, "docs", "release-evidence");
   if (!existsSync(evidenceDir)) return null;
@@ -85,7 +89,9 @@ function latestManualAcceptanceRelativePath(prefix, suffix) {
     .filter((name) => name.startsWith(prefix) && name.endsWith(suffix))
     .map((name) => join(manualDir, name))
     .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs || b.localeCompare(a));
-  return files[0] ? files[0].replace(manualDir, "").replace(/^[/\\]/, "") : null;
+  return files[0]
+    ? normalizeManifestPath(files[0].replace(manualDir, "").replace(/^[/\\]/, ""))
+    : null;
 }
 
 if (!existsSync(packageDir)) {
@@ -162,7 +168,7 @@ if (!existsSync(packageDir)) {
         }
       }
     }
-    const copiedEvidence = new Set(manifest.copiedEvidence ?? []);
+    const copiedEvidence = new Set((manifest.copiedEvidence ?? []).map(normalizeManifestPath));
     for (const prefix of evidencePrefixes) {
       const latestName = latestEvidenceName(prefix);
       if (latestName && !copiedEvidence.has(`docs/acceptance-package/release-evidence/${latestName}`)) {
@@ -269,7 +275,9 @@ if (!existsSync(packageDir)) {
         }
       }
     }
-    const copiedManualAcceptance = new Set(manifest.copiedManualAcceptance ?? []);
+    const copiedManualAcceptance = new Set(
+      (manifest.copiedManualAcceptance ?? []).map(normalizeManifestPath),
+    );
     const manualRecordPath = latestManualAcceptanceRelativePath(`manual-acceptance-${manualPlatform}-`, ".json");
     const manualChecklistPath = latestManualAcceptanceRelativePath(`manual-acceptance-${manualPlatform}-`, "-checklist.md");
     const manualAttachmentReadme = latestManualAcceptanceRelativePath(`evidence-${manualPlatform}-`, "README.md");

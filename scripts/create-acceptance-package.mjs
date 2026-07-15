@@ -164,9 +164,9 @@ const packageManifest = {
       "npm run verify:manual-acceptance -- --strict",
     ],
   },
-  copiedDocs: copiedDocs.map((path) => path.replace(root, "").replace(/^[/\\]/, "")),
-  copiedEvidence: copiedEvidence.map((path) => path.replace(root, "").replace(/^[/\\]/, "")),
-  copiedManualAcceptance: copiedManualAcceptance.map((path) => path.replace(root, "").replace(/^[/\\]/, "")),
+  copiedDocs: copiedDocs.map(packageRelative),
+  copiedEvidence: copiedEvidence.map(packageRelative),
+  copiedManualAcceptance: copiedManualAcceptance.map(packageRelative),
   remainingEvidence: latestManualSummary?.remainingEvidence ?? null,
   remainingEvidenceRequired: [
     "Windows GitHub Actions 安装器下载、安装和首次启动",
