@@ -969,6 +969,7 @@ function setupFinalizeRejectsManualEvidenceFixture() {
     encoding: "utf8",
     env: {
       ...process.env,
+      ASTER_ACCEPTANCE_PLATFORM: "darwin",
       ASTER_FINALIZE_VERIFY_STRICT_COMMAND: noopCommand,
       ASTER_FINALIZE_PACKAGE_COMMAND: noopCommand,
       ASTER_FINALIZE_READINESS_COMMAND: noopCommand,
