@@ -6,7 +6,8 @@ import { arch, platform, release } from "node:os";
 const root = process.cwd();
 const evidenceDir = join(root, "docs", "release-evidence");
 const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-const reportPath = join(evidenceDir, `acceptance-finalize-${process.platform}-${timestamp}.json`);
+const currentPlatform = process.env.ASTER_ACCEPTANCE_PLATFORM || platform();
+const reportPath = join(evidenceDir, `acceptance-finalize-${currentPlatform}-${timestamp}.json`);
 const commandResults = [];
 
 function commandFromEnv(envName, fallbackArgs, fallbackText) {
@@ -57,16 +58,16 @@ function latestEvidence(prefix) {
 
 function writeReport(status, failure = null) {
   mkdirSync(evidenceDir, { recursive: true });
-  const readinessPath = latestEvidence(`readiness-${process.platform}-`);
-  const summaryPath = latestEvidence(`manual-acceptance-summary-${process.platform}-`);
-  const archivePath = latestEvidence(`acceptance-archive-${process.platform}-`);
+  const readinessPath = latestEvidence(`readiness-${currentPlatform}-`);
+  const summaryPath = latestEvidence(`manual-acceptance-summary-${currentPlatform}-`);
+  const archivePath = latestEvidence(`acceptance-archive-${currentPlatform}-`);
   const readiness = readinessPath ? readJson(readinessPath) : null;
   const summary = summaryPath ? readJson(summaryPath) : null;
   const archive = archivePath ? readJson(archivePath) : null;
   const report = {
     generatedAt: new Date().toISOString(),
     status,
-    platform: platform(),
+    platform: currentPlatform,
     platformRelease: release(),
     arch: arch(),
     commands: commands.map((item) => item.text),
@@ -120,7 +121,7 @@ for (const item of commands) {
   runCommand(item);
 }
 
-const readinessPath = latestEvidence(`readiness-${process.platform}-`);
+const readinessPath = latestEvidence(`readiness-${currentPlatform}-`);
 const readiness = readinessPath ? readJson(readinessPath) : null;
 if (readiness?.status !== "ready-for-final-archive") {
   const failure = {
