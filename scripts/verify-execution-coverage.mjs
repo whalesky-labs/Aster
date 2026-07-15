@@ -538,7 +538,7 @@ const requirements = [
       ["本机自动总门禁执行验收准备度校验", "verifyAllLocal", "npm run verify:readiness"],
       ["本机自动总门禁最终校验验收交接包", "verifyAllLocal", "npm run verify:acceptance-package"],
       ["验收准备度脚本已配置", "packageJson", "\"verify:readiness\""],
-      ["验收准备度生成证据报告", "verifyReadiness", "readiness-${process.platform}"],
+      ["验收准备度生成证据报告", "verifyReadiness", "readiness-${evidencePlatform}"],
       ["验收准备度识别待实机证据状态", "verifyReadiness", "ready-for-manual-evidence"],
       ["验收准备度提示 Windows artifacts 导入", "verifyReadiness", "acceptance:import-windows-artifacts"],
       ["验收状态命令已配置", "packageJson", "\"acceptance:status\""],

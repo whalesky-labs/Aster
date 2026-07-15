@@ -1360,10 +1360,29 @@ function setupWindowsArtifactsDownloadFixture() {
     [installerZip, fixtureInstallerDir],
     [evidenceZip, fixtureEvidenceDir],
   ]) {
-    const zipResult = spawnSync("zip", ["-qr", zipPath, "."], {
-      cwd: sourceDir,
-      encoding: "utf8",
-    });
+    const zipResult = process.platform === "win32"
+      ? spawnSync(
+          "powershell.exe",
+          [
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Compress-Archive -Path (Join-Path $env:ASTER_ZIP_SOURCE '*') -DestinationPath $env:ASTER_ZIP_TARGET -Force",
+          ],
+          {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              ASTER_ZIP_SOURCE: sourceDir,
+              ASTER_ZIP_TARGET: zipPath,
+            },
+          },
+        )
+      : spawnSync("zip", ["-qr", zipPath, "."], {
+          cwd: sourceDir,
+          encoding: "utf8",
+        });
     if (zipResult.status !== 0) {
       console.error(zipResult.stdout);
       console.error(zipResult.stderr);
