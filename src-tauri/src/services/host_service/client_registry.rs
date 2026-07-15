@@ -150,10 +150,10 @@ pub(super) fn authenticate_request_and_touch_client(
     request: &str,
     runtime: &Arc<Mutex<HostServiceRuntime>>,
     db: &Db,
-) -> AppResult<()> {
+) -> AppResult<String> {
     let client_device_id = authenticate_request_and_load_client(request, runtime, db)?;
     db.with_conn(|conn| touch_client_connection(conn, &client_device_id, "online"))?;
-    Ok(())
+    Ok(client_device_id)
 }
 
 pub(super) fn authenticate_request_and_load_client(

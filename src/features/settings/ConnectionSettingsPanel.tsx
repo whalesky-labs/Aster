@@ -6,7 +6,7 @@ function statusLabel(status: AppStatus | null, result: HostConnectionTestResult 
   if (!status) return i18n.t("connection.loading");
   if (status.runtime.mode === "host") return i18n.t("connection.host");
   if (status.runtime.mode === "client") {
-    if (!status.runtime.clientToken) return i18n.t("connection.unpaired");
+    if (!status.runtime.clientPaired) return i18n.t("connection.unpaired");
     return result?.ok === false ? i18n.t("connection.abnormal") : i18n.t("connection.connected");
   }
   return i18n.t("connection.standalone");
@@ -16,7 +16,7 @@ function statusHint(status: AppStatus | null, host: HostServiceStatus | null, re
   if (!status) return i18n.t("connection.hint.loading");
   if (status.runtime.mode === "host") return host?.running ? i18n.t("connection.hint.hostRunning") : i18n.t("connection.hint.hostStopped");
   if (status.runtime.mode === "client") {
-    if (!status.runtime.clientToken) return i18n.t("connection.hint.clientUnpaired");
+    if (!status.runtime.clientPaired) return i18n.t("connection.hint.clientUnpaired");
     return result?.ok === false ? i18n.t("connection.hint.clientAbnormal") : i18n.t("connection.hint.clientConnected");
   }
   return i18n.t("connection.hint.standalone");
@@ -139,7 +139,7 @@ export function ConnectionSettingsPanel({
           {settingsIsClientMode && hostTestResult?.ok === false ? (
             <div className="settings-inline-note warning">
               <strong>
-                {status?.runtime.clientToken
+                {status?.runtime.clientPaired
                   ? i18n.t("settings.hostConnectionAbnormal")
                   : i18n.t("settings.hostNotConnected")}
               </strong>

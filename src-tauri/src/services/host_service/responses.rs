@@ -36,6 +36,10 @@ pub(super) fn write_json<T: Serialize>(
     http_transport::write_json(stream, status, body)
 }
 
+pub(super) fn write_xlsx(stream: &mut impl Write, body: &[u8], row_count: usize) -> AppResult<()> {
+    http_transport::write_xlsx(stream, body, row_count)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct HealthResponse {

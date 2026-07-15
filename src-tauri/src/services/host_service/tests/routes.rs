@@ -324,7 +324,13 @@ fn save_client_config_clears_pairing_token_when_host_changes() {
         .db
         .with_conn(|conn| repository::get_setting(conn, "client_token"))
         .unwrap();
-    assert_eq!(same_host_token.as_deref(), Some("old-token"));
+    assert!(same_host_token.is_none());
+    let secure_token = crate::application::secret_service::load(
+        &state.db,
+        crate::application::secret_service::ApplicationSecret::ClientToken,
+    )
+    .unwrap();
+    assert_eq!(secure_token.as_deref(), Some("old-token"));
 
     let config = save_client_config(
         &state,

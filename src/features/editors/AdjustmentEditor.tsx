@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { CurrentUser } from "../../entities/users";
 import type { Item } from "../../entities/master-data";
+import { localDateTime } from "../../shared/lib/localDate";
 import { Field } from "../../shared/ui/DataTable";
 import { ItemSearchSelect } from "../../shared/ui/ItemSearchSelect";
 
@@ -12,10 +13,6 @@ export type AdjustmentDraft = {
   businessDate: string; adjustmentType: "gain" | "loss" | "damage" | "correction";
   handler: string; reason: string; lines: AdjustmentLineDraft[];
 };
-function currentDateTimeString() {
-  const now = new Date();
-  return new Date(now.getTime() - now.getTimezoneOffset() * 60 * 1000).toISOString().slice(0, 19);
-}
 function userDisplayName(user?: CurrentUser | null) {
   return user ? user.displayName?.trim() || user.username : "";
 }
@@ -46,7 +43,7 @@ export function AdjustmentEditor({
     remark: "",
   };
   const [draft, setDraft] = useState<AdjustmentDraft>({
-    businessDate: currentDateTimeString(),
+    businessDate: localDateTime(),
     adjustmentType: "damage",
     handler: defaultHandler,
     reason: "",

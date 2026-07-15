@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type { SystemSettings } from "../../entities/runtime";
 import { Field, MonthSelect, PathPickerField } from "../../shared/ui/DataTable";
 import { EditorForm } from "../../shared/ui/EditorForm";
+import { localMonth } from "../../shared/lib/localDate";
 
 async function chooseDirectory(title: string, defaultPath?: string) {
   const selected = await open({
@@ -28,8 +29,8 @@ export function BusinessSettingsEditor({
   const [draft, setDraft] = useState<SystemSettings>(
     settings ?? {
       hotelName: "",
-      currentPeriod: new Date().toISOString().slice(0, 7),
-      defaultMonth: new Date().toISOString().slice(0, 7),
+      currentPeriod: localMonth(),
+      defaultMonth: localMonth(),
       allowNegativeStock: false,
       quantityDecimals: 2,
       amountDecimals: 2,

@@ -65,15 +65,27 @@ pub(super) fn write_host_audit(
     entity_id: &str,
     summary: &str,
 ) -> AppResult<()> {
+    write_host_user_audit(conn, action, entity_type, entity_id, summary, "client")
+}
+
+pub(super) fn write_host_user_audit(
+    conn: &rusqlite::Connection,
+    action: &str,
+    entity_type: &str,
+    entity_id: &str,
+    summary: &str,
+    operator: &str,
+) -> AppResult<()> {
     conn.execute(
         "INSERT INTO audit_logs (id, action, entity_type, entity_id, summary, operator)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'client')",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         rusqlite::params![
             Uuid::new_v4().to_string(),
             action,
             entity_type,
             entity_id,
-            summary
+            summary,
+            operator
         ],
     )?;
     Ok(())

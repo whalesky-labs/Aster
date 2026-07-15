@@ -3,11 +3,12 @@ import type { Department, Item, Supplier } from "../../entities/master-data";
 import type { StockDocument, StockDocumentQuery } from "../../entities/stock";
 import { createI18n } from "../../i18n";
 import { openEditorWindow } from "../../shared/lib/editorWindows";
+import { localMonth } from "../../shared/lib/localDate";
 import { Field, MonthSelect, PaginatedTable } from "../../shared/ui/DataTable";
 import { ItemSearchSelect } from "../../shared/ui/ItemSearchSelect";
 
 const i18n = createI18n("zh-CN");
-const currentMonthString = () => new Date().toISOString().slice(0, 7);
+const currentMonthString = localMonth;
 const formatMoney = (value: number) => i18n.formatMoney(value);
 function formatDateTime(value?: string | null) {
   if (!value) return "-";
@@ -31,10 +32,12 @@ export function StockDocumentPage({
   departments,
   documentType,
   documents,
+  hasMore,
   handlerOptions,
   items,
   onConfirmDraft,
   onQueryChange,
+  onLoadMore,
   onVoid,
   query,
   suppliers,
@@ -43,6 +46,7 @@ export function StockDocumentPage({
   departments: Department[];
   documentType: "inbound" | "outbound";
   documents: StockDocument[];
+  hasMore: boolean;
   handlerOptions: string[];
   items: Item[];
   onConfirmDraft: (
@@ -50,6 +54,7 @@ export function StockDocumentPage({
     approvalRequestId?: string | null,
   ) => Promise<void>;
   onQueryChange: (query: StockDocumentQuery) => Promise<void>;
+  onLoadMore: () => Promise<void>;
   onVoid: (
     documentId: string,
     reason: string,
@@ -92,6 +97,7 @@ export function StockDocumentPage({
       <DocumentList
         departments={departments}
         documents={documents}
+        hasMore={hasMore}
         handlerOptions={handlerOptions}
         items={items}
         isOutbound={isOutbound}
@@ -99,6 +105,7 @@ export function StockDocumentPage({
         approvalRequestId={approvalRequestId}
         onConfirmDraft={onConfirmDraft}
         onQueryChange={onQueryChange}
+        onLoadMore={onLoadMore}
         onVoid={onVoid}
         query={query}
         voidHandler={voidHandler}
@@ -153,11 +160,13 @@ export function DocumentList({
   canVoid = true,
   departments = [],
   documents,
+  hasMore = false,
   handlerOptions = [],
   items = [],
   isOutbound,
   onConfirmDraft,
   onQueryChange,
+  onLoadMore,
   onVoid,
   query,
   suppliers = [],
@@ -169,6 +178,7 @@ export function DocumentList({
   canVoid?: boolean;
   departments?: Department[];
   documents: StockDocument[];
+  hasMore?: boolean;
   handlerOptions?: string[];
   items?: Item[];
   isOutbound: boolean;
@@ -177,6 +187,7 @@ export function DocumentList({
     approvalRequestId?: string | null,
   ) => Promise<void>;
   onQueryChange?: (query: StockDocumentQuery) => Promise<void>;
+  onLoadMore?: () => Promise<void>;
   onVoid?: (
     documentId: string,
     reason: string,
@@ -375,6 +386,9 @@ export function DocumentList({
         <PaginatedTable
           colSpan={isOutbound ? 10 : 9}
           getRowKey={(doc) => doc.id}
+          hasMore={hasMore}
+          onLoadMore={onLoadMore}
+          resetKey={JSON.stringify(query)}
           rows={documents}
         >
           {(doc) => (

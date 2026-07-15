@@ -1,37 +1,50 @@
 import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { ApprovalRequest } from "../../entities/approvals";
-import type { AuditLogRow, BackupRecord } from "../../entities/operations";
-import type { AppStatus, ClientConnectionInfo, HostConnectionTestResult, HostServiceStatus, RuntimeConfig, SystemSettings } from "../../entities/runtime";
-import type { BudgetRule, Category, Department, Item, Supplier, SupplierPurchaseRecord, Unit } from "../../entities/master-data";
-import type { CurrentUser, UserAccount } from "../../entities/users";
+import type { AppStatus } from "../../entities/runtime";
+import type { Category, Department, Item, Supplier, Unit } from "../../entities/master-data";
+import type { CurrentUser } from "../../entities/users";
 import type { StockBalanceQuery, StockBalanceRow, StockDocument, StockDocumentQuery, StockMovementQuery, StockMovementRow, StocktakeDocument } from "../../entities/stock";
 import type { ReportBundle, ReportQuery } from "../../entities/reports";
+import type { DataPageKey, Page } from "../../entities/pagination";
 import { formatError } from "../../shared/lib/appRuntime";
+import { localMonth } from "../../shared/lib/localDate";
 import type { MainAppState } from "./useMainAppState";
-
-const currentMonthString = () => new Date().toISOString().slice(0, 7);
+import { createMainDataAuxLoaders } from "./mainDataAuxLoaders";
+import { createTargetedRefresher } from "./mainDataRefresh";
+import { refreshTargetForEditor, type RefreshTarget } from "./refreshTargets";
+const currentMonthString = localMonth;
 const CLIENT_RECONNECT_INTERVAL_MS = 15000;
-
 export function useMainDataController(state: MainAppState) {
   const {
-    adjustmentDocumentQuery, currentUser, hasManualReportMonth, inboundDocumentQuery,
-    itemSearch, outboundDocumentQuery, reportMonth, reportQuery, setActiveNav,
+    adjustmentDocumentQuery, hasManualReportMonth, inboundDocumentQuery,
+    itemSearch, itemSupplierId, outboundDocumentQuery, reportMonth, reportQuery, setActiveNav,
     setActiveSupplier, setAdjustmentDocumentQuery, setAdjustmentDocuments,
     setApprovalRequests, setAuditLogs, setBackupRecords, setBudgetRules, setCategories,
-    setClientConnectionCheckedAt, setClientConnections, setCurrentUser, setDepartments,
-    setError, setHostStatus, setHostTestResult, setImportPreview, setImportResult,
+    setClientConnectionCheckedAt, setCurrentUser, setDepartments,
+    setError, setImportPreview, setImportResult,
     setInboundDocumentQuery, setInboundDocuments, setItems, setLastBackup, setLastExportPath,
     setOutboundDocumentQuery, setOutboundDocuments, setReportBundle, setReportMonth,
     setReportQuery, setPasswordChangeRequired, setHasManualReportMonth,
     setStockBalanceQuery, setStockBalances, setStockMovementQuery,
     setStockMovements, setStocktakes, setSupplierPurchaseRecords, setSuppliers,
+    nextPageCursors, setNextPageCursors,
     setSystemSettings, setUnits, setUserAccounts, status, setStatus, stockBalanceQuery,
     stockMovementQuery,
   } = state;
-  const isBusinessConnectionReady =
-    status?.runtime.mode !== "client" ||
-    (Boolean(status.runtime.clientToken) && state.hostTestResult?.ok === true);
+  const isBusinessConnectionReady = status?.runtime.mode !== "client" ||
+    (status.runtime.clientPaired && state.hostTestResult?.ok === true);
+  const { loadApprovalRequests, loadAuditLogs, loadBackups, loadBudgetRules, loadHostRuntime,
+    loadStatus, loadSupplierPurchaseRecords, loadSystemSettings, loadUsers, probeConfiguredHost } =
+    createMainDataAuxLoaders(state, isBusinessConnectionReady);
+
+  function setPageCursor(key: DataPageKey, cursor?: string | null) {
+    setNextPageCursors((current) => {
+      const next = { ...current };
+      if (cursor) next[key] = cursor;
+      else delete next[key];
+      return next;
+    });
+  }
   function clearBusinessState() {
     setCategories([]);
     setUnits([]);
@@ -62,6 +75,7 @@ export function useMainDataController(state: MainAppState) {
     setStockBalanceQuery({});
     setStockMovementQuery({});
     setStocktakes([]);
+    setNextPageCursors({});
     setReportQuery({ month: reportMonth });
     setReportBundle(null);
     setLastExportPath(null);
@@ -94,11 +108,17 @@ export function useMainDataController(state: MainAppState) {
     return user;
   }
 
-  function scheduleRefreshAll(search = itemSearch) {
+  function scheduleRefreshAll(search = itemSearch, supplierId = itemSupplierId) {
     window.requestAnimationFrame(() => {
       window.setTimeout(() => {
-        void refreshAll(search);
+        void refreshAll(search, supplierId);
       }, 0);
+    });
+  }
+
+  function scheduleRefresh(target: RefreshTarget) {
+    window.requestAnimationFrame(() => {
+      window.setTimeout(() => void refreshTarget(target), 0);
     });
   }
 
@@ -141,7 +161,7 @@ export function useMainDataController(state: MainAppState) {
     }
   }
 
-  async function loadMasterData(search = itemSearch) {
+  async function loadMasterData(search = itemSearch, supplierId = itemSupplierId) {
     const [
       nextCategories,
       nextUnits,
@@ -153,13 +173,14 @@ export function useMainDataController(state: MainAppState) {
       invoke<Unit[]>("list_units"),
       invoke<Department[]>("list_departments"),
       invoke<Supplier[]>("list_suppliers"),
-      invoke<Item[]>("list_items", { search }),
+      invoke<Page<Item>>("list_items_page", { search, supplierId }),
     ]);
     setCategories(nextCategories);
     setUnits(nextUnits);
     setDepartments(nextDepartments);
     setSuppliers(nextSuppliers);
-    setItems(nextItems);
+    setItems(nextItems.items);
+    setPageCursor("items", nextItems.nextCursor);
   }
 
   async function loadStockData() {
@@ -171,42 +192,54 @@ export function useMainDataController(state: MainAppState) {
       nextMovements,
       nextStocktakes,
     ] = await Promise.all([
-      invoke<StockDocument[]>("list_stock_documents", {
+      invoke<Page<StockDocument>>("list_stock_documents_page", {
         query: inboundDocumentQuery,
       }),
-      invoke<StockDocument[]>("list_stock_documents", {
+      invoke<Page<StockDocument>>("list_stock_documents_page", {
         query: outboundDocumentQuery,
       }),
-      invoke<StockDocument[]>("list_stock_documents", {
+      invoke<Page<StockDocument>>("list_stock_documents_page", {
         query: adjustmentDocumentQuery,
       }),
-      invoke<StockBalanceRow[]>("list_stock_balances", {
+      invoke<Page<StockBalanceRow>>("list_stock_balances_page", {
         query: stockBalanceQuery,
       }),
-      invoke<StockMovementRow[]>("list_stock_movements", {
+      invoke<Page<StockMovementRow>>("list_stock_movements_page", {
         query: stockMovementQuery,
       }),
       invoke<StocktakeDocument[]>("list_stocktakes"),
     ]);
-    setInboundDocuments(nextInbound);
-    setOutboundDocuments(nextOutbound);
-    setAdjustmentDocuments(nextAdjustments);
-    setStockBalances(nextBalances);
-    setStockMovements(nextMovements);
+    setInboundDocuments(nextInbound.items);
+    setOutboundDocuments(nextOutbound.items);
+    setAdjustmentDocuments(nextAdjustments.items);
+    setStockBalances(nextBalances.items);
+    setStockMovements(nextMovements.items);
+    setPageCursor("inboundDocuments", nextInbound.nextCursor);
+    setPageCursor("outboundDocuments", nextOutbound.nextCursor);
+    setPageCursor("adjustmentDocuments", nextAdjustments.nextCursor);
+    setPageCursor("stockBalances", nextBalances.nextCursor);
+    setPageCursor("stockMovements", nextMovements.nextCursor);
     setStocktakes(nextStocktakes);
   }
 
-  async function loadStockDocuments(query: StockDocumentQuery) {
-    const nextDocuments = await invoke<StockDocument[]>(
-      "list_stock_documents",
-      { query },
+  async function loadStockDocuments(
+    query: StockDocumentQuery,
+    cursor?: string,
+    append = false,
+  ) {
+    const nextDocuments = await invoke<Page<StockDocument>>(
+      "list_stock_documents_page",
+      { cursor, query },
     );
     if (query.documentType === "inbound") {
-      setInboundDocuments(nextDocuments);
+      setInboundDocuments((current) => append ? [...current, ...nextDocuments.items] : nextDocuments.items);
+      setPageCursor("inboundDocuments", nextDocuments.nextCursor);
     } else if (query.documentType === "outbound") {
-      setOutboundDocuments(nextDocuments);
+      setOutboundDocuments((current) => append ? [...current, ...nextDocuments.items] : nextDocuments.items);
+      setPageCursor("outboundDocuments", nextDocuments.nextCursor);
     } else if (query.documentType === "adjustment") {
-      setAdjustmentDocuments(nextDocuments);
+      setAdjustmentDocuments((current) => append ? [...current, ...nextDocuments.items] : nextDocuments.items);
+      setPageCursor("adjustmentDocuments", nextDocuments.nextCursor);
     }
   }
 
@@ -229,13 +262,14 @@ export function useMainDataController(state: MainAppState) {
       stockStatus: query.stockStatus || null,
     };
     setStockBalanceQuery(normalizedQuery);
-    const nextBalances = await invoke<StockBalanceRow[]>(
-      "list_stock_balances",
+    const nextBalances = await invoke<Page<StockBalanceRow>>(
+      "list_stock_balances_page",
       {
         query: normalizedQuery,
       },
     );
-    setStockBalances(nextBalances);
+    setStockBalances(nextBalances.items);
+    setPageCursor("stockBalances", nextBalances.nextCursor);
   }
 
   async function applyStockMovementQuery(query: StockMovementQuery) {
@@ -246,18 +280,58 @@ export function useMainDataController(state: MainAppState) {
       movementType: query.movementType || null,
     };
     setStockMovementQuery(normalizedQuery);
-    const nextMovements = await invoke<StockMovementRow[]>(
-      "list_stock_movements",
+    const nextMovements = await invoke<Page<StockMovementRow>>(
+      "list_stock_movements_page",
       {
         query: normalizedQuery,
       },
     );
-    setStockMovements(nextMovements);
+    setStockMovements(nextMovements.items);
+    setPageCursor("stockMovements", nextMovements.nextCursor);
   }
 
   async function showItemMovements(itemId: string) {
     setActiveNav("movements");
     await applyStockMovementQuery({ itemId });
+  }
+
+  async function loadMore(key: DataPageKey) {
+    const cursor = nextPageCursors[key];
+    if (!cursor) return;
+    if (key === "items") {
+      const page = await invoke<Page<Item>>("list_items_page", {
+        cursor,
+        search: itemSearch,
+        supplierId: itemSupplierId,
+      });
+      setItems((current) => [...current, ...page.items]);
+      setPageCursor(key, page.nextCursor);
+      return;
+    }
+    if (key === "stockBalances") {
+      const page = await invoke<Page<StockBalanceRow>>("list_stock_balances_page", {
+        cursor,
+        query: stockBalanceQuery,
+      });
+      setStockBalances((current) => [...current, ...page.items]);
+      setPageCursor(key, page.nextCursor);
+      return;
+    }
+    if (key === "stockMovements") {
+      const page = await invoke<Page<StockMovementRow>>("list_stock_movements_page", {
+        cursor,
+        query: stockMovementQuery,
+      });
+      setStockMovements((current) => [...current, ...page.items]);
+      setPageCursor(key, page.nextCursor);
+      return;
+    }
+    const query = key === "inboundDocuments"
+      ? inboundDocumentQuery
+      : key === "outboundDocuments"
+        ? outboundDocumentQuery
+        : adjustmentDocumentQuery;
+    await loadStockDocuments(query, cursor, true);
   }
 
   async function loadReports(query = reportQuery) {
@@ -301,59 +375,6 @@ export function useMainDataController(state: MainAppState) {
     await loadReports(normalizedQuery);
   }
 
-  async function loadBackups() {
-    const records = await invoke<BackupRecord[]>("list_backup_records");
-    setBackupRecords(records);
-  }
-
-  async function loadAuditLogs() {
-    const records = await invoke<AuditLogRow[]>("list_audit_logs", {
-      limit: 120,
-    });
-    setAuditLogs(records);
-  }
-
-  async function loadHostRuntime() {
-    const [nextStatus, nextClients] = await Promise.all([
-      invoke<HostServiceStatus>("get_host_service_status"),
-      invoke<ClientConnectionInfo[]>("list_client_connections"),
-    ]);
-    setHostStatus(nextStatus);
-    setClientConnections(nextClients);
-  }
-
-  async function probeConfiguredHost(runtime: RuntimeConfig) {
-    if (runtime.mode !== "client" || !runtime.hostAddress) {
-      setClientConnectionCheckedAt(null);
-      setHostTestResult(null);
-      return true;
-    }
-    try {
-      const result = await invoke<HostConnectionTestResult>(
-        "test_host_connection",
-        {
-          request: {
-            hostAddress: runtime.hostAddress,
-            hostPort: runtime.hostPort,
-          },
-        },
-      );
-      setHostTestResult(result);
-      return result.ok;
-    } catch (err) {
-      setHostTestResult({
-        ok: false,
-        message: `主机连接异常：${String(err)}`,
-        appName: null,
-        appVersion: null,
-        schemaVersion: null,
-      });
-      return false;
-    } finally {
-      setClientConnectionCheckedAt(new Date().toLocaleString("zh-CN"));
-    }
-  }
-
   useEffect(() => {
     if (status?.runtime.mode !== "client" || !status.runtime.hostAddress) {
       return;
@@ -367,59 +388,22 @@ export function useMainDataController(state: MainAppState) {
     status?.runtime.mode,
     status?.runtime.hostAddress,
     status?.runtime.hostPort,
-    status?.runtime.clientToken,
+    status?.runtime.clientPaired,
   ]);
 
-  async function loadSystemSettings() {
-    const settings = await invoke<SystemSettings>("get_system_settings");
-    setSystemSettings(settings);
-  }
+  const refreshTarget = createTargetedRefresher(state, {
+    loadApprovalRequests, loadAuditLogs, loadBackups, loadBudgetRules, loadHostRuntime,
+    loadMasterData, loadReportsForStatus, loadStatus, loadStockData, loadSystemSettings, loadUsers,
+  });
 
-  async function loadUsers(user = currentUser) {
-    if (!user?.roles.some((role) => role.code === "admin")) {
-      return;
-    }
-    const nextUsers = await invoke<UserAccount[]>("list_user_accounts");
-    setUserAccounts(nextUsers);
-  }
-
-  async function loadBudgetRules(month = reportMonth) {
-    const rules = await invoke<BudgetRule[]>("list_budget_rules", {
-      periodMonth: month,
-    });
-    setBudgetRules(rules);
-  }
-
-  async function loadApprovalRequests() {
-    const approvals = await invoke<ApprovalRequest[]>("list_approval_requests");
-    setApprovalRequests(approvals);
-  }
-
-  async function loadSupplierPurchaseRecords(supplier: Supplier) {
-    if (!isBusinessConnectionReady) return;
-    try {
-      setError(null);
-      setActiveSupplier(supplier);
-      const records = await invoke<SupplierPurchaseRecord[]>(
-        "list_supplier_purchase_records",
-        {
-          supplierId: supplier.id,
-        },
-      );
-      setSupplierPurchaseRecords(records);
-    } catch (err) {
-      setError(formatError(err));
-    }
-  }
-
-  async function refreshAll(search = itemSearch) {
+  async function refreshAll(search = itemSearch, supplierId = itemSupplierId) {
     try {
       setError(null);
       const user = await loadCurrentUser();
       const nextStatus = await invoke<AppStatus>("get_app_status");
       setStatus(nextStatus);
       const isUnpairedClient =
-        nextStatus.runtime.mode === "client" && !nextStatus.runtime.clientToken;
+        nextStatus.runtime.mode === "client" && !nextStatus.runtime.clientPaired;
       let clientHostOk = true;
       if (nextStatus.runtime.mode === "client") {
         clientHostOk = await probeConfiguredHost(nextStatus.runtime);
@@ -440,7 +424,7 @@ export function useMainDataController(state: MainAppState) {
         setLastExportPath(null);
       }
       await Promise.all([
-        canLoadBusinessData ? loadMasterData(search) : Promise.resolve(),
+        canLoadBusinessData ? loadMasterData(search, supplierId) : Promise.resolve(),
         canLoadBusinessData ? loadStockData() : Promise.resolve(),
         canLoadBusinessData && canViewReports
           ? loadReportsForStatus(nextStatus)
@@ -475,9 +459,10 @@ export function useMainDataController(state: MainAppState) {
   return {
     applyReportQuery, applyStockBalanceQuery, applyStockDocumentQuery,
     applyStockMovementQuery, bootstrapSession, clearSessionScopedState,
-    loadBudgetRules, loadHostRuntime, loadSupplierPurchaseRecords, loadUsers,
-    refreshAll, scheduleRefreshAll,
+    loadBudgetRules, loadHostRuntime, loadMasterData, loadMore, loadSupplierPurchaseRecords, loadUsers,
+    refreshAll, refreshTarget, refreshTargetForEditor, scheduleRefresh, scheduleRefreshAll,
     showItemMovements,
   };
 }
 export type MainDataController = ReturnType<typeof useMainDataController>;
+export type { RefreshTarget } from "./refreshTargets";

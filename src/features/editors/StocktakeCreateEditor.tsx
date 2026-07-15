@@ -1,14 +1,8 @@
 import { useState } from "react";
 import type { Item, OptionRecord } from "../../entities/master-data";
+import { localDateTime } from "../../shared/lib/localDate";
 import { Field } from "../../shared/ui/DataTable";
 import { EditorForm } from "../../shared/ui/EditorForm";
-
-function currentDateTimeString() {
-  const now = new Date();
-  return new Date(now.getTime() - now.getTimezoneOffset() * 60 * 1000)
-    .toISOString()
-    .slice(0, 19);
-}
 
 export function StocktakeCreateEditor({
   categories,
@@ -28,7 +22,7 @@ export function StocktakeCreateEditor({
     remark?: string | null;
   }) => Promise<void>;
 }) {
-  const [businessDate, setBusinessDate] = useState(currentDateTimeString());
+  const [businessDate, setBusinessDate] = useState(localDateTime());
   const [scopeType, setScopeType] = useState<"all" | "category" | "custom">("all");
   const [categoryId, setCategoryId] = useState("");
   const [selectedItemId, setSelectedItemId] = useState("");

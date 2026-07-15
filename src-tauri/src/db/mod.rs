@@ -11,6 +11,7 @@ pub mod paginated_stock_repository;
 pub mod paginated_stocktake_repository;
 pub mod pagination;
 mod pagination_migrations;
+mod performance_migrations;
 mod report_filters;
 pub mod report_repository;
 pub mod repository;

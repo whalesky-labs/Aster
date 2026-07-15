@@ -93,6 +93,16 @@ fn blank_to_none(value: Option<String>) -> Option<String> {
     })
 }
 
+fn stock_status_code(quantity: f64, warning_quantity: f64) -> &'static str {
+    if quantity < 0.0 {
+        "negative"
+    } else if quantity <= warning_quantity {
+        "low"
+    } else {
+        "normal"
+    }
+}
+
 fn snapshot_department_name(
     conn: &Connection,
     department_id: Option<&str>,

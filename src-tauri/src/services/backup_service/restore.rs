@@ -47,6 +47,14 @@ fn reset_restored_local_paths(conn: &rusqlite::Connection, state: &AppState) -> 
         &state.paths.backup_dir.display().to_string(),
     )?;
     repository::set_setting(conn, "second_backup_dir", "")?;
+    repository::delete_setting(conn, crate::application::secret_service::SMTP_PASSWORD_SETTING)?;
+    repository::delete_setting(conn, crate::application::secret_service::CLIENT_TOKEN_SETTING)?;
+    repository::set_setting(
+        conn,
+        crate::application::secret_service::SMTP_PASSWORD_CONFIGURED_SETTING,
+        "false",
+    )?;
+    repository::delete_setting(conn, "host_certificate_fingerprint")?;
     Ok(())
 }
 

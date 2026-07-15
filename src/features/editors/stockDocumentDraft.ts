@@ -1,3 +1,6 @@
+import type { OptionRecord } from "../../entities/master-data";
+import type { CurrentUser } from "../../entities/users";
+
 export type StockDocumentLineDraft = {
   itemId: string;
   quantity: number;
@@ -54,13 +57,6 @@ export function effectiveDraftAmount(
       : 0;
 }
 
-export function currentDateTimeString() {
-  const now = new Date();
-  return new Date(now.getTime() - now.getTimezoneOffset() * 60 * 1000)
-    .toISOString()
-    .slice(0, 19);
-}
-
 export function userDisplayName(user?: CurrentUser | null) {
   return user ? user.displayName?.trim() || user.username : "";
 }
@@ -75,5 +71,3 @@ export function formatMoney(value: number) {
     maximumFractionDigits: 2,
   }).format(value);
 }
-import type { OptionRecord } from "../../entities/master-data";
-import type { CurrentUser } from "../../entities/users";

@@ -8,6 +8,14 @@ use crate::error::{AppError, AppResult};
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_BINARY_RESPONSE_BYTES: usize = 256 * 1024 * 1024;
+const XLSX_CONTENT_TYPE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+#[derive(Debug)]
+pub struct BinaryResponse {
+    pub body: Vec<u8>,
+    pub row_count: usize,
+}
 
 pub fn read_request(stream: &mut impl Read) -> AppResult<String> {
     let mut buffer = Vec::new();
@@ -56,6 +64,53 @@ pub fn read_json_response<T: DeserializeOwned>(stream: impl Read) -> AppResult<T
         .map_err(|error| AppError::Validation(format!("主机响应解析失败：{error}")))
 }
 
+pub fn read_xlsx_response(stream: impl Read) -> AppResult<BinaryResponse> {
+    let mut response = Vec::new();
+    stream
+        .take((MAX_HEADER_BYTES + MAX_BINARY_RESPONSE_BYTES + 1) as u64)
+        .read_to_end(&mut response)?;
+    if response.len() > MAX_HEADER_BYTES + MAX_BINARY_RESPONSE_BYTES {
+        return Err(AppError::PayloadTooLarge(
+            "库存导出响应超过 256 MiB 限制".to_string(),
+        ));
+    }
+    let header_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or_else(|| AppError::Validation("主机响应格式异常".to_string()))?;
+    if header_end > MAX_HEADER_BYTES {
+        return Err(AppError::RequestHeaderTooLarge(
+            "主机响应头超过 16 KiB 限制".to_string(),
+        ));
+    }
+    let head = std::str::from_utf8(&response[..header_end])
+        .map_err(|_| AppError::Validation("主机响应头不是有效 UTF-8".to_string()))?
+        .to_string();
+    let body = response.split_off(header_end + 4);
+    if !head.starts_with("HTTP/1.1 200") {
+        return Err(AppError::Validation(format!(
+            "主机返回错误：{}",
+            response_error_message(&String::from_utf8_lossy(&body))
+        )));
+    }
+    let content_type = header_value(&head, "Content-Type").unwrap_or_default();
+    if !content_type.eq_ignore_ascii_case(XLSX_CONTENT_TYPE) {
+        return Err(AppError::Validation("主机库存导出响应类型异常".to_string()));
+    }
+    let content_length = header_value(&head, "Content-Length")
+        .ok_or_else(|| AppError::Validation("主机库存导出缺少文件长度".to_string()))?
+        .parse::<usize>()
+        .map_err(|_| AppError::Validation("主机库存导出文件长度无效".to_string()))?;
+    if content_length != body.len() {
+        return Err(AppError::Validation("主机库存导出文件不完整".to_string()));
+    }
+    let row_count = header_value(&head, "X-Aster-Row-Count")
+        .ok_or_else(|| AppError::Validation("主机库存导出缺少行数".to_string()))?
+        .parse::<usize>()
+        .map_err(|_| AppError::Validation("主机库存导出行数无效".to_string()))?;
+    Ok(BinaryResponse { body, row_count })
+}
+
 pub fn write_json<T: Serialize>(stream: &mut impl Write, status: u16, body: &T) -> AppResult<()> {
     let text = serde_json::to_string(body)
         .map_err(|error| AppError::Validation(format!("JSON 序列化失败：{error}")))?;
@@ -76,6 +131,21 @@ pub fn write_json<T: Serialize>(stream: &mut impl Write, status: u16, body: &T) 
         text
     );
     stream.write_all(response.as_bytes())?;
+    Ok(())
+}
+
+pub fn write_xlsx(stream: &mut impl Write, body: &[u8], row_count: usize) -> AppResult<()> {
+    if body.len() > MAX_BINARY_RESPONSE_BYTES {
+        return Err(AppError::PayloadTooLarge(
+            "库存导出文件超过 256 MiB 限制".to_string(),
+        ));
+    }
+    let head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: {XLSX_CONTENT_TYPE}\r\nContent-Length: {}\r\nX-Aster-Row-Count: {row_count}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(head.as_bytes())?;
+    stream.write_all(body)?;
     Ok(())
 }
 
@@ -331,5 +401,32 @@ mod tests {
         assert!(route_matches("/api/users", "/api/users"));
         assert!(route_matches("/api/users?cursor=next", "/api/users"));
         assert!(!route_matches("/api/users-invalid", "/api/users"));
+    }
+
+    #[test]
+    fn xlsx_response_round_trip_preserves_binary_body_and_row_count() {
+        let body = b"PK\x03\x04binary-xlsx";
+        let mut response = Vec::new();
+        write_xlsx(&mut response, body, 27).unwrap();
+
+        let parsed = read_xlsx_response(Cursor::new(response)).unwrap();
+
+        assert_eq!(parsed.body, body);
+        assert_eq!(parsed.row_count, 27);
+    }
+
+    #[test]
+    fn xlsx_reader_surfaces_json_error_responses() {
+        let mut response = Vec::new();
+        write_json(
+            &mut response,
+            403,
+            &serde_json::json!({ "message": "需要管理员权限" }),
+        )
+        .unwrap();
+
+        let error = read_xlsx_response(Cursor::new(response)).unwrap_err();
+
+        assert!(error.to_string().contains("需要管理员权限"));
     }
 }

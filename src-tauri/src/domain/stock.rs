@@ -225,6 +225,32 @@ pub struct StockBalanceRow {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct StockBalanceExportRow {
+    pub item_id: String,
+    pub item_code: String,
+    pub item_name: String,
+    pub category_name: Option<String>,
+    pub spec: Option<String>,
+    pub unit_name: Option<String>,
+    pub supplier_name: Option<String>,
+    pub quantity: f64,
+    pub average_price: f64,
+    pub amount: f64,
+    pub last_inbound_price: f64,
+    pub warning_quantity: f64,
+    pub stock_status: String,
+    pub item_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportStockBalancesResult {
+    pub path: String,
+    pub row_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StockMovementRow {
     pub id: String,
     pub movement_date: String,

@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "editor",
+  "description": "Least-privilege capability for editor windows",
+  "windows": ["editor-*"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-set-theme",
+    "dialog:allow-open"
+  ]
+}

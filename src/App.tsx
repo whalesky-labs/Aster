@@ -28,6 +28,7 @@ import { useMainActions } from "./features/app/useMainActions";
 import { MainContent } from "./features/app/MainContent";
 import { MainShell } from "./features/app/MainShell";
 import {
+  EDITOR_WINDOW_ERROR_EVENT,
   openEditorWindow,
   type EditorKind,
   type EditorMode,
@@ -86,7 +87,7 @@ function connectionStatusLabel(
   if (!status) return i18n.t("connection.loading");
   if (status.runtime.mode === "host") return i18n.t("connection.host");
   if (status.runtime.mode === "client") {
-    if (!status.runtime.clientToken) return i18n.t("connection.unpaired");
+    if (!status.runtime.clientPaired) return i18n.t("connection.unpaired");
     return hostTestResult?.ok === false
       ? i18n.t("connection.abnormal")
       : i18n.t("connection.connected");
@@ -107,7 +108,7 @@ function connectionStatusHint(
       : i18n.t("connection.hint.hostStopped");
   }
   if (status.runtime.mode === "client") {
-    if (!status.runtime.clientToken) {
+    if (!status.runtime.clientPaired) {
       return i18n.t("connection.hint.clientUnpaired");
     }
     return hostTestResult?.ok === false
@@ -127,7 +128,7 @@ function connectionStatusKind(
     return hostStatus?.running ? "success" : "warning";
   }
   if (status.runtime.mode === "client") {
-    if (!status.runtime.clientToken || hostTestResult?.ok === false) {
+    if (!status.runtime.clientPaired || hostTestResult?.ok === false) {
       return "warning";
     }
     return "success";
@@ -207,9 +208,17 @@ function MainApp() {
   );
   useSyncedAppearanceSettings(appearanceSettings);
   useBroadcastAppearanceSettings(appearanceSettings);
+  useEffect(() => {
+    const handleEditorWindowError = (event: Event) => {
+      setError((event as CustomEvent<string>).detail);
+    };
+    window.addEventListener(EDITOR_WINDOW_ERROR_EVENT, handleEditorWindowError);
+    return () => window.removeEventListener(EDITOR_WINDOW_ERROR_EVENT, handleEditorWindowError);
+  }, [setError]);
   const data = useMainDataController(state);
   const {
-    bootstrapSession, clearSessionScopedState, refreshAll, scheduleRefreshAll,
+    bootstrapSession, clearSessionScopedState, refreshAll, refreshTargetForEditor,
+    scheduleRefresh, scheduleRefreshAll,
   } = data;
   const actions = useMainActions(state, data, i18n);
   const {
@@ -234,8 +243,10 @@ function MainApp() {
         clearSessionScopedState();
         setHostTestResult(null);
         setClientConnectionCheckedAt(null);
+        scheduleRefreshAll();
+      } else {
+        scheduleRefresh(refreshTargetForEditor(event.payload.editor));
       }
-      scheduleRefreshAll();
       setNotice(event.payload.message ?? "已保存");
     }).then((nextUnlisten) => {
       unlisten = nextUnlisten;
@@ -296,7 +307,7 @@ function MainApp() {
   const enabledUnits = units.filter((item) => item.enabled);
   const enabledSuppliers = suppliers.filter((item) => item.enabled);
   const isClientMode = status?.runtime.mode === "client";
-  const isClientPaired = Boolean(status?.runtime.clientToken);
+  const isClientPaired = Boolean(status?.runtime.clientPaired);
   const isBusinessConnectionReady =
     !isClientMode || (isClientPaired && hostTestResult?.ok === true);
   const canWriteStock =
@@ -449,7 +460,7 @@ function EditorWindowApp({
     renderSettingsEditorContent({ controller, editor, params }) ??
     renderStockEditorContent({ controller, documentType, editor });
   return (
-    <main className="editor-shell">
+    <main className={params.get("titlebar") === "overlay" ? "editor-shell overlay-titlebar" : "editor-shell"}>
       <div className="editor-messages">
         {controller.error ? <div className="error-banner">{controller.error}</div> : null}
         {controller.notice ? <div className="notice-banner">{controller.notice}</div> : null}

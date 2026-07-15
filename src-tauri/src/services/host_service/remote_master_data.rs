@@ -3,10 +3,11 @@ use crate::domain::master_data::{
     BudgetRule, Category, Department, Item, SaveBudgetRuleRequest, SaveCategoryRequest,
     SaveDepartmentRequest, SaveItemRequest, SaveSupplierRequest, SaveUnitRequest, Supplier, Unit,
 };
+use crate::domain::pagination::Page;
 use crate::error::AppResult;
 
 use super::{client_runtime_config, collect_remote_pages, http_post_json, SetEnabledRequest};
-use crate::infrastructure::http_transport::url_encode;
+use crate::infrastructure::http_transport::{push_query_param, url_encode};
 pub fn remote_list_categories(state: &AppState) -> AppResult<Vec<Category>> {
     let config = client_runtime_config(state)?;
     collect_remote_pages(&config, "/api/master/categories")
@@ -136,14 +137,42 @@ pub fn remote_set_supplier_enabled(
     )
 }
 
-pub fn remote_list_items(state: &AppState, search: Option<String>) -> AppResult<Vec<Item>> {
+pub fn remote_list_items(
+    state: &AppState,
+    search: Option<String>,
+    supplier_id: Option<String>,
+) -> AppResult<Vec<Item>> {
     let config = client_runtime_config(state)?;
-    let path = if let Some(search) = search {
-        format!("/api/master/items?search={}", url_encode(&search))
-    } else {
+    let mut params = Vec::new();
+    push_query_param(&mut params, "search", search);
+    push_query_param(&mut params, "supplierId", supplier_id);
+    let path = if params.is_empty() {
         "/api/master/items".to_string()
+    } else {
+        format!("/api/master/items?{}", params.join("&"))
     };
     collect_remote_pages(&config, &path)
+}
+
+pub fn remote_list_items_page(
+    state: &AppState,
+    search: Option<String>,
+    supplier_id: Option<String>,
+    cursor: Option<String>,
+) -> AppResult<Page<Item>> {
+    let config = client_runtime_config(state)?;
+    let mut params = Vec::new();
+    push_query_param(&mut params, "search", search);
+    push_query_param(&mut params, "supplierId", supplier_id);
+    let path = if params.is_empty() {
+        "/api/master/items".to_string()
+    } else {
+        format!("/api/master/items?{}", params.join("&"))
+    };
+    super::http_get_json(
+        &config,
+        &crate::infrastructure::http_transport::page_path(&path, cursor.as_deref()),
+    )
 }
 
 pub fn remote_save_item(state: &AppState, request: SaveItemRequest) -> AppResult<Item> {

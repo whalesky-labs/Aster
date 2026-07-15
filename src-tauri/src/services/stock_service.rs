@@ -1,6 +1,7 @@
 use crate::app::state::AppState;
 use crate::application::write_limits::validate_line_count;
 use crate::db::stock_repository;
+use crate::domain::pagination::Page;
 use crate::domain::runtime::RuntimeMode;
 use crate::domain::stock::{
     ConfirmStockDocumentDraftRequest, SaveStockDocumentDraftRequest, StockBalanceQuery,
@@ -13,6 +14,10 @@ use crate::error::{AppError, AppResult};
 pub(crate) use crate::domain::business_datetime::{
     normalize as normalize_business_datetime, validate as validate_business_datetime,
 };
+
+mod export;
+pub use export::export_stock_balances;
+pub(crate) use export::stock_balance_export_workbook_bytes;
 
 pub fn submit_stock_document(
     state: &AppState,
@@ -104,6 +109,24 @@ pub fn list_stock_documents(
         .with_conn(|conn| stock_repository::list_stock_documents(conn, query))
 }
 
+pub fn list_stock_documents_page(
+    state: &AppState,
+    mut query: StockDocumentQuery,
+    cursor: Option<String>,
+) -> AppResult<Page<StockDocument>> {
+    crate::services::user_service::require_permission(state, "view_reports")?;
+    query.department_id =
+        crate::services::user_service::current_department_scope(state)?.or(query.department_id);
+    if runtime_mode(state)? == RuntimeMode::Client {
+        return crate::services::host_service::remote_list_stock_documents_page(
+            state, query, cursor,
+        );
+    }
+    state.db.with_conn(|conn| {
+        crate::db::paginated_stock_repository::list_documents_page(conn, query, cursor.as_deref())
+    })
+}
+
 pub fn get_stock_document_detail(
     state: &AppState,
     document_id: String,
@@ -130,6 +153,22 @@ pub fn list_stock_balances(
         .with_conn(|conn| stock_repository::list_stock_balances(conn, query))
 }
 
+pub fn list_stock_balances_page(
+    state: &AppState,
+    query: StockBalanceQuery,
+    cursor: Option<String>,
+) -> AppResult<Page<StockBalanceRow>> {
+    crate::services::user_service::require_permission(state, "view_reports")?;
+    if runtime_mode(state)? == RuntimeMode::Client {
+        return crate::services::host_service::remote_list_stock_balances_page(
+            state, query, cursor,
+        );
+    }
+    state.db.with_conn(|conn| {
+        stock_repository::list_stock_balances_page(conn, query, cursor.as_deref())
+    })
+}
+
 pub fn list_stock_batches(state: &AppState, item_id: String) -> AppResult<Vec<StockBatchRow>> {
     crate::services::user_service::require_permission(state, "view_reports")?;
     if runtime_mode(state)? == RuntimeMode::Client {
@@ -153,6 +192,24 @@ pub fn list_stock_movements(
     state
         .db
         .with_conn(|conn| stock_repository::list_stock_movements(conn, query))
+}
+
+pub fn list_stock_movements_page(
+    state: &AppState,
+    mut query: StockMovementQuery,
+    cursor: Option<String>,
+) -> AppResult<Page<StockMovementRow>> {
+    crate::services::user_service::require_permission(state, "view_reports")?;
+    query.department_id =
+        crate::services::user_service::current_department_scope(state)?.or(query.department_id);
+    if runtime_mode(state)? == RuntimeMode::Client {
+        return crate::services::host_service::remote_list_stock_movements_page(
+            state, query, cursor,
+        );
+    }
+    state.db.with_conn(|conn| {
+        crate::db::paginated_stock_repository::list_movements_page(conn, query, cursor.as_deref())
+    })
 }
 
 fn runtime_mode(state: &AppState) -> AppResult<RuntimeMode> {
@@ -285,239 +342,5 @@ pub(crate) fn validate_void_document(request: &VoidStockDocumentRequest) -> AppR
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::{Arc, Mutex};
-
-    use crate::app::paths::AppPaths;
-    use crate::app::state::AppState;
-    use crate::db::connection::Db;
-    use crate::domain::stock::{
-        SubmitAdjustmentLine, SubmitAdjustmentRequest, SubmitStockDocumentLine,
-        SubmitStockDocumentRequest,
-    };
-    use crate::domain::users::{CurrentUser, Role};
-
-    use super::*;
-
-    fn test_state() -> AppState {
-        let dir = tempfile::tempdir().expect("temp dir").keep();
-        let paths = AppPaths {
-            data_dir: dir.to_path_buf(),
-            database_path: dir.join("aster.sqlite"),
-            backup_dir: dir.join("backups"),
-            export_dir: dir.join("exports"),
-            import_report_dir: dir.join("import-reports"),
-        };
-        std::fs::create_dir_all(&paths.backup_dir).unwrap();
-        std::fs::create_dir_all(&paths.export_dir).unwrap();
-        std::fs::create_dir_all(&paths.import_report_dir).unwrap();
-        AppState {
-            db: Db::initialize(&paths).unwrap(),
-            paths,
-            session: Arc::new(Mutex::new(None)),
-            host_service: Arc::new(Mutex::new(
-                crate::services::host_service::HostServiceRuntime::default(),
-            )),
-        }
-    }
-
-    fn sample_request() -> SubmitStockDocumentRequest {
-        SubmitStockDocumentRequest {
-            document_type: "inbound".to_string(),
-            outbound_kind: None,
-            business_date: "2026-06-30".to_string(),
-            department_id: None,
-            supplier_id: None,
-            handler: None,
-            purpose: None,
-            remark: None,
-            approval_request_id: None,
-            lines: vec![SubmitStockDocumentLine {
-                item_id: String::new(),
-                quantity: 1.0,
-                unit_price: 1.0,
-                amount: None,
-                remark: None,
-            }],
-        }
-    }
-
-    fn set_warehouse_user(state: &AppState) {
-        let user = CurrentUser {
-            id: "user-warehouse".to_string(),
-            username: "warehouse".to_string(),
-            display_name: "仓库员".to_string(),
-            department_id: None,
-            department_name: None,
-            roles: vec![Role {
-                id: "role-warehouse".to_string(),
-                code: "warehouse".to_string(),
-                name: "仓库员".to_string(),
-            }],
-            permissions: vec!["write_stock".to_string(), "view_reports".to_string()],
-        };
-        crate::services::test_support::install_session(state, user).unwrap();
-    }
-
-    fn set_department_viewer(state: &AppState, department_id: &str) {
-        let user = CurrentUser {
-            id: "user-department-viewer".to_string(),
-            username: "dept-viewer".to_string(),
-            display_name: "部门查看员".to_string(),
-            department_id: Some(department_id.to_string()),
-            department_name: Some("绑定部门".to_string()),
-            roles: vec![Role {
-                id: "role-department-viewer".to_string(),
-                code: "department_viewer".to_string(),
-                name: "部门查看员".to_string(),
-            }],
-            permissions: vec!["view_reports".to_string()],
-        };
-        crate::services::test_support::install_session(state, user).unwrap();
-    }
-
-    #[test]
-    fn submit_stock_document_requires_write_stock_permission() {
-        let state = test_state();
-        let error = submit_stock_document(&state, sample_request()).unwrap_err();
-        assert!(error.to_string().contains("请先登录"));
-    }
-
-    #[test]
-    fn list_stock_balances_requires_view_reports_permission() {
-        let state = test_state();
-        let error = list_stock_balances(&state, StockBalanceQuery::default()).unwrap_err();
-        assert!(error.to_string().contains("请先登录"));
-    }
-
-    #[test]
-    fn submit_stock_document_checks_business_validation_after_permission() {
-        let state = test_state();
-        set_warehouse_user(&state);
-        let error = submit_stock_document(&state, sample_request()).unwrap_err();
-        assert!(error.to_string().contains("单据行缺少物品"));
-    }
-
-    #[test]
-    fn normalize_business_datetime_accepts_datetime_local_and_rejects_future() {
-        let mut value = "2026-06-30T14:25".to_string();
-        normalize_business_datetime(&mut value, "业务日期").unwrap();
-        assert_eq!(value, "2026-06-30 14:25:00");
-
-        let mut future = (chrono::Local::now().naive_local() + chrono::Duration::minutes(1))
-            .format("%Y-%m-%dT%H:%M")
-            .to_string();
-        let error = normalize_business_datetime(&mut future, "业务日期").unwrap_err();
-        assert!(error.to_string().contains("不能晚于当前时间"));
-    }
-
-    #[test]
-    fn submit_stock_document_rejects_negative_manual_amount() {
-        let state = test_state();
-        set_warehouse_user(&state);
-        let mut request = sample_request();
-        request.lines[0].item_id = "item-1".to_string();
-        request.lines[0].amount = Some(-1.0);
-
-        let error = submit_stock_document(&state, request).unwrap_err();
-        assert!(error.to_string().contains("金额不能小于 0"));
-    }
-
-    #[test]
-    fn validate_adjustment_enforces_type_direction_semantics() {
-        let mut request = SubmitAdjustmentRequest {
-            business_date: "2026-06-30".to_string(),
-            adjustment_type: "gain".to_string(),
-            handler: Some("tester".to_string()),
-            reason: "盘盈".to_string(),
-            lines: vec![SubmitAdjustmentLine {
-                item_id: "item-1".to_string(),
-                direction: "out".to_string(),
-                quantity: 1.0,
-                unit_price: 1.0,
-                amount: None,
-                remark: None,
-            }],
-        };
-
-        let gain_error = validate_adjustment(&request).unwrap_err();
-        assert!(gain_error.to_string().contains("盘盈调整只能增加库存"));
-
-        request.adjustment_type = "loss".to_string();
-        request.lines[0].direction = "in".to_string();
-        let loss_error = validate_adjustment(&request).unwrap_err();
-        assert!(loss_error.to_string().contains("盘亏调整只能减少库存"));
-
-        request.adjustment_type = "damage".to_string();
-        let damage_error = validate_adjustment(&request).unwrap_err();
-        assert!(damage_error.to_string().contains("损耗调整只能减少库存"));
-
-        request.adjustment_type = "correction".to_string();
-        validate_adjustment(&request).expect("correction supports either direction");
-    }
-
-    #[test]
-    fn department_viewer_stock_lists_are_scoped_to_bound_department() {
-        let state = test_state();
-        state
-            .db
-            .with_conn(|conn| {
-                conn.execute(
-                    "INSERT INTO master_items (id, code, name, unit_id, default_price)
-                     VALUES ('item-scope-test', 'SCOPE-001', '范围测试物品', 'unit-piece', 1)",
-                    [],
-                )?;
-                conn.execute(
-                    "INSERT INTO stock_documents (
-                       id, document_no, document_type, business_date, department_id, department_name, status
-                     )
-                     VALUES
-                       ('doc-admin-scope', 'OUT-SCOPE-ADMIN', 'outbound', '2026-06-30', 'dept-admin-office', '行政办', 'confirmed'),
-                       ('doc-restaurant-scope', 'OUT-SCOPE-REST', 'outbound', '2026-06-30', 'dept-restaurant', '餐饮', 'confirmed')",
-                    [],
-                )?;
-                conn.execute(
-                    "INSERT INTO stock_document_lines (id, document_id, item_id, quantity, unit_price, amount)
-                     VALUES
-                       ('line-admin-scope', 'doc-admin-scope', 'item-scope-test', 1, 1, 1),
-                       ('line-restaurant-scope', 'doc-restaurant-scope', 'item-scope-test', 1, 1, 1)",
-                    [],
-                )?;
-                conn.execute(
-                    "INSERT INTO stock_movements (
-                       id, movement_date, item_id, direction, quantity, unit_price, amount,
-                       document_id, department_id, department_name, movement_type
-                     )
-                     VALUES
-                       ('mov-admin-scope', '2026-06-30', 'item-scope-test', 'out', 1, 1, 1, 'doc-admin-scope', 'dept-admin-office', '行政办', 'outbound'),
-                       ('mov-restaurant-scope', '2026-06-30', 'item-scope-test', 'out', 1, 1, 1, 'doc-restaurant-scope', 'dept-restaurant', '餐饮', 'outbound')",
-                    [],
-                )?;
-                Ok(())
-            })
-            .unwrap();
-        set_department_viewer(&state, "dept-admin-office");
-
-        let docs = list_stock_documents(
-            &state,
-            StockDocumentQuery {
-                department_id: Some("dept-restaurant".to_string()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let movements = list_stock_movements(
-            &state,
-            StockMovementQuery {
-                department_id: Some("dept-restaurant".to_string()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        assert_eq!(docs.len(), 1);
-        assert_eq!(docs[0].department_id.as_deref(), Some("dept-admin-office"));
-        assert_eq!(movements.len(), 1);
-        assert_eq!(movements[0].department_name.as_deref(), Some("行政办"));
-    }
-}
+#[path = "stock_service/tests.rs"]
+mod tests;

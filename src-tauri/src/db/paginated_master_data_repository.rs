@@ -126,11 +126,19 @@ pub fn supplier_purchases(
 pub fn items(
     conn: &Connection,
     search: Option<String>,
+    supplier_id: Option<String>,
     cursor: Option<&str>,
 ) -> AppResult<Page<Item>> {
     let search = search.unwrap_or_default();
     let like = format!("%{}%", search.trim());
-    let scope = format!("items:{}", search.trim().to_lowercase());
+    let supplier_id = supplier_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let scope = format!(
+        "items:{}:{}",
+        search.trim().to_lowercase(),
+        supplier_id.as_deref().unwrap_or_default()
+    );
     let offset = pagination::offset(conn, &scope, cursor)?;
     let mut statement = conn.prepare(
         "SELECT i.id, i.code, i.barcode, i.name, i.category_id, c.name, i.spec, i.unit_id, u.name,
@@ -140,9 +148,10 @@ pub fn items(
          LEFT JOIN units u ON u.id = i.unit_id LEFT JOIN suppliers s ON s.id = i.supplier_id
          WHERE (?1 = '%%' OR i.code LIKE ?1 OR COALESCE(i.barcode, '') LIKE ?1
             OR i.name LIKE ?1 OR COALESCE(i.spec, '') LIKE ?1)
-         ORDER BY i.enabled DESC, i.code ASC, i.id ASC LIMIT ?2 OFFSET ?3",
+           AND (?2 IS NULL OR i.supplier_id = ?2)
+         ORDER BY i.enabled DESC, i.code ASC, i.id ASC LIMIT ?3 OFFSET ?4",
     )?;
-    let rows = statement.query_map(params![like, FETCH_SIZE, offset], |row| {
+    let rows = statement.query_map(params![like, supplier_id, FETCH_SIZE, offset], |row| {
         Ok(Item {
             id: row.get(0)?,
             code: row.get(1)?,
@@ -183,7 +192,8 @@ pub fn budget_rules(
                   FROM stock_movements m JOIN master_items i ON i.id = m.item_id
                   WHERE m.direction = 'out' AND m.department_id = b.department_id
                     AND (b.category_id IS NULL OR i.category_id = b.category_id)
-                    AND strftime('%Y-%m', m.movement_date) = b.period_month), 0),
+                    AND m.movement_date >= b.period_month || '-01'
+                    AND m.movement_date < date(b.period_month || '-01', '+1 month')), 0),
                 b.enabled, b.created_at, b.updated_at
          FROM budget_rules b JOIN departments d ON d.id = b.department_id
          LEFT JOIN categories c ON c.id = b.category_id WHERE (?1 IS NULL OR b.period_month = ?1)

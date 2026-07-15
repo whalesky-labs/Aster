@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ColorBendsBackground } from "../../components/ColorBendsBackground";
 import type { I18n } from "../../i18n";
@@ -8,15 +8,15 @@ import {
   persistLoginCredential,
 } from "./credential-store";
 
-import pantsFrame01 from "../../assets/images/pants/pants_01.png";
-import pantsFrame02 from "../../assets/images/pants/pants_02.png";
-import pantsFrame03 from "../../assets/images/pants/pants_03.png";
-import pantsFrame04 from "../../assets/images/pants/pants_04.png";
-import pantsFrame05 from "../../assets/images/pants/pants_05.png";
-import pantsFrame06 from "../../assets/images/pants/pants_06.png";
-import pantsFrame07 from "../../assets/images/pants/pants_07.png";
-import pantsFrame08 from "../../assets/images/pants/pants_08.png";
-import pantsFrame09 from "../../assets/images/pants/pants_09.png";
+import pantsFrame01 from "../../assets/images/pants/pants_01.webp";
+import pantsFrame02 from "../../assets/images/pants/pants_02.webp";
+import pantsFrame03 from "../../assets/images/pants/pants_03.webp";
+import pantsFrame04 from "../../assets/images/pants/pants_04.webp";
+import pantsFrame05 from "../../assets/images/pants/pants_05.webp";
+import pantsFrame06 from "../../assets/images/pants/pants_06.webp";
+import pantsFrame07 from "../../assets/images/pants/pants_07.webp";
+import pantsFrame08 from "../../assets/images/pants/pants_08.webp";
+import pantsFrame09 from "../../assets/images/pants/pants_09.webp";
 
 const pantsFrames = [
   pantsFrame01,
@@ -30,23 +30,23 @@ const pantsFrames = [
   pantsFrame09,
 ];
 
-const expressionModules = import.meta.glob("../../assets/images/**/*.png", {
-  eager: true,
+const expressionModules = import.meta.glob<string>("../../assets/images/**/*.webp", {
   import: "default",
-}) as Record<string, string>;
+  query: "?url",
+});
 
 const expressionGroups = Object.entries(expressionModules).reduce(
-  (groups, [path, source]) => {
+  (groups, [path, load]) => {
     const parts = path.split("/");
     const groupName = parts[parts.length - 2];
     const fileName = parts[parts.length - 1] ?? "";
-    if (!groupName || !/_[0-9]+\.png$/i.test(fileName)) return groups;
+    if (!groupName || !/_[0-9]+\.webp$/i.test(fileName)) return groups;
     const frames = groups.get(groupName) ?? [];
-    frames.push({ path, source });
+    frames.push({ load, path });
     groups.set(groupName, frames);
     return groups;
   },
-  new Map<string, Array<{ path: string; source: string }>>(),
+  new Map<string, Array<{ load: () => Promise<string>; path: string }>>(),
 );
 
 const expressions = Array.from(expressionGroups.entries()).map(
@@ -54,7 +54,7 @@ const expressions = Array.from(expressionGroups.entries()).map(
     name,
     frames: frames
       .sort((left, right) => left.path.localeCompare(right.path))
-      .map((frame) => frame.source),
+      .map((frame) => frame.load),
   }),
 );
 
@@ -175,5 +175,28 @@ function ExpressionWall() {
     const timer = window.setInterval(() => setFrameIndex((value) => value + 1), 130);
     return () => window.clearInterval(timer);
   }, []);
-  return <div aria-hidden="true" className="login-expression-wall">{expressions.map((expression, index) => <div className="login-expression-item" key={expression.name}><img alt="" draggable={false} src={expression.frames[(frameIndex + index * 2) % expression.frames.length]} /></div>)}</div>;
+  return <div aria-hidden="true" className="login-expression-wall">{expressions.map((expression, index) => <LazyExpression expression={expression} frameIndex={frameIndex + index * 2} key={expression.name} />)}</div>;
+}
+
+function LazyExpression({
+  expression,
+  frameIndex,
+}: {
+  expression: (typeof expressions)[number];
+  frameIndex: number;
+}) {
+  const [source, setSource] = useState<string | null>(null);
+  const requestRef = useRef(0);
+  useEffect(() => {
+    const request = ++requestRef.current;
+    const load = expression.frames[frameIndex % expression.frames.length];
+    void load().then((nextSource) => {
+      if (requestRef.current === request) setSource(nextSource);
+    });
+  }, [expression, frameIndex]);
+  return (
+    <div className="login-expression-item">
+      {source ? <img alt="" draggable={false} src={source} /> : null}
+    </div>
+  );
 }

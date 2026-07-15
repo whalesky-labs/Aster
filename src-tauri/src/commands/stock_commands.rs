@@ -2,10 +2,10 @@ use tauri::State;
 
 use crate::app::state::AppState;
 use crate::domain::stock::{
-    ConfirmStockDocumentDraftRequest, SaveStockDocumentDraftRequest, StockBalanceQuery,
-    StockBalanceRow, StockBatchRow, StockDocument, StockDocumentDetail, StockDocumentQuery,
-    StockMovementQuery, StockMovementRow, SubmitAdjustmentRequest, SubmitStockDocumentRequest,
-    VoidStockDocumentRequest,
+    ConfirmStockDocumentDraftRequest, ExportStockBalancesResult, SaveStockDocumentDraftRequest,
+    StockBalanceQuery, StockBalanceRow, StockBatchRow, StockDocument, StockDocumentDetail,
+    StockDocumentQuery, StockMovementQuery, StockMovementRow, SubmitAdjustmentRequest,
+    SubmitStockDocumentRequest, VoidStockDocumentRequest,
 };
 use crate::error::AppResult;
 use crate::services::stock_service;
@@ -64,6 +64,20 @@ pub fn list_stock_documents(
 }
 
 #[tauri::command]
+pub fn list_stock_documents_page(
+    document_type: Option<String>,
+    query: Option<StockDocumentQuery>,
+    cursor: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<crate::domain::pagination::Page<StockDocument>> {
+    let mut query = query.unwrap_or_default();
+    if query.document_type.is_none() {
+        query.document_type = document_type;
+    }
+    stock_service::list_stock_documents_page(&state, query, cursor)
+}
+
+#[tauri::command]
 pub fn get_stock_document_detail(
     document_id: String,
     state: State<'_, AppState>,
@@ -85,6 +99,25 @@ pub fn list_stock_balances(
 }
 
 #[tauri::command]
+pub fn list_stock_balances_page(
+    search: Option<String>,
+    query: Option<StockBalanceQuery>,
+    cursor: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<crate::domain::pagination::Page<StockBalanceRow>> {
+    let mut query = query.unwrap_or_default();
+    if query.search.is_none() {
+        query.search = search;
+    }
+    stock_service::list_stock_balances_page(&state, query, cursor)
+}
+
+#[tauri::command]
+pub fn export_stock_balances(state: State<'_, AppState>) -> AppResult<ExportStockBalancesResult> {
+    stock_service::export_stock_balances(&state)
+}
+
+#[tauri::command]
 pub fn list_stock_batches(
     item_id: String,
     state: State<'_, AppState>,
@@ -103,4 +136,18 @@ pub fn list_stock_movements(
         query.search = search;
     }
     stock_service::list_stock_movements(&state, query)
+}
+
+#[tauri::command]
+pub fn list_stock_movements_page(
+    search: Option<String>,
+    query: Option<StockMovementQuery>,
+    cursor: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<crate::domain::pagination::Page<StockMovementRow>> {
+    let mut query = query.unwrap_or_default();
+    if query.search.is_none() {
+        query.search = search;
+    }
+    stock_service::list_stock_movements_page(&state, query, cursor)
 }

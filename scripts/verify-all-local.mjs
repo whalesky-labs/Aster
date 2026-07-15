@@ -17,6 +17,11 @@ const commands = [
   },
   {
     command: "npm",
+    args: ["run", "test:coverage"],
+    text: "npm run test:coverage",
+  },
+  {
+    command: "npm",
     args: ["run", "test:manual-acceptance"],
     text: "npm run test:manual-acceptance",
   },
@@ -27,8 +32,8 @@ const commands = [
   },
   {
     command: "npm",
-    args: ["run", "verify:coverage"],
-    text: "npm run verify:coverage",
+    args: ["run", "verify:execution-map"],
+    text: "npm run verify:execution-map",
   },
   {
     command: "cargo",

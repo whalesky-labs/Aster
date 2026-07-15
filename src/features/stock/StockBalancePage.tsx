@@ -1,7 +1,7 @@
 import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
 import type { Item, Category } from "../../entities/master-data";
 import type { StockBalanceQuery, StockBalanceRow } from "../../entities/stock";
-import { Field, PaginatedTable } from "../../shared/ui/DataTable";
+import { Field, PaginatedTable, TableFeatureToolbar } from "../../shared/ui/DataTable";
 import { ItemSearchSelect } from "../../shared/ui/ItemSearchSelect";
 
 function submitOnEnter(event: KeyboardEvent<HTMLDivElement>, submit: () => void) {
@@ -15,17 +15,25 @@ function formatMoney(value: number) {
 
 export function StockBalancePage({
   balances,
+  canExport,
   categories,
+  hasMore,
   items,
   onQueryChange,
+  onLoadMore,
+  onExport,
   onViewBatches,
   onViewMovements,
   query,
 }: {
   balances: StockBalanceRow[];
+  canExport: boolean;
   categories: Category[];
+  hasMore: boolean;
   items: Item[];
   onQueryChange: (query: StockBalanceQuery) => Promise<void>;
+  onLoadMore: () => Promise<void>;
+  onExport: () => Promise<void>;
   onViewBatches: (itemId: string) => void;
   onViewMovements: (itemId: string) => Promise<void>;
   query: StockBalanceQuery;
@@ -96,6 +104,20 @@ export function StockBalancePage({
 
   return (
     <section className="table-panel">
+      {canExport ? (
+        <TableFeatureToolbar
+          action={(
+            <button className="ghost-button" onClick={() => void onExport()} type="button">
+              导出全部库存
+            </button>
+          )}
+        >
+          <div className="table-utility-info">
+            <span>库存台账</span>
+            <em>{balances.length} 条记录</em>
+          </div>
+        </TableFeatureToolbar>
+      ) : null}
       <div
         className="document-filters"
         onKeyDown={(event) => submitOnEnter(event, applyFilters)}
@@ -183,6 +205,9 @@ export function StockBalancePage({
         <PaginatedTable
           colSpan={10}
           getRowKey={(row) => row.itemId}
+          hasMore={hasMore}
+          onLoadMore={onLoadMore}
+          resetKey={JSON.stringify(query)}
           rows={sortedBalances}
         >
           {(row) => (

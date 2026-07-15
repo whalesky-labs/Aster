@@ -2,6 +2,7 @@ mod app;
 mod application;
 mod commands;
 mod db;
+mod desktop;
 mod domain;
 mod error;
 mod infrastructure;
@@ -26,16 +27,17 @@ use commands::host_commands::{
 use commands::import_commands::{export_import_template, preview_excel_import, run_excel_import};
 use commands::master_data_commands::{
     export_items, list_budget_rules, list_categories, list_departments, list_items,
-    list_supplier_purchase_records, list_suppliers, list_units, save_budget_rule, save_category,
-    save_department, save_item, save_supplier, save_unit, set_budget_rule_enabled,
+    list_items_page, list_supplier_purchase_records, list_suppliers, list_units, save_budget_rule,
+    save_category, save_department, save_item, save_supplier, save_unit, set_budget_rule_enabled,
     set_category_enabled, set_department_enabled, set_item_enabled, set_supplier_enabled,
     set_unit_enabled,
 };
-use commands::report_commands::{export_monthly_report, get_report_bundle};
+use commands::report_commands::{export_monthly_report, get_report_bundle, get_report_bundle_page};
 use commands::stock_commands::{
-    confirm_stock_document_draft, get_stock_document_detail, list_stock_balances,
-    list_stock_batches, list_stock_documents, list_stock_movements, save_stock_document_draft,
-    submit_adjustment, submit_stock_document, void_stock_document,
+    confirm_stock_document_draft, export_stock_balances, get_stock_document_detail,
+    list_stock_balances, list_stock_balances_page, list_stock_batches, list_stock_documents,
+    list_stock_documents_page, list_stock_movements, list_stock_movements_page,
+    save_stock_document_draft, submit_adjustment, submit_stock_document, void_stock_document,
 };
 use commands::stocktake_commands::{
     confirm_stocktake, create_stocktake, export_stocktake_sheet, get_stocktake_detail,
@@ -56,16 +58,18 @@ pub fn run() {
         .expect("failed to restore update settings snapshot");
     services::user_service::ensure_default_admin(&app_state)
         .expect("failed to initialize default admin user");
-    let _ = services::backup_service::run_startup_backup_if_needed(&app_state);
     services::backup_service::start_interval_backup_worker(&app_state);
     services::host_service::ensure_host_service_for_mode(&app_state, env!("CARGO_PKG_VERSION"))
         .expect("failed to initialize host service");
+    start_secure_startup_tasks(&app_state);
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build());
+
+    desktop::configure(builder)
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             get_app_status,
@@ -93,6 +97,7 @@ pub fn run() {
             save_supplier,
             set_supplier_enabled,
             list_items,
+            list_items_page,
             export_items,
             save_item,
             set_item_enabled,
@@ -106,10 +111,15 @@ pub fn run() {
             void_stock_document,
             get_stock_document_detail,
             list_stock_documents,
+            list_stock_documents_page,
             list_stock_balances,
+            list_stock_balances_page,
+            export_stock_balances,
             list_stock_batches,
             list_stock_movements,
+            list_stock_movements_page,
             get_report_bundle,
+            get_report_bundle_page,
             export_monthly_report,
             export_import_template,
             preview_excel_import,
@@ -150,4 +160,22 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Aster application");
+}
+
+fn start_secure_startup_tasks(state: &AppState) {
+    let state = state.clone();
+    std::thread::spawn(move || {
+        for secret in [
+            application::secret_service::ApplicationSecret::ClientToken,
+            application::secret_service::ApplicationSecret::SmtpPassword,
+        ] {
+            if let Err(error) = application::secret_service::load(&state.db, secret) {
+                eprintln!("failed to migrate Aster secure credential: {error}");
+                return;
+            }
+        }
+        if let Err(error) = services::backup_service::run_startup_backup_if_needed(&state) {
+            eprintln!("failed to create Aster startup backup: {error}");
+        }
+    });
 }

@@ -8,17 +8,16 @@
   background: var(--native-content-bg);
 }
 
+.editor-shell.overlay-titlebar {
+  padding-top: 38px;
+}
+
 .editor-body {
   display: grid;
   grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
-  padding: 18px;
-}
-
-.editor-body > .editor-form,
-.editor-body > .editor-document {
-  margin: -18px;
+  padding: 0;
 }
 
 .editor-form,
@@ -271,4 +270,10 @@
 
 .full-width-button {
   width: 100%;
+}
+
+@media (max-width: 560px) {
+  .editor-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

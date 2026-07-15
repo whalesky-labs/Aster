@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "editor-update",
+  "description": "Updater-only capability for the software update window",
+  "windows": ["editor-softwareUpdate-*"],
+  "permissions": [
+    "process:allow-restart",
+    "updater:default"
+  ]
+}

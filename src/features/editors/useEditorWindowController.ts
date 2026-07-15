@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Update } from "@tauri-apps/plugin-updater";
 import type { AppStatus, AppUpdateState, ClientConnectionInfo, HostServiceStatus, SystemSettings } from "../../entities/runtime";
 import type { BudgetRule, Category, Department, Item, Supplier, Unit } from "../../entities/master-data";
@@ -8,6 +9,7 @@ import type { StockBalanceRow, StockBatchRow, StockDocumentDetail, StocktakeDeta
 import { createI18n } from "../../i18n";
 import { checkAppUpdateWithFallback, formatError, notifyEditorSaved, type EditorSavedPayload } from "../../shared/lib/appRuntime";
 import { closeCurrentEditorWindow, type EditorKind } from "../../shared/lib/editorWindows";
+import { localMonth } from "../../shared/lib/localDate";
 import { loadAppearanceSettings } from "../settings/appearance";
 
 const initialUpdateState: AppUpdateState = {
@@ -16,7 +18,7 @@ const initialUpdateState: AppUpdateState = {
 };
 const defaultI18n = createI18n("zh-CN");
 type BackupSummary = { backupFile: string };
-const currentMonthString = () => new Date().toISOString().slice(0, 7);
+const currentMonthString = localMonth;
 
 export function useEditorWindowController({
   editor, id, params,
@@ -364,6 +366,21 @@ export function useEditorWindowController({
   useEffect(() => {
     document.body.classList.add("editor-window");
     return () => document.body.classList.remove("editor-window");
+  }, []);
+
+  useEffect(() => {
+    const currentWindow = getCurrentWindow();
+    const syncNativeTheme = () => {
+      const theme = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+      void currentWindow.setTheme(theme);
+    };
+    syncNativeTheme();
+    const observer = new MutationObserver(syncNativeTheme);
+    observer.observe(document.documentElement, {
+      attributeFilter: ["data-theme"],
+      attributes: true,
+    });
+    return () => observer.disconnect();
   }, []);
 
   useEffect(() => {

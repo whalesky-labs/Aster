@@ -204,21 +204,41 @@ pub fn save_client_config(
     allow_client_bootstrap_or_admin(state, false)?;
     validate_host_port(request.host_port)?;
     let next_address = normalize_host_address(&request.host_address)?;
-    state.db.with_conn(|conn| {
+    let host_changed = state.db.with_conn(|conn| {
         let current_address = repository::get_setting(conn, "host_address")?;
         let current_port = repository::get_setting(conn, "host_port")?;
         let next_port = request.host_port.to_string();
-        let host_changed = current_address.as_deref() != Some(next_address.as_str())
-            || current_port.as_deref() != Some(next_port.as_str());
-        repository::set_setting(conn, "host_address", &next_address)?;
-        repository::set_setting(conn, "host_port", &request.host_port.to_string())?;
-        repository::set_setting(conn, "runtime_mode", RuntimeMode::Client.as_str())?;
+        Ok(current_address.as_deref() != Some(next_address.as_str())
+            || current_port.as_deref() != Some(next_port.as_str()))
+    })?;
+    if host_changed {
+        crate::application::secret_service::delete(
+            &state.db,
+            crate::application::secret_service::ApplicationSecret::ClientToken,
+        )?;
+    }
+    state.db.with_conn_mut(|conn| {
+        let transaction = conn.transaction()?;
+        repository::set_setting(&transaction, "host_address", &next_address)?;
+        repository::set_setting(&transaction, "host_port", &request.host_port.to_string())?;
+        repository::set_setting(&transaction, "runtime_mode", RuntimeMode::Client.as_str())?;
         if host_changed {
-            repository::delete_setting(conn, "client_token")?;
-            repository::delete_setting(conn, "host_certificate_fingerprint")?;
+            repository::delete_setting(
+                &transaction,
+                crate::application::secret_service::CLIENT_TOKEN_SETTING,
+            )?;
+            repository::delete_setting(&transaction, "host_certificate_fingerprint")?;
         }
+        transaction.commit()?;
         Ok(())
     })?;
+    if host_changed {
+        state
+            .host_service
+            .lock()
+            .map_err(|_| AppError::Validation("客户端会话状态异常".to_string()))?
+            .client_session_token = None;
+    }
     crate::services::status_service::get_runtime_config(state)
 }
 
@@ -273,15 +293,43 @@ pub fn pair_with_host(
     if final_fingerprint != certificate_fingerprint {
         return Err(AppError::Validation("配对期间主机证书发生变化".to_string()));
     }
-    state.db.with_conn(|conn| {
-        repository::set_setting(conn, "client_token", &response.token)?;
+    let previous_token = crate::application::secret_service::load(
+        &state.db,
+        crate::application::secret_service::ApplicationSecret::ClientToken,
+    )?;
+    crate::application::secret_service::save(
+        &state.db,
+        crate::application::secret_service::ApplicationSecret::ClientToken,
+        &response.token,
+    )?;
+    let persist_result = state.db.with_conn_mut(|conn| {
+        let transaction = conn.transaction()?;
+        repository::delete_setting(
+            &transaction,
+            crate::application::secret_service::CLIENT_TOKEN_SETTING,
+        )?;
         repository::set_setting(
-            conn,
+            &transaction,
             "host_certificate_fingerprint",
             &certificate_fingerprint,
         )?;
+        transaction.commit()?;
         Ok(())
-    })?;
+    });
+    if let Err(error) = persist_result {
+        match previous_token {
+            Some(previous) => crate::application::secret_service::save(
+                &state.db,
+                crate::application::secret_service::ApplicationSecret::ClientToken,
+                &previous,
+            )?,
+            None => crate::application::secret_service::delete(
+                &state.db,
+                crate::application::secret_service::ApplicationSecret::ClientToken,
+            )?,
+        }
+        return Err(error);
+    }
     crate::services::status_service::get_runtime_config(state)
 }
 

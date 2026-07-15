@@ -323,3 +323,127 @@ fn forged_user_id_header_cannot_replace_session_token() {
     let error = require_remote_admin(request, &conn).unwrap_err();
     assert!(error.to_string().contains("缺少用户会话"));
 }
+
+#[test]
+fn remote_inventory_export_rejects_non_admin_user() {
+    let (_dir, db) = test_db();
+    db.with_conn(|conn| {
+        conn.execute(
+            "INSERT INTO users (id, username, display_name, enabled)
+             VALUES ('user-export-warehouse', 'export-warehouse', '导出仓库员', 1)",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO user_roles (user_id, role_id)
+             VALUES ('user-export-warehouse', 'role-warehouse')",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let token = "token-export-warehouse";
+    let headers = session_headers(&db, token, "user-export-warehouse").unwrap();
+
+    let response = send_test_request_bytes(
+        db,
+        runtime_with_client(token),
+        format!("GET /api/stock/balances/export HTTP/1.1\r\n{headers}\r\n\r\n"),
+    );
+    let response = String::from_utf8(response).unwrap();
+
+    assert!(response.starts_with("HTTP/1.1 403 Forbidden"));
+    assert!(response.contains("需要管理员权限"));
+}
+
+#[test]
+fn remote_inventory_export_returns_xlsx_and_audits_actual_admin() {
+    use std::io::Cursor;
+
+    let (_dir, db) = test_db();
+    db.with_conn(|conn| {
+        conn.execute(
+            "INSERT INTO users (id, username, display_name, enabled)
+             VALUES ('user-export-admin', 'export-admin', '远程导出管理员', 1)",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO user_roles (user_id, role_id)
+             VALUES ('user-export-admin', 'role-admin')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO master_items (id, code, name, unit_id, default_price)
+             VALUES ('item-remote-export', 'REMOTE-EXP', '远程导出物品', 'unit-piece', 1)",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let token = "token-export-admin";
+    let headers = session_headers(&db, token, "user-export-admin").unwrap();
+
+    let response = send_test_request_bytes(
+        db.clone_handle(),
+        runtime_with_client(token),
+        format!("GET /api/stock/balances/export HTTP/1.1\r\n{headers}\r\n\r\n"),
+    );
+    let parsed = http_transport::read_xlsx_response(Cursor::new(response)).unwrap();
+
+    assert_eq!(parsed.row_count, 1);
+    assert!(parsed.body.starts_with(b"PK"));
+    let audit: (String, String) = db
+        .with_conn(|conn| {
+            Ok(conn.query_row(
+                "SELECT operator, summary FROM audit_logs
+                 WHERE action = 'read_stock_balance_export'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(audit.0, "export-admin");
+    assert!(audit.1.contains("device-test"));
+    assert!(audit.1.contains("1 项"));
+}
+
+#[test]
+fn remote_item_list_applies_supplier_filter() {
+    let (_dir, db) = test_db();
+    db.with_conn(|conn| {
+        conn.execute(
+            "INSERT INTO users (id, username, display_name, enabled)
+             VALUES ('user-remote-items', 'remote-items', '远程物品查看员', 1)",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO user_roles (user_id, role_id)
+             VALUES ('user-remote-items', 'role-warehouse')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO suppliers (id, name) VALUES
+               ('remote-supplier-a', '远程供应商 A'),
+               ('remote-supplier-b', '远程供应商 B')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO master_items (id, code, name, supplier_id, unit_id, default_price) VALUES
+               ('remote-item-a', 'REMOTE-A', '远程物品 A', 'remote-supplier-a', 'unit-piece', 1),
+               ('remote-item-b', 'REMOTE-B', '远程物品 B', 'remote-supplier-b', 'unit-piece', 1)",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let token = "token-remote-items";
+    let headers = session_headers(&db, token, "user-remote-items").unwrap();
+
+    let response = send_test_request(
+        db,
+        runtime_with_client(token),
+        format!("GET /api/master/items?supplierId=remote-supplier-a HTTP/1.1\r\n{headers}\r\n\r\n"),
+    );
+
+    assert!(response.contains("REMOTE-A"));
+    assert!(!response.contains("REMOTE-B"));
+}

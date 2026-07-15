@@ -148,18 +148,15 @@ pub(crate) fn handle_system_routes<S: Read + Write>(
             authenticate_request_and_touch_client(request, &runtime, &db)?;
             let request: RequestPasswordResetCodeRequest = serde_json::from_str(body)
                 .map_err(|error| AppError::Validation(format!("找回密码请求解析失败：{error}")))?;
-            let response = db.with_conn(|conn| {
-                crate::services::user_service::request_password_reset_code_on_conn(conn, request)
-            })?;
+            let response =
+                crate::services::user_service::request_password_reset_code_on_db(&db, request)?;
             write_json(stream, 200, &response)?;
         }
         ("POST", "/api/password-reset/confirm") => {
             authenticate_request_and_touch_client(request, &runtime, &db)?;
             let request: ResetPasswordWithCodeRequest = serde_json::from_str(body)
                 .map_err(|error| AppError::Validation(format!("重置密码请求解析失败：{error}")))?;
-            db.with_conn(|conn| {
-                crate::services::user_service::reset_password_with_code_on_conn(conn, request)
-            })?;
+            crate::services::user_service::reset_password_with_code_on_db(&db, request)?;
             write_json(stream, 200, &())?;
         }
         ("GET", path) if http_transport::route_matches(path, "/api/audit-logs") => {

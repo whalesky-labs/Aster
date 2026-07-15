@@ -136,6 +136,18 @@ fn restore_backup_resets_machine_local_paths() {
 
     let (_target_dir, target_state) =
         test_state("admin", vec!["dangerous_operations".to_string()]);
+    crate::application::secret_service::save(
+        &target_state.db,
+        crate::application::secret_service::ApplicationSecret::SmtpPassword,
+        "target-smtp-secret",
+    )
+    .unwrap();
+    crate::application::secret_service::save(
+        &target_state.db,
+        crate::application::secret_service::ApplicationSecret::ClientToken,
+        "target-client-secret",
+    )
+    .unwrap();
     let preview =
         preview_restore_backup(&target_state, backup_file.display().to_string()).unwrap();
     let result = restore_backup(
@@ -149,6 +161,18 @@ fn restore_backup_resets_machine_local_paths() {
     .unwrap();
 
     assert_eq!(result.integrity, "ok");
+    assert!(crate::application::secret_service::load(
+        &target_state.db,
+        crate::application::secret_service::ApplicationSecret::SmtpPassword,
+    )
+    .unwrap()
+    .is_none());
+    assert!(crate::application::secret_service::load(
+        &target_state.db,
+        crate::application::secret_service::ApplicationSecret::ClientToken,
+    )
+    .unwrap()
+    .is_none());
     target_state
         .db
         .with_conn(|conn| {

@@ -237,7 +237,8 @@ fn sum_current_month_for_department(
         "SELECT COALESCE(SUM(amount), 0)
          FROM stock_movements
          WHERE direction = ?1
-           AND strftime('%Y-%m', movement_date) = strftime('%Y-%m', 'now')
+           AND movement_date >= date('now', 'localtime', 'start of month')
+           AND movement_date < date('now', 'localtime', 'start of month', '+1 month')
            AND (?2 IS NULL OR department_id = ?2)",
         params![direction, department_id],
         |row| row.get(0),

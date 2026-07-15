@@ -108,9 +108,25 @@ pub fn restore_backup(state: &AppState, request: RestoreBackupRequest) -> AppRes
     let protected_backup = create_backup_of_type(state, "before_restore")?;
     let extracted_database = extract_database_to_temp(backup_file)?;
 
-    state
-        .db
-        .replace_database(&state.paths, &extracted_database)?;
+    let previous_smtp_password = crate::application::secret_service::load(
+        &state.db,
+        crate::application::secret_service::ApplicationSecret::SmtpPassword,
+    )?;
+    let previous_client_token = crate::application::secret_service::load(
+        &state.db,
+        crate::application::secret_service::ApplicationSecret::ClientToken,
+    )?;
+    if let Err(error) = clear_restored_secrets(state) {
+        restore_previous_secrets(state, previous_smtp_password, previous_client_token)?;
+        let _ = fs::remove_file(&extracted_database);
+        return Err(error);
+    }
+
+    if let Err(error) = state.db.replace_database(&state.paths, &extracted_database) {
+        restore_previous_secrets(state, previous_smtp_password, previous_client_token)?;
+        let _ = fs::remove_file(&extracted_database);
+        return Err(error);
+    }
     let restore_check = state.db.with_conn(|conn| {
         reset_restored_local_paths(conn, state)?;
         verify_restored_database_health(conn)?;
@@ -127,6 +143,7 @@ pub fn restore_backup(state: &AppState, request: RestoreBackupRequest) -> AppRes
     });
     if let Err(error) = restore_check {
         rollback_restore(state, &protected_backup.backup_file, &extracted_database)?;
+        restore_previous_secrets(state, previous_smtp_password, previous_client_token)?;
         return Err(AppError::Validation(format!(
             "{error}；已自动回滚到恢复前保护备份：{}",
             protected_backup.backup_file
@@ -140,6 +157,39 @@ pub fn restore_backup(state: &AppState, request: RestoreBackupRequest) -> AppRes
         schema_version: metadata.schema_version,
         integrity: "ok".to_string(),
     })
+}
+
+fn clear_restored_secrets(state: &AppState) -> AppResult<()> {
+    crate::application::secret_service::delete(
+        &state.db,
+        crate::application::secret_service::ApplicationSecret::SmtpPassword,
+    )?;
+    crate::application::secret_service::delete(
+        &state.db,
+        crate::application::secret_service::ApplicationSecret::ClientToken,
+    )
+}
+
+fn restore_previous_secrets(
+    state: &AppState,
+    smtp_password: Option<String>,
+    client_token: Option<String>,
+) -> AppResult<()> {
+    if let Some(password) = smtp_password {
+        crate::application::secret_service::save(
+            &state.db,
+            crate::application::secret_service::ApplicationSecret::SmtpPassword,
+            &password,
+        )?;
+    }
+    if let Some(token) = client_token {
+        crate::application::secret_service::save(
+            &state.db,
+            crate::application::secret_service::ApplicationSecret::ClientToken,
+            &token,
+        )?;
+    }
+    Ok(())
 }
 
 include!("backup_service/restore.rs");

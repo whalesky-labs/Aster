@@ -4,5 +4,6 @@ pub mod pairing_service;
 pub mod ports;
 pub mod remote_pagination;
 pub mod report_pagination;
+pub mod secret_service;
 pub mod security_rate_limiter;
 pub mod write_limits;

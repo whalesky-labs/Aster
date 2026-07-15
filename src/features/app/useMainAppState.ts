@@ -8,14 +8,16 @@ import type { CurrentUser, UserAccount } from "../../entities/users";
 import type { StockBalanceQuery, StockBalanceRow, StockDocument, StockDocumentQuery, StockMovementQuery, StockMovementRow, StocktakeDocument } from "../../entities/stock";
 import type { ReportBundle, ReportQuery } from "../../entities/reports";
 import type { ImportPreview, ImportResult } from "../../entities/imports";
+import type { DataPageKey } from "../../entities/pagination";
 import { loadAppearanceSettings } from "../settings/appearance";
+import { localMonth } from "../../shared/lib/localDate";
 
 export type BackupSummary = {
   backupFile: string; backupType: string; createdAt: string; schemaVersion: number;
   sourceHostName: string; sourceOs: string; databaseSize: number; databaseSha256: string;
   secondBackupFile?: string | null;
 };
-const currentMonthString = () => new Date().toISOString().slice(0, 7);
+const currentMonthString = localMonth;
 const initialUpdateState: AppUpdateState = {
   status: "idle", currentVersion: null, latestVersion: null, notes: null,
   downloadedBytes: 0, totalBytes: null, error: null, checkedAt: null, sourceLabel: null,
@@ -46,7 +48,11 @@ export function useMainAppState() {
     [],
   );
   const [items, setItems] = useState<Item[]>([]);
+  const [nextPageCursors, setNextPageCursors] = useState<
+    Partial<Record<DataPageKey, string>>
+  >({});
   const [itemSearch, setItemSearch] = useState("");
+  const [itemSupplierId, setItemSupplierId] = useState("");
   const [inboundDocuments, setInboundDocuments] = useState<StockDocument[]>([]);
   const [outboundDocuments, setOutboundDocuments] = useState<StockDocument[]>(
     [],
@@ -114,14 +120,15 @@ export function useMainAppState() {
     approvalRequests, auditLogs, backupRecords, budgetRules, categories, clientConnectionCheckedAt,
     clientConnections, currentUser, departments, error, hasCheckedUpdateOnStartupRef,
     hasManualReportMonth, hostStatus, hostTestResult, importPreview, importResult, inboundDocumentQuery,
-    inboundDocuments, isBackupWorking, isImporting, isLoginPending, isSavingMode, itemSearch, items,
-    lastBackup, lastExportPath, notice, outboundDocumentQuery, outboundDocuments, passwordChangeRequired,
+    inboundDocuments, isBackupWorking, isImporting, isLoginPending, isSavingMode, itemSearch, itemSupplierId, items,
+    lastBackup, lastExportPath, nextPageCursors, notice, outboundDocumentQuery, outboundDocuments, passwordChangeRequired,
     reportBundle, reportMonth, reportQuery, setActiveNav, setActiveSupplier, setAdjustmentDocumentQuery,
     setAdjustmentDocuments, setAppearanceSettings, setApprovalRequests, setAuditLogs, setBackupRecords,
     setBudgetRules, setCategories, setClientConnectionCheckedAt, setClientConnections, setCurrentUser,
     setDepartments, setError, setHasManualReportMonth, setHostStatus, setHostTestResult, setImportPreview,
     setImportResult, setInboundDocumentQuery, setInboundDocuments, setIsBackupWorking, setIsImporting,
-    setIsLoginPending, setIsSavingMode, setItemSearch, setItems, setLastBackup, setLastExportPath,
+    setIsLoginPending, setIsSavingMode, setItemSearch, setItemSupplierId, setItems, setLastBackup, setLastExportPath,
+    setNextPageCursors,
     setNotice, setOutboundDocumentQuery, setOutboundDocuments, setPasswordChangeRequired,
     setReportBundle, setReportMonth, setReportQuery, setStockBalanceQuery, setStockBalances,
     setStockMovementQuery, setStockMovements, setStocktakes, setSupplierPurchaseRecords,

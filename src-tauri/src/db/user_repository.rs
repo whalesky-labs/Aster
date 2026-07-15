@@ -250,19 +250,20 @@ pub fn create_password_reset_code(
     user_id: &str,
     code_hash: &str,
     expires_at: &str,
-) -> AppResult<()> {
+) -> AppResult<String> {
     conn.execute(
         "UPDATE password_reset_codes
          SET used_at = CURRENT_TIMESTAMP
          WHERE user_id = ?1 AND used_at IS NULL",
         params![user_id],
     )?;
+    let code_id = Uuid::new_v4().to_string();
     conn.execute(
         "INSERT INTO password_reset_codes (id, user_id, code_hash, expires_at)
          VALUES (?1, ?2, ?3, ?4)",
-        params![Uuid::new_v4().to_string(), user_id, code_hash, expires_at],
+        params![code_id, user_id, code_hash, expires_at],
     )?;
-    Ok(())
+    Ok(code_id)
 }
 
 pub fn find_active_password_reset_code(

@@ -1,5 +1,11 @@
 pub fn create_backup_of_type(state: &AppState, backup_type: &str) -> AppResult<BackupSummary> {
     validate_backup_type(backup_type)?;
+    for secret in [
+        crate::application::secret_service::ApplicationSecret::ClientToken,
+        crate::application::secret_service::ApplicationSecret::SmtpPassword,
+    ] {
+        crate::application::secret_service::load(&state.db, secret)?;
+    }
     let backup_dir = crate::services::status_service::effective_backup_dir(state)?;
     fs::create_dir_all(&backup_dir)?;
 

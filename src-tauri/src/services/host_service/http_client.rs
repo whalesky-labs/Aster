@@ -47,6 +47,20 @@ pub(super) fn http_get_json<T: for<'de> Deserialize<'de>>(
     config: &ClientRuntimeConfig,
     path: &str,
 ) -> AppResult<T> {
+    http_transport::read_json_response(http_get_stream(config, path)?)
+}
+
+pub(super) fn http_get_xlsx(
+    config: &ClientRuntimeConfig,
+    path: &str,
+) -> AppResult<http_transport::BinaryResponse> {
+    http_transport::read_xlsx_response(http_get_stream(config, path)?)
+}
+
+fn http_get_stream(
+    config: &ClientRuntimeConfig,
+    path: &str,
+) -> AppResult<secure_transport::ClientTlsStream> {
     let mut stream = secure_transport::connect(
         &config.address,
         config.port,
@@ -59,7 +73,7 @@ pub(super) fn http_get_json<T: for<'de> Deserialize<'de>>(
         session_header(config)
     );
     stream.write_all(request.as_bytes())?;
-    http_transport::read_json_response(stream)
+    Ok(stream)
 }
 
 pub(super) fn collect_remote_pages<T: for<'de> Deserialize<'de>>(

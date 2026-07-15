@@ -57,13 +57,6 @@ pub fn list_stock_balances_page(
         |row| {
             let quantity: f64 = row.get(5)?;
             let warning_quantity: f64 = row.get(9)?;
-            let stock_status = if quantity < 0.0 {
-                "negative"
-            } else if quantity <= warning_quantity {
-                "low"
-            } else {
-                "normal"
-            };
             Ok(StockBalanceRow {
                 item_id: row.get(0)?,
                 item_code: row.get(1)?,
@@ -75,7 +68,7 @@ pub fn list_stock_balances_page(
                 average_price: row.get(7)?,
                 last_inbound_price: row.get(8)?,
                 warning_quantity,
-                stock_status: stock_status.to_string(),
+                stock_status: stock_status_code(quantity, warning_quantity).to_string(),
             })
         },
     )?;

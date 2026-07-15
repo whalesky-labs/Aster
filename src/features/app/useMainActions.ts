@@ -7,7 +7,7 @@ import { persistLoginCredential } from "../auth/credential-store";
 import { checkAppUpdateWithFallback, formatError } from "../../shared/lib/appRuntime";
 import type { I18n } from "../../i18n";
 import type { MainAppState, BackupSummary } from "./useMainAppState";
-import type { MainDataController } from "./useMainDataController";
+import type { MainDataController, RefreshTarget } from "./useMainDataController";
 
 async function chooseSinglePath(options: OpenDialogOptions) {
   const selected = await open({ ...options, multiple: false });
@@ -17,21 +17,25 @@ async function chooseSinglePath(options: OpenDialogOptions) {
 
 export function useMainActions(state: MainAppState, data: MainDataController, i18n: I18n) {
   const {
-    appearanceSettings, itemSearch, reportQuery, setClientConnectionCheckedAt,
+    appearanceSettings, itemSearch, itemSupplierId, reportQuery, setClientConnectionCheckedAt,
     setClientConnections, setCurrentUser, setError, setHostStatus, setHostTestResult,
     setImportPreview, setImportResult, setIsBackupWorking, setIsImporting,
     setIsLoginPending, setIsSavingMode, setLastBackup, setLastExportPath, setNotice,
     setPasswordChangeRequired, setUpdateState, status,
   } = state;
   const {
-    clearSessionScopedState, loadHostRuntime, loadUsers, refreshAll, scheduleRefreshAll,
+    clearSessionScopedState, loadHostRuntime, loadUsers, refreshAll, refreshTarget, scheduleRefreshAll,
   } = data;
-  async function runAction(message: string, action: () => Promise<unknown>) {
+  async function runAction(
+    message: string,
+    action: () => Promise<unknown>,
+    target: RefreshTarget = "business",
+  ) {
     try {
       setError(null);
       setNotice(null);
       await action();
-      await refreshAll();
+      await refreshTarget(target);
       setNotice(message);
     } catch (err) {
       setError(formatError(err));
@@ -62,18 +66,31 @@ export function useMainActions(state: MainAppState, data: MainDataController, i1
         query,
       });
       setLastExportPath(result.path);
-    });
+    }, "none");
   }
 
-  async function exportItems(search = itemSearch) {
+  async function exportItems(search = itemSearch, supplierId = itemSupplierId) {
     try {
       setError(null);
       setNotice(null);
       const result = await invoke<{ path: string }>("export_items", {
         search,
+        supplierId,
       });
-      await refreshAll();
       setNotice(`物品档案已导出：${result.path}`);
+    } catch (err) {
+      setError(formatError(err));
+    }
+  }
+
+  async function exportStockBalances() {
+    try {
+      setError(null);
+      setNotice(null);
+      const result = await invoke<{ path: string; rowCount: number }>(
+        "export_stock_balances",
+      );
+      setNotice(`全部库存台账已导出（${result.rowCount} 项）：${result.path}`);
     } catch (err) {
       setError(formatError(err));
     }
@@ -121,7 +138,7 @@ export function useMainActions(state: MainAppState, data: MainDataController, i1
         request: { path, mode },
       });
       setImportResult(result);
-      await refreshAll();
+      await refreshTarget("business");
       setNotice(
         mode === "itemsOnly"
           ? "Excel 物品档案已导入"
@@ -152,7 +169,7 @@ export function useMainActions(state: MainAppState, data: MainDataController, i1
         request: { backupType: "manual" },
       });
       setLastBackup(summary);
-      await refreshAll();
+      await refreshTarget("admin");
       setNotice("手动备份已创建");
     } catch (err) {
       setError(formatError(err));
@@ -283,7 +300,7 @@ export function useMainActions(state: MainAppState, data: MainDataController, i1
         request: { userId, enabled },
       });
       await loadUsers();
-    });
+    }, "admin");
   }
 
   async function startHostRuntime() {
@@ -291,7 +308,7 @@ export function useMainActions(state: MainAppState, data: MainDataController, i1
       const status = await invoke<HostServiceStatus>("start_host_service");
       setHostStatus(status);
       await loadHostRuntime();
-    });
+    }, "connection");
   }
 
   async function removeClientConnection(client: ClientConnectionInfo) {
@@ -304,7 +321,7 @@ export function useMainActions(state: MainAppState, data: MainDataController, i1
         request: { clientDeviceId: client.clientDeviceId },
       });
       await loadHostRuntime();
-    });
+    }, "connection");
   }
 
   async function decideApprovalRequest(
@@ -316,7 +333,7 @@ export function useMainActions(state: MainAppState, data: MainDataController, i1
       invoke("decide_approval_request", {
         request: { approvalId, approve, decisionNote },
       }),
-    );
+    "admin");
   }
 
   async function voidDocument(
@@ -328,12 +345,12 @@ export function useMainActions(state: MainAppState, data: MainDataController, i1
       invoke("void_stock_document", {
         request: { documentId, reason, handler },
       }),
-    );
+    "stock");
   }
 
   return {
     changeMode, checkForAppUpdate, createManualBackup, decideApprovalRequest,
-    exportImportTemplate, exportItems, exportReport, importItemsFromToolbar,
+    exportImportTemplate, exportItems, exportReport, exportStockBalances, importItemsFromToolbar,
     loginUser, logoutUser, previewImport, removeClientConnection, runAction,
     runImport, startHostRuntime, toggleUserAccount, voidDocument,
   };

@@ -65,7 +65,11 @@ fn backup_zip_contains_required_archive_entries() {
     .unwrap();
     state
         .db
-        .with_conn(|conn| repository::set_setting(conn, "hotel_name", "Aster Hotel"))
+        .with_conn(|conn| {
+            repository::set_setting(conn, "hotel_name", "Aster Hotel")?;
+            repository::set_setting(conn, "smtp_password", "legacy-smtp-secret")?;
+            repository::set_setting(conn, "client_token", "legacy-client-secret")
+        })
         .unwrap();
 
     let summary = create_backup_of_type(&state, "manual").unwrap();
@@ -92,6 +96,21 @@ fn backup_zip_contains_required_archive_entries() {
         .read_to_string(&mut settings)
         .unwrap();
     assert!(settings.contains("hotel_name"));
+    assert!(!settings.contains("legacy-smtp-secret"));
+    assert!(!settings.contains("legacy-client-secret"));
+
+    let snapshot = extract_database_to_temp(Path::new(&summary.backup_file)).unwrap();
+    let snapshot_conn = rusqlite::Connection::open(&snapshot).unwrap();
+    let secret_count: i64 = snapshot_conn
+        .query_row(
+            "SELECT COUNT(*) FROM app_settings WHERE key IN ('smtp_password', 'client_token')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(secret_count, 0);
+    drop(snapshot_conn);
+    fs::remove_file(snapshot).unwrap();
 
     let mut report = String::new();
     archive

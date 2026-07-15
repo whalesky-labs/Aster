@@ -342,6 +342,56 @@ fn stock_balance_and_movement_lists_support_structured_filters() {
 }
 
 #[test]
+fn stock_balance_export_snapshot_includes_all_item_states_and_details() {
+    let conn = Connection::open_in_memory().expect("open in-memory sqlite");
+    conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+    migrations::run(&conn).unwrap();
+    conn.execute(
+        "INSERT INTO categories (id, name) VALUES ('cat-export', '导出分类')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO suppliers (id, name) VALUES ('supplier-export', '导出供应商')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO master_items (
+           id, code, name, category_id, unit_id, supplier_id, default_price,
+           warning_quantity, enabled
+         ) VALUES
+           ('item-export-normal', 'EXP-001', '正常物品', 'cat-export', 'unit-piece', 'supplier-export', 2, 1, 1),
+           ('item-export-zero', 'EXP-002', '零库存物品', NULL, 'unit-piece', NULL, 0, 0, 1),
+           ('item-export-disabled', 'EXP-003', '停用负库存物品', NULL, 'unit-piece', NULL, 3, 0, 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO stock_balances (
+           id, item_id, quantity, amount, average_price, last_inbound_price
+         ) VALUES
+           ('balance-export-normal', 'item-export-normal', 5, 10, 2, 2.5),
+           ('balance-export-disabled', 'item-export-disabled', -1, -3, 3, 3)",
+        [],
+    )
+    .unwrap();
+
+    let rows = list_stock_balance_export_rows(&conn).unwrap();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0].item_code, "EXP-001");
+    assert_eq!(rows[0].category_name.as_deref(), Some("导出分类"));
+    assert_eq!(rows[0].supplier_name.as_deref(), Some("导出供应商"));
+    assert_eq!(rows[0].stock_status, "normal");
+    assert_eq!(rows[1].item_code, "EXP-002");
+    assert_eq!(rows[1].quantity, 0.0);
+    assert_eq!(rows[1].stock_status, "low");
+    assert_eq!(rows[2].item_code, "EXP-003");
+    assert!(!rows[2].item_enabled);
+    assert_eq!(rows[2].stock_status, "negative");
+}
+
+#[test]
 fn submit_outbound_rejects_when_budget_limit_would_be_exceeded() {
     let mut conn = Connection::open_in_memory().expect("open in-memory sqlite");
     conn.pragma_update(None, "foreign_keys", "ON").unwrap();

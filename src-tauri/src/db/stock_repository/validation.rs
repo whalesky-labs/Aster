@@ -178,7 +178,8 @@ fn active_department_budget(
                   FROM stock_movements m
                   WHERE m.direction = 'out'
                     AND m.department_id = b.department_id
-                    AND strftime('%Y-%m', m.movement_date) = b.period_month
+                    AND m.movement_date >= b.period_month || '-01'
+                    AND m.movement_date < date(b.period_month || '-01', '+1 month')
                 ), 0)
          FROM budget_rules b
          WHERE b.enabled = 1
@@ -209,7 +210,8 @@ fn active_budget_for_category(
                   WHERE m.direction = 'out'
                     AND m.department_id = b.department_id
                     AND i.category_id = b.category_id
-                    AND strftime('%Y-%m', m.movement_date) = b.period_month
+                    AND m.movement_date >= b.period_month || '-01'
+                    AND m.movement_date < date(b.period_month || '-01', '+1 month')
                 ), 0)
          FROM budget_rules b
          WHERE b.enabled = 1

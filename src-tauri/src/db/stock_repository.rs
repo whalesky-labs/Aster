@@ -487,6 +487,9 @@ pub fn void_stock_document(
 
 include!("stock_repository/queries.rs");
 
+mod export;
+pub use export::list_stock_balance_export_rows;
+
 #[cfg(test)]
 #[path = "stock_repository/tests.rs"]
 mod tests;

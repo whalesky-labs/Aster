@@ -34,6 +34,8 @@ export function MasterTablePanel({
 }
 
 export function TableSearchToolbar({
+  children,
+  onReset,
   onSearchChange,
   onSubmit,
   placeholder,
@@ -41,6 +43,8 @@ export function TableSearchToolbar({
   searchLabel = "搜索",
   submitLabel = "筛选",
 }: {
+  children?: ReactNode;
+  onReset?: () => void | Promise<void>;
   onSearchChange: (value: string) => void;
   onSubmit?: (value: string) => void | Promise<void>;
   placeholder: string;
@@ -54,6 +58,13 @@ export function TableSearchToolbar({
   function applySearch(value: string) {
     onSearchChange(value);
     void onSubmit?.(value);
+  }
+
+  function resetSearch() {
+    setDraft("");
+    onSearchChange("");
+    if (onReset) void onReset();
+    else void onSubmit?.("");
   }
 
   return (
@@ -72,14 +83,12 @@ export function TableSearchToolbar({
             onChange={(event) => setDraft(event.target.value)}
           />
         </Field>
+        {children}
       </div>
       <div className="filter-actions document-filter-actions">
         <button
           className="ghost-button"
-          onClick={() => {
-            setDraft("");
-            applySearch("");
-          }}
+          onClick={resetSearch}
           type="button"
         >
           清空
@@ -112,23 +121,30 @@ export function PaginatedTable<T>({
   colSpan,
   empty,
   getRowKey,
+  hasMore = false,
+  onLoadMore,
   pageSize = DEFAULT_TABLE_PAGE_SIZE,
+  resetKey,
   rows,
 }: {
   children: (row: T, index: number) => ReactNode;
   colSpan: number;
   empty?: ReactNode;
   getRowKey: (row: T, index: number) => React.Key;
+  hasMore?: boolean;
+  onLoadMore?: () => Promise<void>;
   pageSize?: number;
+  resetKey?: unknown;
   rows: T[];
 }) {
   const [page, setPage] = useState(1);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
   const safePage = Math.min(page, pageCount);
 
   useEffect(() => {
     setPage(1);
-  }, [rows, pageSize]);
+  }, [resetKey, pageSize]);
 
   useEffect(() => {
     if (page !== safePage) setPage(safePage);
@@ -136,6 +152,21 @@ export function PaginatedTable<T>({
 
   const start = (safePage - 1) * pageSize;
   const visibleRows = rows.slice(start, start + pageSize);
+
+  async function nextPage() {
+    if (safePage < pageCount) {
+      setPage(safePage + 1);
+      return;
+    }
+    if (!hasMore || !onLoadMore || isLoadingMore) return;
+    setIsLoadingMore(true);
+    try {
+      await onLoadMore();
+      setPage(safePage + 1);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }
 
   return (
     <>
@@ -147,14 +178,14 @@ export function PaginatedTable<T>({
         ))}
         {rows.length === 0 ? (empty ?? <EmptyRow colSpan={colSpan} />) : null}
       </tbody>
-      {rows.length > pageSize ? (
+      {rows.length > pageSize || hasMore ? (
         <tfoot>
           <tr>
             <td colSpan={colSpan}>
               <div className="pagination-bar">
                 <span>
                   {start + 1}-{Math.min(start + pageSize, rows.length)} /{" "}
-                  {rows.length}
+                  {rows.length}{hasMore ? "+" : ""}
                 </span>
                 <div className="pagination-actions">
                   <button disabled={safePage <= 1} onClick={() => setPage(1)}>
@@ -170,13 +201,13 @@ export function PaginatedTable<T>({
                     {safePage} / {pageCount}
                   </strong>
                   <button
-                    disabled={safePage >= pageCount}
-                    onClick={() => setPage(safePage + 1)}
+                    disabled={(!hasMore && safePage >= pageCount) || isLoadingMore}
+                    onClick={() => void nextPage()}
                   >
-                    下一页
+                    {isLoadingMore ? "加载中..." : "下一页"}
                   </button>
                   <button
-                    disabled={safePage >= pageCount}
+                    disabled={hasMore || safePage >= pageCount}
                     onClick={() => setPage(pageCount)}
                   >
                     末页

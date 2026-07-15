@@ -35,7 +35,9 @@ pub struct RuntimeConfig {
     pub mode: RuntimeMode,
     pub host_address: Option<String>,
     pub host_port: u16,
+    #[serde(skip_serializing, default)]
     pub client_token: Option<String>,
+    pub client_paired: bool,
     pub client_device_id: String,
     pub data_dir: String,
     pub database_path: String,

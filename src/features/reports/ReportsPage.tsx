@@ -3,6 +3,7 @@ import type { Category, Department, Item, Supplier } from "../../entities/master
 import type { ReportBundle, ReportQuery } from "../../entities/reports";
 import { ItemSearchSelect } from "../../shared/ui/ItemSearchSelect";
 import { Field, MonthSelect } from "../../shared/ui/DataTable";
+import { localMonth } from "../../shared/lib/localDate";
 import {
   BarChartPanel,
   ReportGroupHeader,
@@ -10,9 +11,7 @@ import {
   ReportInsightGrid,
 } from "./ReportComponents";
 
-function currentMonthString() {
-  return new Date().toISOString().slice(0, 7);
-}
+const currentMonthString = localMonth;
 
 function formatMoney(value: number) {
   return new Intl.NumberFormat("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);

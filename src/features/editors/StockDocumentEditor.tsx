@@ -2,11 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import type { CurrentUser } from "../../entities/users";
 import type { Department, Item, Supplier } from "../../entities/master-data";
 import type { StockBalanceRow } from "../../entities/stock";
+import { localDateTime } from "../../shared/lib/localDate";
 import { Field } from "../../shared/ui/DataTable";
 import { ItemSearchSelect } from "../../shared/ui/ItemSearchSelect";
-import { effectiveDraftAmount, currentDateTimeString, formatMoney,
-  optionName, type StockDocumentDraft, type StockDocumentLineDraft,
-  userDisplayName } from "./stockDocumentDraft";
+import { effectiveDraftAmount, formatMoney, optionName, type StockDocumentDraft,
+  type StockDocumentLineDraft, userDisplayName } from "./stockDocumentDraft";
 type ApprovalDraft = { entityType: string; entityId: string; reason: string };
 export function StockDocumentEditor({
   balances,
@@ -43,7 +43,7 @@ export function StockDocumentEditor({
     documentId: undefined,
     documentType,
     outboundKind: documentType === "outbound" ? "internal" : undefined,
-    businessDate: currentDateTimeString(),
+    businessDate: localDateTime(),
     departmentId: "",
     supplierId: "",
     handler: defaultHandler,

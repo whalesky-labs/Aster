@@ -15,7 +15,7 @@ export type RuntimeConfig = {
   mode: RuntimeMode;
   hostAddress?: string | null;
   hostPort: number;
-  clientToken?: string | null;
+  clientPaired: boolean;
   clientDeviceId: string;
   dataDir: string;
   databasePath: string;

@@ -1,7 +1,7 @@
 use crate::app::state::AppState;
 use crate::domain::approvals::{ApprovalRequest, CreateApprovalRequest, DecideApprovalRequest};
 use crate::domain::backups::BackupRecord;
-use crate::domain::reports::{ReportBundle, ReportQuery};
+use crate::domain::reports::{ReportBundle, ReportBundlePage, ReportQuery};
 use crate::domain::status::{AppStatus, AuditLogRow, SystemSettings};
 use crate::domain::stocktake::{
     ConfirmStocktakeRequest, CreateStocktakeRequest, StocktakeDetail, StocktakeDocument,
@@ -30,6 +30,27 @@ pub fn remote_get_report_bundle(state: &AppState, query: ReportQuery) -> AppResu
         let section_path = format!("{base_path}&section={}", url_encode(section));
         http_get_json(&config, &page_path(&section_path, cursor))
     })
+}
+
+pub fn remote_get_report_bundle_page(
+    state: &AppState,
+    query: ReportQuery,
+    section: String,
+    cursor: Option<String>,
+) -> AppResult<ReportBundlePage> {
+    let config = client_runtime_config(state)?;
+    let mut params = vec![
+        format!("month={}", url_encode(&query.month)),
+        format!("section={}", url_encode(&section)),
+    ];
+    push_query_param(&mut params, "startDate", query.start_date);
+    push_query_param(&mut params, "endDate", query.end_date);
+    push_query_param(&mut params, "departmentId", query.department_id);
+    push_query_param(&mut params, "categoryId", query.category_id);
+    push_query_param(&mut params, "itemId", query.item_id);
+    push_query_param(&mut params, "supplierId", query.supplier_id);
+    let path = format!("/api/reports/monthly?{}", params.join("&"));
+    http_get_json(&config, &page_path(&path, cursor.as_deref()))
 }
 
 pub fn remote_create_stocktake(

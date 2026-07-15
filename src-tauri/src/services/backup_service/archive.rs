@@ -63,6 +63,7 @@ fn read_app_settings(conn: &rusqlite::Connection) -> AppResult<Vec<BackupSetting
     let mut stmt = conn.prepare(
         "SELECT key, value, updated_at
          FROM app_settings
+         WHERE key NOT IN ('smtp_password', 'client_token')
          ORDER BY key",
     )?;
     let rows = stmt.query_map([], |row| {

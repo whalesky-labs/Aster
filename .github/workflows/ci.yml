@@ -13,8 +13,16 @@ concurrency:
 
 jobs:
   automatic-gates:
-    name: Automatic gates
-    runs-on: macos-15
+    name: Automatic gates (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-15
+          - name: Windows
+            os: windows-2022
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -39,6 +47,9 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      - name: Frontend tests and code coverage
+        run: npm run test:coverage
+
       - name: Engineering standards
         run: npm run verify:engineering
 
@@ -49,7 +60,7 @@ jobs:
         run: npm run verify:no-placeholders
 
       - name: Execution coverage
-        run: npm run verify:coverage
+        run: npm run verify:execution-map
 
       - name: Rust format
         run: cargo fmt --check
@@ -70,3 +81,25 @@ jobs:
           name: ci-release-evidence-${{ runner.os }}
           path: docs/release-evidence/
           if-no-files-found: ignore
+
+  browser-layout:
+    name: Browser layout smoke tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run layout smoke tests
+        run: npm run test:e2e

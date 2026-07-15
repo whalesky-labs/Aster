@@ -31,16 +31,19 @@ function productionRustPanicCount(file, text) {
   return [...production.matchAll(/\.(?:unwrap|expect)\s*\(|\bpanic!\s*\(/g)].length;
 }
 
+function isTestSource(file) {
+  return file.includes("/tests/") || file.endsWith("/tests.rs") || file.endsWith("/test_support.rs");
+}
+
 for (const sourceRoot of sourceRoots) {
   for (const absolute of walk(path.join(root, sourceRoot))) {
     if (!sourceExtensions.has(path.extname(absolute))) continue;
     const file = relative(absolute);
     const text = fs.readFileSync(absolute, "utf8");
     const lines = lineCount(text);
-    const legacyLimit = baseline.legacyFileLineLimits[file];
-    const limit = legacyLimit ?? baseline.maxNewSourceFileLines;
-    if (lines > limit) {
-      failures.push(`${file}: ${lines} lines exceeds ${limit}`);
+    const limit = baseline.maxNewSourceFileLines;
+    if (!isTestSource(file) && lines > limit) {
+      failures.push(`${file}: ${lines} production lines exceeds ${limit}`);
     }
 
     const panicCount = productionRustPanicCount(file, text);
@@ -57,7 +60,7 @@ for (const file of walk(path.join(root, "src"))) {
   if (!new Set([".ts", ".tsx"]).has(path.extname(file))) continue;
   const relativeFile = relative(file);
   const text = fs.readFileSync(file, "utf8");
-  if (/\bany\b/.test(text) && !baseline.legacyFileLineLimits[relativeFile]) {
+  if (/\bany\b/.test(text) && !isTestSource(relativeFile)) {
     failures.push(`${relativeFile}: new modules cannot use the any type`);
   }
   if (relativeFile.startsWith("src/entities/") && /from ["'](?:react|@tauri-apps)/.test(text)) {

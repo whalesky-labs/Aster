@@ -108,16 +108,31 @@ pub fn list_supplier_purchase_records(
 }
 
 #[tauri::command]
-pub fn list_items(search: Option<String>, state: State<'_, AppState>) -> AppResult<Vec<Item>> {
-    master_data_service::list_items(&state, search)
+pub fn list_items(
+    search: Option<String>,
+    supplier_id: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<Vec<Item>> {
+    master_data_service::list_items(&state, search, supplier_id)
+}
+
+#[tauri::command]
+pub fn list_items_page(
+    search: Option<String>,
+    supplier_id: Option<String>,
+    cursor: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<crate::domain::pagination::Page<Item>> {
+    master_data_service::list_items_page(&state, search, supplier_id, cursor)
 }
 
 #[tauri::command]
 pub fn export_items(
     search: Option<String>,
+    supplier_id: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<ExportItemsResult> {
-    master_data_service::export_items(&state, search)
+    master_data_service::export_items(&state, search, supplier_id)
 }
 
 #[tauri::command]

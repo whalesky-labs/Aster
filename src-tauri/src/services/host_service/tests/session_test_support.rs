@@ -82,6 +82,14 @@ pub fn send_test_request(
     runtime: Arc<Mutex<HostServiceRuntime>>,
     request: String,
 ) -> String {
+    String::from_utf8(send_test_request_bytes(db, runtime, request)).expect("response is utf8")
+}
+
+pub fn send_test_request_bytes(
+    db: Db,
+    runtime: Arc<Mutex<HostServiceRuntime>>,
+    request: String,
+) -> Vec<u8> {
     let request_length = request.len();
     let mut stream = Cursor::new(request.into_bytes());
     let parsed_request = http_transport::read_request(&mut stream).expect("read test request");
@@ -93,14 +101,15 @@ pub fn send_test_request(
         "127.0.0.1".to_string(),
         parsed_request,
     ) {
+        let status = http_transport::error_status(&error);
         write_json(
             &mut stream,
-            400,
+            status,
             &serde_json::json!({ "message": error.to_string() }),
         )
         .expect("write test error response");
     }
-    String::from_utf8(stream.into_inner()[request_length..].to_vec()).expect("response is utf8")
+    stream.into_inner()[request_length..].to_vec()
 }
 
 pub fn session_headers(db: &Db, device_token: &str, user_id: &str) -> AppResult<String> {

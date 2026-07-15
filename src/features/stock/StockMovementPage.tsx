@@ -19,14 +19,18 @@ function movementTypeLabel(type: string) {
 }
 
 export function StockMovementPage({
+  hasMore,
   items,
   movements,
   onQueryChange,
+  onLoadMore,
   query,
 }: {
+  hasMore: boolean;
   items: Item[];
   movements: StockMovementRow[];
   onQueryChange: (query: StockMovementQuery) => Promise<void>;
+  onLoadMore: () => Promise<void>;
   query: StockMovementQuery;
 }) {
   const [filterDraft, setFilterDraft] = useState<StockMovementQuery>(query);
@@ -140,6 +144,9 @@ export function StockMovementPage({
         <PaginatedTable
           colSpan={12}
           getRowKey={(row) => row.id}
+          hasMore={hasMore}
+          onLoadMore={onLoadMore}
+          resetKey={JSON.stringify(query)}
           rows={movements}
         >
           {(row) => (

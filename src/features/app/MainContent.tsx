@@ -55,21 +55,21 @@ export function MainContent({ actions, data, i18n, state, view }: {
     activeNav, activeSupplier, adjustmentDocumentQuery, adjustmentDocuments, appearanceSettings,
     approvalRequests, auditLogs, backupRecords, budgetRules, categories, clientConnectionCheckedAt,
     clientConnections, currentUser, departments, hostStatus, hostTestResult, importPreview, importResult,
-    inboundDocumentQuery, inboundDocuments, isBackupWorking, isImporting, isSavingMode, itemSearch,
+    inboundDocumentQuery, inboundDocuments, isBackupWorking, isImporting, isSavingMode, itemSearch, itemSupplierId,
     items, lastBackup, lastExportPath, outboundDocumentQuery, outboundDocuments, reportBundle,
     reportMonth, reportQuery, setActiveNav, setAppearanceSettings, setBudgetRules, setError,
-    setHasManualReportMonth, setItemSearch, setReportMonth, stockBalanceQuery, stockBalances,
+    setHasManualReportMonth, setItemSearch, setItemSupplierId, setReportMonth, stockBalanceQuery, stockBalances,
     stockMovementQuery, stockMovements, stocktakes, supplierPurchaseRecords, suppliers,
     status, systemSettings, units, updateState, userAccounts,
   } = state;
   const {
     changeMode, createManualBackup, decideApprovalRequest, exportImportTemplate, exportItems,
-    exportReport, importItemsFromToolbar, logoutUser, previewImport, removeClientConnection,
+    exportReport, exportStockBalances, importItemsFromToolbar, logoutUser, previewImport, removeClientConnection,
     runAction, runImport, startHostRuntime, toggleUserAccount, voidDocument,
   } = actions;
   const {
     applyReportQuery, applyStockBalanceQuery, applyStockDocumentQuery, applyStockMovementQuery,
-    loadBudgetRules, loadSupplierPurchaseRecords, refreshAll, showItemMovements,
+    loadBudgetRules, loadMasterData, loadMore, loadSupplierPurchaseRecords, showItemMovements,
   } = data;
   const {
     canManageRemoteBusiness, canManageSettings, canUseLocalImport, canViewReports, canWriteStock,
@@ -97,16 +97,20 @@ export function MainContent({ actions, data, i18n, state, view }: {
               canWrite={canWriteStock}
               categories={enabledCategories}
               formatMoney={formatMoney}
+              hasMore={Boolean(state.nextPageCursors.items)}
               itemSearch={itemSearch}
+              itemSupplierId={itemSupplierId}
               items={items}
               onCreate={() => openEditorWindow("item")}
               onEdit={(id) => openEditorWindow("item", { mode: "edit", id })}
-              onSearch={async (search) => {
+              onSearch={async (search, supplierId) => {
                 setItemSearch(search);
-                await refreshAll(search);
+                setItemSupplierId(supplierId);
+                await loadMasterData(search, supplierId);
               }}
               onImportItems={importItemsFromToolbar}
-              onExportItems={() => exportItems(itemSearch)}
+              onLoadMore={() => loadMore("items")}
+              onExportItems={() => exportItems(itemSearch, itemSupplierId)}
               onToggle={(id, enabled, expectedUpdatedAt) =>
                 runAction("物品状态已更新", () =>
                   invoke("set_item_enabled", {
@@ -114,7 +118,7 @@ export function MainContent({ actions, data, i18n, state, view }: {
                     enabled,
                     expectedUpdatedAt,
                   }),
-                )
+                "master")
               }
               suppliers={enabledSuppliers}
               units={enabledUnits}
@@ -134,7 +138,7 @@ export function MainContent({ actions, data, i18n, state, view }: {
                   enabled,
                   expectedUpdatedAt,
                 }),
-              )
+              "master")
             }
           />
         ) : null}
@@ -152,7 +156,7 @@ export function MainContent({ actions, data, i18n, state, view }: {
                   enabled,
                   expectedUpdatedAt,
                 }),
-              )
+              "master")
             }
           />
         ) : null}
@@ -166,7 +170,7 @@ export function MainContent({ actions, data, i18n, state, view }: {
             onToggle={(id, enabled, expectedUpdatedAt) =>
               runAction("单位状态已更新", () =>
                 invoke("set_unit_enabled", { id, enabled, expectedUpdatedAt }),
-              )
+              "master")
             }
           />
         ) : null}
@@ -187,7 +191,7 @@ export function MainContent({ actions, data, i18n, state, view }: {
                   enabled,
                   expectedUpdatedAt,
                 }),
-              )
+              "master")
             }
             purchaseRecords={supplierPurchaseRecords}
             suppliers={suppliers}
@@ -217,7 +221,7 @@ export function MainContent({ actions, data, i18n, state, view }: {
                   enabled,
                   expectedUpdatedAt,
                 }),
-              )
+              "admin")
             }
             rules={budgetRules}
           />
@@ -240,6 +244,7 @@ export function MainContent({ actions, data, i18n, state, view }: {
             departments={departments.filter((item) => item.enabled)}
             documentType="inbound"
             documents={inboundDocuments}
+            hasMore={Boolean(state.nextPageCursors.inboundDocuments)}
             handlerOptions={uniqueTextOptions([
               ...userAccounts.map(userDisplayName),
               userDisplayName(currentUser),
@@ -258,8 +263,9 @@ export function MainContent({ actions, data, i18n, state, view }: {
                 invoke("confirm_stock_document_draft", {
                   request: { documentId, approvalRequestId },
                 }),
-              )
+              "stock")
             }
+            onLoadMore={() => loadMore("inboundDocuments")}
             onVoid={voidDocument}
             query={inboundDocumentQuery}
             suppliers={suppliers.filter((item) => item.enabled)}
@@ -272,6 +278,7 @@ export function MainContent({ actions, data, i18n, state, view }: {
             departments={departments.filter((item) => item.enabled)}
             documentType="outbound"
             documents={outboundDocuments}
+            hasMore={Boolean(state.nextPageCursors.outboundDocuments)}
             handlerOptions={uniqueTextOptions([
               ...userAccounts.map(userDisplayName),
               userDisplayName(currentUser),
@@ -290,8 +297,9 @@ export function MainContent({ actions, data, i18n, state, view }: {
                 invoke("confirm_stock_document_draft", {
                   request: { documentId, approvalRequestId },
                 }),
-              )
+              "stock")
             }
+            onLoadMore={() => loadMore("outboundDocuments")}
             onVoid={voidDocument}
             query={outboundDocumentQuery}
             suppliers={suppliers.filter((item) => item.enabled)}
@@ -301,7 +309,9 @@ export function MainContent({ actions, data, i18n, state, view }: {
         {activeNav === "stock" ? (
           <StockBalancePage
             balances={stockBalances}
+            canExport={canManageSettings}
             categories={enabledCategories}
+            hasMore={Boolean(state.nextPageCursors.stockBalances)}
             items={items.filter((item) => item.enabled)}
             onQueryChange={async (query) => {
               try {
@@ -311,6 +321,8 @@ export function MainContent({ actions, data, i18n, state, view }: {
                 setError(formatError(err));
               }
             }}
+            onExport={exportStockBalances}
+            onLoadMore={() => loadMore("stockBalances")}
             onViewMovements={async (itemId) => {
               try {
                 setError(null);
@@ -331,8 +343,10 @@ export function MainContent({ actions, data, i18n, state, view }: {
 
         {activeNav === "movements" ? (
           <StockMovementPage
+            hasMore={Boolean(state.nextPageCursors.stockMovements)}
             items={items.filter((item) => item.enabled)}
             movements={stockMovements}
+            onLoadMore={() => loadMore("stockMovements")}
             onQueryChange={async (query) => {
               try {
                 setError(null);
@@ -360,7 +374,9 @@ export function MainContent({ actions, data, i18n, state, view }: {
               ...userAccounts.map(userDisplayName),
               userDisplayName(currentUser),
             ])}
+            hasMore={Boolean(state.nextPageCursors.adjustmentDocuments)}
             items={items.filter((item) => item.enabled)}
+            onLoadMore={() => loadMore("adjustmentDocuments")}
             onQueryChange={async (query) => {
               try {
                 setError(null);

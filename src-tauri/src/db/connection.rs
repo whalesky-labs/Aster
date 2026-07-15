@@ -3,6 +3,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
+use std::sync::atomic::AtomicU64;
+
 use rusqlite::{Connection, ErrorCode};
 
 use crate::app::paths::AppPaths;
@@ -22,20 +25,34 @@ struct QueryControl {
 #[derive(Clone)]
 pub struct Db {
     conn: Arc<Mutex<Connection>>,
+    #[cfg(test)]
+    test_identity: u64,
 }
+
+#[cfg(test)]
+static NEXT_TEST_DB_ID: AtomicU64 = AtomicU64::new(1);
 
 impl Db {
     pub fn initialize(paths: &AppPaths) -> AppResult<Self> {
         let conn = open_configured_connection(paths)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            #[cfg(test)]
+            test_identity: NEXT_TEST_DB_ID.fetch_add(1, Ordering::Relaxed),
         })
     }
 
     pub fn clone_handle(&self) -> Self {
         Self {
             conn: Arc::clone(&self.conn),
+            #[cfg(test)]
+            test_identity: self.test_identity,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_identity(&self) -> u64 {
+        self.test_identity
     }
 
     pub fn with_conn<T>(&self, f: impl FnOnce(&Connection) -> AppResult<T>) -> AppResult<T> {
@@ -163,6 +180,7 @@ mod tests {
         let conn = Connection::open_in_memory().expect("database");
         let db = Db {
             conn: Arc::new(Mutex::new(conn)),
+            test_identity: NEXT_TEST_DB_ID.fetch_add(1, Ordering::Relaxed),
         };
         let error = with_query_control(Duration::ZERO, Arc::new(AtomicBool::new(false)), || {
             db.with_conn(|conn| {
@@ -183,6 +201,7 @@ mod tests {
         let conn = Connection::open_in_memory().expect("database");
         let db = Db {
             conn: Arc::new(Mutex::new(conn)),
+            test_identity: NEXT_TEST_DB_ID.fetch_add(1, Ordering::Relaxed),
         };
         let error = with_query_control(
             Duration::from_secs(30),

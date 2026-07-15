@@ -228,10 +228,16 @@ pub(crate) fn handle_master_data_routes<S: Read + Write>(
         ("GET", path) if http_transport::route_matches(path, "/api/master/items") => {
             authenticate_request_and_touch_client(request, &runtime, &db)?;
             let search = query_param(path, "search");
+            let supplier_id = query_param(path, "supplierId");
             let cursor = query_param(path, "cursor");
             let response = db.with_conn(|conn| {
                 require_remote_permission(auth_request, conn, "view_reports")?;
-                master_data_repository::list_items_page(conn, search, cursor.as_deref())
+                master_data_repository::list_items_page(
+                    conn,
+                    search,
+                    supplier_id,
+                    cursor.as_deref(),
+                )
             })?;
             write_json(stream, 200, &response)?;
         }

@@ -8,7 +8,11 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "verify:coverage": "node scripts/verify-execution-coverage.mjs",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "verify:execution-map": "node scripts/verify-execution-coverage.mjs",
+    "verify:coverage": "npm run test:coverage && npm run verify:execution-map",
     "verify:no-placeholders": "node scripts/verify-no-placeholders.mjs",
     "acceptance:template": "node scripts/create-manual-acceptance-template.mjs",
     "acceptance:collect": "node scripts/collect-acceptance-evidence.mjs",
@@ -41,11 +45,17 @@
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@tauri-apps/cli": "^2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
+    "@vitest/coverage-v8": "^4.1.10",
+    "jsdom": "^29.1.1",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "vite": "^7.0.4",
+    "vitest": "^4.1.10"
   }
 }

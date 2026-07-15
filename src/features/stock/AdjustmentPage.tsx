@@ -5,12 +5,14 @@ import { openEditorWindow } from "../../shared/lib/editorWindows";
 import { DocumentList, DocumentVoidControls } from "./StockDocumentPage";
 
 export function AdjustmentPage({
-  canWrite, documents, handlerOptions, items, onQueryChange, onVoid, query,
+  canWrite, documents, handlerOptions, hasMore, items, onLoadMore, onQueryChange, onVoid, query,
 }: {
   canWrite: boolean;
   documents: StockDocument[];
   handlerOptions: string[];
+  hasMore: boolean;
   items: Item[];
+  onLoadMore: () => Promise<void>;
   onQueryChange: (query: StockDocumentQuery) => Promise<void>;
   onVoid: (documentId: string, reason: string, handler: string) => Promise<void>;
   query: StockDocumentQuery;
@@ -31,7 +33,8 @@ export function AdjustmentPage({
       </div>
       <DocumentList
         canVoid={canWrite} documents={documents} handlerOptions={handlerOptions}
-        items={items} isOutbound={false} onQueryChange={onQueryChange} onVoid={onVoid}
+        hasMore={hasMore} items={items} isOutbound={false} onLoadMore={onLoadMore}
+        onQueryChange={onQueryChange} onVoid={onVoid}
         query={query} voidHandler={voidHandler} voidReason={voidReason}
       />
     </section>

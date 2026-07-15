@@ -46,6 +46,29 @@ pub(crate) fn handle_stock_routes<S: Read + Write>(
             })?;
             write_json(stream, 200, &response)?;
         }
+        ("GET", "/api/stock/balances/export") => {
+            let client_device_id = authenticate_request_and_touch_client(request, &runtime, &db)?;
+            let (current, rows) = db.with_conn(|conn| {
+                let current = require_remote_admin(auth_request, conn)?;
+                let rows = stock_repository::list_stock_balance_export_rows(conn)?;
+                Ok((current, rows))
+            })?;
+            let row_count = rows.len();
+            let workbook =
+                crate::services::stock_service::stock_balance_export_workbook_bytes(&rows)?;
+            drop(rows);
+            db.with_conn(|conn| {
+                write_host_user_audit(
+                    conn,
+                    "read_stock_balance_export",
+                    "stock_balances",
+                    "all",
+                    &format!("客户端 {client_device_id} 读取全部库存台账：{row_count} 项"),
+                    &current.username,
+                )
+            })?;
+            write_xlsx(stream, &workbook, row_count)?;
+        }
         ("GET", path) if http_transport::route_matches(path, "/api/stock/balances") => {
             authenticate_request_and_touch_client(request, &runtime, &db)?;
             let query = StockBalanceQuery {
