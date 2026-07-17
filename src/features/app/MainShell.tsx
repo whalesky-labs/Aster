@@ -1,10 +1,82 @@
-import type { ReactNode } from "react";
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { NavKey } from "../../entities/navigation";
 import type { AppStatus } from "../../entities/runtime";
 import type { I18n } from "../../i18n";
 import { PantsLogo } from "../auth/LoginScreen";
 import { GitHubIcon, NavIcon, navGroups, type NavItem } from "../navigation/navigation";
+
+const SIDEBAR_MARQUEE_SPEED_PX_PER_SECOND = 28;
+const SIDEBAR_MARQUEE_MIN_DURATION_SECONDS = 8;
+
+function SidebarConnectionHint({ text }: { text: string }) {
+  const viewportRef = useRef<HTMLElement>(null);
+  const textRef = useRef<HTMLSpanElement>(null);
+  const [marquee, setMarquee] = useState({
+    durationSeconds: SIDEBAR_MARQUEE_MIN_DURATION_SECONDS,
+    isOverflowing: false,
+  });
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    const textElement = textRef.current;
+    if (!viewport || !textElement) return;
+
+    const updateMarquee = () => {
+      const textWidth = textElement.scrollWidth;
+      const isOverflowing = textWidth > viewport.clientWidth + 1;
+      const durationSeconds = Math.max(
+        SIDEBAR_MARQUEE_MIN_DURATION_SECONDS,
+        textWidth / SIDEBAR_MARQUEE_SPEED_PX_PER_SECOND,
+      );
+
+      setMarquee((current) => {
+        if (
+          current.isOverflowing === isOverflowing &&
+          current.durationSeconds === durationSeconds
+        ) {
+          return current;
+        }
+        return { durationSeconds, isOverflowing };
+      });
+    };
+
+    updateMarquee();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateMarquee);
+      return () => window.removeEventListener("resize", updateMarquee);
+    }
+
+    const resizeObserver = new ResizeObserver(updateMarquee);
+    resizeObserver.observe(viewport);
+    resizeObserver.observe(textElement);
+    return () => resizeObserver.disconnect();
+  }, [text]);
+
+  return (
+    <em
+      className="sidebar-connection-marquee"
+      data-overflowing={marquee.isOverflowing}
+      ref={viewportRef}
+      style={{
+        "--sidebar-connection-marquee-duration": `${marquee.durationSeconds}s`,
+      } as CSSProperties}
+    >
+      <span className="sidebar-connection-marquee-track">
+        <span className="sidebar-connection-marquee-item" ref={textRef}>{text}</span>
+        {marquee.isOverflowing ? (
+          <span aria-hidden="true" className="sidebar-connection-marquee-item">{text}</span>
+        ) : null}
+      </span>
+    </em>
+  );
+}
 
 export function MainShell({
   activeNav,
@@ -83,7 +155,8 @@ export function MainShell({
             >
               <span className="sidebar-connection-dot" />
               <span className="sidebar-connection-copy">
-                <strong>{connectionLabel}</strong><em>{connectionHint}</em>
+                <strong>{connectionLabel}</strong>
+                <SidebarConnectionHint text={connectionHint} />
               </span>
             </button>
           </div>
