@@ -162,10 +162,13 @@ fn proxy_value(text: &str, key: &str) -> String {
 
 #[cfg(target_os = "windows")]
 fn push_platform_proxy_candidates(candidates: &mut Vec<ProxyCandidate>) {
+    use std::os::windows::process::CommandExt;
     use std::process::Command;
 
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
     let output = Command::new("netsh")
         .args(["winhttp", "show", "proxy"])
+        .creation_flags(CREATE_NO_WINDOW)
         .output();
     let Ok(output) = output else {
         return;
